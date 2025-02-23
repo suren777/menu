@@ -161,3 +161,7 @@ cython_debug/
 
 .venv
 .vscode
+.DS_Store
+.gitignore
+test.py
+menu/db/database.db

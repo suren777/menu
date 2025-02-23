@@ -1,0 +1,43 @@
+[tool.poetry]
+name = "menu"
+version = "0.1.0"
+description = ""
+authors = ["Suren Islyaev"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = ">=3.11,<3.13"
+PyYAML = ">=5.4.1"
+pydantic = "^1.10.13"
+fastapi = {extras = ["uvicorn"], version = "^0.103.2"}
+uvicorn = "^0.23.2"
+urllib3 = "^2.0.6"
+requests = "^2.31.0"
+beautifulsoup4 = "^4.12.2"
+sqlalchemy = "^2.0.22"
+numpy = "^1.26.1"
+pandas = "^2.1.1"
+more-itertools = "^10.1.0"
+pydash = "^7.0.6"
+
+
+
+[tool.poetry.group.dev.dependencies]
+black = "*"
+mypy = "*"
+pytest = "^7.2.0"
+pytest-mock = "^3.10.0"
+pytest-cov = "^4.0.0"
+types-pyyaml = "^6.0.7"
+ipykernel = "^6.25.2"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q"
+testpaths = [
+    "tests",
+]

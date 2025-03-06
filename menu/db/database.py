@@ -1,8 +1,9 @@
-from sqlalchemy.orm import declarative_base
+from sqlalchemy.orm import registry
 from sqlalchemy import Boolean, Column, Integer, String, JSON, Float, Text
 from menu.db.engine import engine
 
-Base = declarative_base()
+mapper_registry = registry()
+Base = mapper_registry.generate_base()
 
 
 class MyMixin:

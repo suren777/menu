@@ -12,3 +12,12 @@ def get_session(engine: Engine = engine):
         session.commit()
     finally:
         session.close()
+
+
+@contextmanager
+def get_ro_session(engine: Engine = engine):
+    session = Session(engine)
+    try:
+        yield session
+    finally:
+        session.close()

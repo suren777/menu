@@ -9,8 +9,8 @@ readme = "README.md"
 python = ">=3.11,<3.13"
 PyYAML = ">=5.4.1"
 pydantic = "^1.10.13"
-fastapi = {extras = ["uvicorn"], version = "^0.103.2"}
-uvicorn = "^0.23.2"
+fastapi = {extras = ["uvicorn"], version = "^0.116.1"}
+uvicorn = "*"
 urllib3 = "^2.0.6"
 requests = "^2.31.0"
 beautifulsoup4 = "^4.12.2"
@@ -19,6 +19,7 @@ numpy = "^1.26.1"
 pandas = "^2.1.1"
 more-itertools = "^10.1.0"
 pydash = "^7.0.6"
+python-telegram-bot = "^22.3"
 
 
 
@@ -30,6 +31,7 @@ pytest-mock = "^3.10.0"
 pytest-cov = "^4.0.0"
 types-pyyaml = "^6.0.7"
 ipykernel = "^6.25.2"
+types-requests = "*"
 
 [build-system]
 requires = ["poetry-core"]

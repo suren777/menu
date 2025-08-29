@@ -158,17 +158,21 @@ cython_debug/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
-
+.git
 .venv
 .vscode
 .DS_Store
 .gitignore
 test.py
-menu/db/database.db
+menu/crawlers
+menu/teleapp.py
+menu/webapp.py
+menu/db/sitemap
+menu/db/recipie_urls
+menu/menu_bot/bot_config.py
 menu/const.py
-menu/cloud_fn_app.py
-menu/get_webhook_url.py
-deploy.sh
-Procfile
+tests
+pyproject.toml
 poetry.lock
-requirements.txt
+deploy.sh
+const.py

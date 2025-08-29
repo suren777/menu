@@ -1,6 +1,5 @@
 from typing import Any
 from menu.db.connection import get_session
-from menu.db.database import RecipeUrls
 from menu.db.recipie_urls.repository import RecipeUrlsRepository
 
 

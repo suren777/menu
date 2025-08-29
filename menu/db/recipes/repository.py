@@ -1,5 +1,7 @@
 from dataclasses import dataclass
-from menu.crawlers.bbc_good_food.common import Nutrition
+
+from sqlalchemy import ColumnExpressionArgument
+from menu.db.connection import get_ro_session
 from menu.db.database import RecipeTable
 from sqlalchemy.orm import Session
 import json
@@ -43,7 +45,6 @@ class RecipesRepository:
             prep_time=record.prep_time,
             total_time=record.total_time,
             category=record.category,
-            nutrition=record.nutrition,
             ingredients=json.loads(record.ingredients),
             instructions=json.loads(record.instructions),
             portions=record.portions,
@@ -85,5 +86,5 @@ class RecipesRepository:
         )
 
     @staticmethod
-    def add_recipe(recipe: RecipeModel, session: Session):
+    def add_recipe(recipe: RecipeModel, session: Session) -> None:
         session.add(RecipesRepository.to_record(recipe))

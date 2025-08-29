@@ -1,9 +1,10 @@
-from sqlalchemy.orm import registry
 from sqlalchemy import Boolean, Column, Integer, String, JSON, Float, Text
 from menu.db.engine import engine
+from sqlalchemy.orm import DeclarativeBase
 
-mapper_registry = registry()
-Base = mapper_registry.generate_base()
+
+class Base(DeclarativeBase):
+    pass
 
 
 class MyMixin:
@@ -37,14 +38,14 @@ class RecipeTable(MyMixin, Base):
     ingredients = Column(Text)
     instructions = Column(Text)
     portions = Column(Integer)
-    calories = Column(Float)
-    fat = Column(Float)
-    saturated_fat = Column(Float)
-    carbohydrate = Column(Float)
-    sugar = Column(Float)
-    fiber = Column(Float)
-    protein = Column(Float)
-    sodium = Column(Float)
+    calories = Column(Float())
+    fat = Column(Float())
+    saturated_fat = Column(Float())
+    carbohydrate = Column(Float())
+    sugar = Column(Float())
+    fiber = Column(Float())
+    protein = Column(Float())
+    sodium = Column(Float())
 
 
 def initialise():

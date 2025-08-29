@@ -1,11 +1,12 @@
-import os
 import enum
-from functools import lru_cache
-from functools import cached_property
+import os
+from functools import cached_property, lru_cache
 from pathlib import Path
 from typing import Any
+
 import yaml
 from pydantic import BaseModel as PyBaseModel
+
 
 class Environment(str, enum.Enum):
     DEVELOPMENT = "development"
@@ -22,6 +23,7 @@ class BaseModel(PyBaseModel):
     class Config:
         allow_mutation = False
         keep_untouched = (cached_property,)
+
 
 class AppConfig(dict[str, Any]):
     pass
@@ -54,15 +56,11 @@ class ConfigLoader:
             raise ValueError(f"invalid truth value {value!r}")
 
 
-
-
 class ApplicationConfig(BaseModel):
     service: str = "menu"
     host: str = "0.0.0.0"
     port: str = "8080"
 
-
- 
 
 @lru_cache
 def load_application_config() -> ApplicationConfig:

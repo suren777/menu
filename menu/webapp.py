@@ -19,6 +19,11 @@ def start_server(host: str, port: str) -> None:
         "menu.app:create_app",
         "--port",
         f"{port}",
+        "--host",
+        f"{host}",
+        "--reload",
+        "--log-level",
+        "info",
     ]
     os.execl(*[str(v) for v in args])
 

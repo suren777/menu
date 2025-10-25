@@ -1,6 +1,8 @@
-from sqlalchemy import Boolean, Column, Integer, String, JSON, Float, Text
-from menu.db.engine import engine
+from sqlalchemy import JSON, Boolean, Column, Float, Integer, String, Text
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase
+
+from menu.db.engine import engine
 
 
 class Base(DeclarativeBase):
@@ -37,7 +39,7 @@ class RecipeTable(MyMixin, Base):
     cuisine = Column(String)
     ingredients = Column(Text)
     instructions = Column(Text)
-    portions = Column(Integer)
+    portions = Column(String, nullable=True)
     calories = Column(Float())
     fat = Column(Float())
     saturated_fat = Column(Float())
@@ -48,5 +50,5 @@ class RecipeTable(MyMixin, Base):
     sodium = Column(Float())
 
 
-def initialise():
-    Base.metadata.create_all(engine)
+def initialise(db_engine: Engine = engine):
+    Base.metadata.create_all(db_engine)

@@ -22,14 +22,14 @@ from menu.menu_bot.helpers import (
 logging.basicConfig(level=logging.INFO)
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def start_15(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
     """Starts the conversation and asks the user about their food category."""
 
     reply_keyboard = inline_keyboard_generator(MAIN_CATEGORIES)
 
     await update.message.reply_text(
         "<b>Welcome to the Food Recipe Bot!\n"
-        "Let's get some details about the food you want to cook.\n"
+        "I understand that you are in a hurry, so let's find something to cook.\n"
         "What is the meal type?</b>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(reply_keyboard),
@@ -76,16 +76,16 @@ async def recipe_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return ConversationHandler.END
 
     await query.edit_message_text(
-        f"<b>I have found few recipes, which one you want to cook?</b>",
+        "<b>I have found few recipes, which one you want to cook?</b>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(reply_keyboard),
     )
     return ConversationStages.SUMMARY.value
 
 
-generate_recipes_conversation = ConversationHandler(
+quick_recipe_conversation = ConversationHandler(
     entry_points=[
-        CommandHandler("generate", start),
+        CommandHandler("quick_15", start_15),
     ],
     states={
         ConversationStages.MENU_TYPE.value: [
@@ -97,7 +97,6 @@ generate_recipes_conversation = ConversationHandler(
         ConversationStages.SUMMARY.value: [
             CallbackQueryHandler(summary),
         ],
-        ConversationStages.INGREDIENTS.value: [CallbackQueryHandler(cancel)],
     },
     fallbacks=[CommandHandler("cancel", cancel)],
 )

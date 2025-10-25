@@ -1,6 +1,8 @@
 import ast
 from typing import TypedDict
-from sqlalchemy import Column, ColumnExpressionArgument, func
+
+from sqlalchemy import Column, ColumnExpressionArgument, and_, func
+
 from menu.db.connection import get_ro_session
 from menu.db.database import RecipeTable
 
@@ -53,7 +55,10 @@ def parse_literal_array(
 
 
 def recipe_to_text(recipe: RecipeTable) -> str:
+
     result = f"<b>{str(recipe.name)}</b>\n\n"
+    if recipe.portions is not None or recipe.portions != 0:
+        result += f"Portions: {str(recipe.portions)}\n"
     result += f"<i>{str(recipe.description)}</i>\n\n"
     result += "<b>Ingredients:</b>\n"
     result += parse_literal_array(recipe.ingredients) + "\n\n"
@@ -117,6 +122,25 @@ def search_recipe_by_name(recipe_name: str) -> list[RecipeNames]:
             )
         ]
     return result
+
+
+def search_recipes_by_ingredients(ingredients: list[str]) -> list[RecipeNames]:
+    stripped_ingredients = [ing.strip().lower() for ing in ingredients if ing.strip()]
+    if not stripped_ingredients:
+        return []
+
+    with get_ro_session() as session:
+        filters = [
+            func.lower(RecipeTable.ingredients).like(f"%{ingredient}%")
+            for ingredient in stripped_ingredients
+        ]
+        result = [
+            RecipeNames(name=str(recipe.name), id=int(recipe.id))
+            for recipe in session.query(RecipeTable.name, RecipeTable.id).filter(
+                and_(*filters)
+            )
+        ]
+        return result
 
 
 def get_recipes(

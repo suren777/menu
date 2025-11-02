@@ -26,6 +26,9 @@ python-telegram-bot = "^22.3"
 [tool.poetry.group.dev.dependencies]
 black = "*"
 mypy = "*"
+isort= "*"
+flake8 = "*"
+pylint = "*"
 pytest = "^7.2.0"
 pytest-asyncio = "*"
 pytest-mock = "^3.10.0"
@@ -43,4 +46,13 @@ minversion = "6.0"
 addopts = "-ra -q"
 testpaths = [
     "tests",
+]
+
+[tool.isort]
+profile = "black"
+
+[tool.pylint.main]
+ignore = [
+    "venv",
+    ".venv"
 ]

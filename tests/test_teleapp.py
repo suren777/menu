@@ -12,5 +12,5 @@ def test_main(mock_telegram_bot):
     main()
 
     mock_telegram_bot.build.assert_called_once()
-    assert mock_app.add_handler.call_count == 3
+    assert mock_app.add_handler.call_count == 4
     mock_app.run_polling.assert_called_once()

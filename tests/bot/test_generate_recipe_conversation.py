@@ -13,6 +13,7 @@ from menu.menu_bot.helpers import ConversationStages
 async def test_start():
     update = MagicMock()
     update.message = AsyncMock()
+    update.message.from_user.id = 123
     context = MagicMock()
     result = await start(update, context)
     update.message.reply_text.assert_called_once()

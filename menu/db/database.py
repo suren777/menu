@@ -26,6 +26,18 @@ class RecipeUrls(MyMixin, Base):
     data = Column(JSON, nullable=False)
 
 
+class User(MyMixin, Base):
+    __tablename__ = "users"
+    telegram_id = Column(Integer, unique=True, nullable=False)
+    premium = Column(Boolean, default=False)
+
+
+class UserRecipe(MyMixin, Base):
+    __tablename__ = "user_recipes"
+    user_id = Column(Integer, nullable=False)
+    recipe_id = Column(Integer, nullable=False)
+
+
 class RecipeTable(MyMixin, Base):
     __tablename__ = "recipes"
     name = Column(String, nullable=False)

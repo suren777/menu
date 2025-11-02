@@ -18,6 +18,7 @@ async def test_start():
     """Test the start function to ensure it sends the correct message and returns the correct state."""
     update = MagicMock()
     update.message = AsyncMock()
+    update.message.from_user.id = 123
     context = MagicMock()
 
     result = await start(update, context)

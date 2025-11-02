@@ -103,14 +103,12 @@ def get_recipe_names(
     return result
 
 
-def get_recipe_by_id(recipe_id: int | None) -> str | None:
+def get_recipe_by_id(recipe_id: int | None) -> RecipeTable | None:
     if recipe_id is None:
         return None
     with get_ro_session() as session:
         result = session.query(RecipeTable).filter(RecipeTable.id == recipe_id).first()
-        if result is None:
-            return None
-        return recipe_to_text(result)
+        return result
 
 
 def search_recipe_by_name(recipe_name: str) -> list[RecipeNames]:

@@ -25,7 +25,10 @@ from menu.menu_bot.helpers import (
 logging.basicConfig(level=logging.INFO)
 
 
-async def start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
+from menu.db.user.helpers import get_or_create_user
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Starts the conversation and asks the user about their food category."""
 
     reply_keyboard = inline_keyboard_generator(MAIN_CATEGORIES)
@@ -33,6 +36,13 @@ async def start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message is None:
         logging.error("Message is None in start function.")
         return ConversationHandler.END
+
+    if update.message.from_user is None:
+        logging.error("User is None in start function.")
+        return ConversationHandler.END
+
+    user = get_or_create_user(update.message.from_user.id)
+    context.user_data["user"] = user
 
     await update.message.reply_text(
         "<b>Welcome to the Food Recipe Bot!\n"

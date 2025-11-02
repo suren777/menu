@@ -36,6 +36,7 @@ def mock_context():
 async def test_start(mock_update, mock_context):
     """Test the start function of the conversation."""
     # Act
+    mock_update.message.from_user.id = 123
     result = await start(mock_update, mock_context)
 
     # Assert

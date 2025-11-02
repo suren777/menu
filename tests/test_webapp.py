@@ -31,4 +31,4 @@ def test_main():
     mock_runner = MagicMock()
     main(server_runner=mock_runner)
     config = ApplicationConfig()
-    mock_runner.assert_called_once_with(host=config.host, port=config.port)
+    mock_runner.assert_called_once_with(config.host, config.port)

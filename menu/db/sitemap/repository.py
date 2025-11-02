@@ -16,7 +16,9 @@ class SitemapModel:
 class SitemapRepository:
     @staticmethod
     def from_record(record: Sitemap) -> SitemapModel:
-        return SitemapModel(id=record.id, url=record.url, completed=record.completed)
+        return SitemapModel(
+            id=int(record.id), url=str(record.url), completed=bool(record.completed)
+        )
 
     @staticmethod
     def to_record(entity: SitemapModel) -> Sitemap:
@@ -34,6 +36,7 @@ class SitemapRepository:
             select(Sitemap).filter(Sitemap.url == url).exists()
         ).scalar()
 
+    @staticmethod
     def get_all(session: Session) -> list[SitemapModel]:
         return [
             SitemapRepository.from_record(record) for record in session.query(Sitemap)

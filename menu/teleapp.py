@@ -1,3 +1,4 @@
+"""This module contains the main entry point for the telegram bot."""
 from telegram import Update
 
 from menu.menu_bot.bot_config import telegram_bot
@@ -7,6 +8,7 @@ from menu.menu_bot.generate_recipe_conversation import generate_recipes_conversa
 
 
 def main():
+    """Run the telegram bot."""
     app = telegram_bot.build()
     app.add_handler(generate_recipes_conversation)
     app.add_handler(find_recipes_conversation)

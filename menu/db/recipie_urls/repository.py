@@ -19,7 +19,10 @@ class RecipeUrlsRepository:
     @staticmethod
     def from_record(record: RecipeUrls) -> RecipeUrlsModel:
         return RecipeUrlsModel(
-            id=record.id, url=record.url, name=record.name, data=record.data
+            id=int(record.id),
+            url=str(record.url),
+            name=str(record.name),
+            data=dict(record.data),
         )
 
     @staticmethod
@@ -29,7 +32,7 @@ class RecipeUrlsRepository:
         )
 
     def find_by_url(self, url: str, session: Session) -> RecipeUrlsModel | None:
-        result = session.query(select(RecipeUrls).filter(RecipeUrls.url == url))
+        result = session.scalars(select(RecipeUrls).filter_by(url=url)).first()
         if result is not None:
             return RecipeUrlsRepository.from_record(result)
         return None
@@ -47,6 +50,7 @@ class RecipeUrlsRepository:
             for record in session.query(RecipeUrls)
         ]
 
+    @staticmethod
     def get_all_by_id(ids: list[int], session: Session) -> list[RecipeUrlsModel]:
         return [
             RecipeUrlsRepository.from_record(record)

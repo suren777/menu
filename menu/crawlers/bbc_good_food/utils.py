@@ -2,7 +2,7 @@ from typing import Any
 from xml.etree import ElementTree
 
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 from pydash import get
 
 from menu.crawlers.bbc_good_food.common import Nutrition, ParsedRecipe, RecipeKeys
@@ -12,10 +12,16 @@ class FetchError(BaseException): ...
 
 
 def request_xml(url: str) -> list[str]:
-    response = requests.get(url)
+    response = requests.get(url, timeout=10)
     if response.ok:
-        tree = ElementTree.fromstring(response.content)  # %%
-        return [leaf[0].text for leaf in tree]
+        tree = ElementTree.fromstring(response.content)
+        namespace = {"sitemap": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+        urls = [
+            url.text
+            for url in tree.findall("sitemap:url/sitemap:loc", namespaces=namespace)
+            if url.text is not None
+        ]
+        return urls
     raise FetchError("Can`t fetch the data")
 
 
@@ -28,7 +34,7 @@ def contains_recipe(content: BeautifulSoup) -> bool:
         "ul",
         {"class": "breadcrumb__list body-copy-extra-small oflow-x-auto list"},
     )
-    if ul is not None:
+    if isinstance(ul, Tag):
         li = ul.find_all(
             "li",
         )
@@ -38,7 +44,7 @@ def contains_recipe(content: BeautifulSoup) -> bool:
 
 
 def fetch_recipe(url: str) -> BeautifulSoup:
-    result = requests.get(url)
+    result = requests.get(url, timeout=10)
     return BeautifulSoup(result.content, features="html.parser")
 
 
@@ -50,21 +56,25 @@ def parse_image(img: dict[str, Any]) -> str:
     return img["url"]
 
 
-def strip_and_cast(original: str | None, strip: str) -> float | None:
+def strip_and_cast(original: str | None, strip: str) -> str | None:
     if original is not None:
-        return float(original.replace(f"{strip}", ""))
+        return original.replace(f"{strip}", "")
     return None
 
 
 def parce_nutrition(nutrition: dict[str, str]) -> Nutrition:
     calories: str | None = get(nutrition, f"{RecipeKeys.NUTRITION}.calories")
-    fat = get(nutrition, f"{RecipeKeys.NUTRITION}.fatContent")
-    saturated_fat = get(nutrition, f"{RecipeKeys.NUTRITION}.saturatedFatContent")
-    carbohydrate = get(nutrition, f"{RecipeKeys.NUTRITION}.carbohydrateContent")
-    sugar = get(nutrition, f"{RecipeKeys.NUTRITION}.sugarContent")
-    fiber = get(nutrition, f"{RecipeKeys.NUTRITION}.fiberContent")
-    protein = get(nutrition, f"{RecipeKeys.NUTRITION}.proteinContent")
-    sodium = get(nutrition, f"{RecipeKeys.NUTRITION}.sodiumContent")
+    fat: str | None = get(nutrition, f"{RecipeKeys.NUTRITION}.fatContent")
+    saturated_fat: str | None = get(
+        nutrition, f"{RecipeKeys.NUTRITION}.saturatedFatContent"
+    )
+    carbohydrate: str | None = get(
+        nutrition, f"{RecipeKeys.NUTRITION}.carbohydrateContent"
+    )
+    sugar: str | None = get(nutrition, f"{RecipeKeys.NUTRITION}.sugarContent")
+    fiber: str | None = get(nutrition, f"{RecipeKeys.NUTRITION}.fiberContent")
+    protein: str | None = get(nutrition, f"{RecipeKeys.NUTRITION}.proteinContent")
+    sodium: str | None = get(nutrition, f"{RecipeKeys.NUTRITION}.sodiumContent")
     return Nutrition(
         calories=strip_and_cast(calories, " calories"),
         fat=strip_and_cast(fat, " grams fat"),

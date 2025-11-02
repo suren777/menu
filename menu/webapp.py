@@ -1,3 +1,4 @@
+"""This module contains the web application for the menu."""
 import os
 import shutil
 from typing import Callable
@@ -9,12 +10,14 @@ from menu.routes import api_router
 
 
 def create_app():
+    """Create the FastAPI application."""
     app = FastAPI()
     app.include_router(api_router)
     return app
 
 
 def start_server(host: str, port: str) -> None:
+    """Start the uvicorn server."""
     args = [
         shutil.which("uvicorn"),
         "uvicorn",
@@ -31,8 +34,9 @@ def start_server(host: str, port: str) -> None:
 
 
 def main(server_runner: Callable[[str, str], None] = start_server):
+    """The main entry point for the application."""
     config = ApplicationConfig()
-    server_runner(host=config.host, port=config.port)
+    server_runner(config.host, config.port)
 
 
 if __name__ == "__main__":

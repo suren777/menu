@@ -1,3 +1,4 @@
+"""This module contains the conversation handler for finding recipes by name."""
 import logging
 import random
 from telegram import (
@@ -29,7 +30,7 @@ logging.basicConfig(level=logging.INFO)
 ONE, TWO = range(2)
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
     """Starts the conversation and asks the user about their food category."""
 
     await update.message.reply_text(
@@ -40,8 +41,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ONE
 
 
-async def search_for_recipes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def search_for_recipes(update: Update, _: ContextTypes.DEFAULT_TYPE):
+    """Searches for recipes based on the user's input."""
+    if update.message is None:
+        logging.error("Message is None in search_for_recipes function.")
+        return ConversationHandler.END
+
     search_string = update.message.text
+    if search_string is None:
+        logging.error("Search string is None in search_for_recipes function.")
+        await update.message.reply_text("Please provide a search query.")
+        return ConversationHandler.END
+
     recipes = search_recipe_by_name(search_string)
     if len(recipes) > MAX_OPTIONS:
         recipes = random.sample(recipes, k=MAX_OPTIONS)
@@ -53,7 +64,7 @@ async def search_for_recipes(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return ConversationHandler.END
     reply_keyboard = inline_keyboard_generator_from_dict(recipes, "name", "id")
     await update.message.reply_text(
-        f"<b>I have found few recipes, which one you want to cook?</b>",
+        "<b>I have found few recipes, which one you want to cook?</b>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(reply_keyboard),
     )

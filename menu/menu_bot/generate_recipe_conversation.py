@@ -1,6 +1,9 @@
+
+"""This module contains the conversation handler for generating recipes."""
 import logging
 import random
 
+from typing import Any, cast
 from telegram import InlineKeyboardMarkup, Update
 from telegram.ext import (
     CallbackQueryHandler,
@@ -22,10 +25,14 @@ from menu.menu_bot.helpers import (
 logging.basicConfig(level=logging.INFO)
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
     """Starts the conversation and asks the user about their food category."""
 
     reply_keyboard = inline_keyboard_generator(MAIN_CATEGORIES)
+
+    if update.message is None:
+        logging.error("Message is None in start function.")
+        return ConversationHandler.END
 
     await update.message.reply_text(
         "<b>Welcome to the Food Recipe Bot!\n"
@@ -38,10 +45,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles the category selection and asks for cuisine."""
     query = update.callback_query
+    if query is None:
+        logging.error("Callback query is None in category_callback function.")
+        return ConversationHandler.END
+
     await query.answer()
     category = query.data
-    context.user_data["category"] = category
+    user_data = context.user_data
+    if user_data is None:
+        user_data = {}
+        context.user_data = user_data
+    user_data["category"] = category
     cuisines = get_cuisines(category)
     if len(cuisines) == 0:
         return ConversationStages.SUMMARY.value
@@ -59,24 +75,39 @@ async def category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def recipe_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles the cuisine selection and shows the recipes."""
     query = update.callback_query
+    if query is None:
+        logging.error("Callback query is None in recipe_selection function.")
+        return ConversationHandler.END
+
     await query.answer()
     cuisine = query.data
-    context.user_data["cuisine"] = cuisine
-    category = context.user_data.get("category")
+    user_data = context.user_data
+    if user_data is None:
+        user_data = {}
+        context.user_data = user_data
+    user_data["cuisine"] = cuisine
+    category = user_data.get("category")
     recipes = get_recipe_names(cuisine=cuisine, category=category)
 
     if len(recipes) > MAX_OPTIONS:
         recipes = random.sample(recipes, k=MAX_OPTIONS)
 
-    reply_keyboard = inline_keyboard_generator_from_dict(recipes, "name", "id")
+    reply_keyboard = inline_keyboard_generator_from_dict(
+        cast(list[dict[Any, Any]], recipes), "name", "id"
+    )
     if len(recipes) == 0:
-        logging.info(f"Error with cuisine {cuisine} and category {category}")
+        logging.info(
+            "Error with cuisine %s and category %s",
+            cuisine,
+            category if category is not None else "N/A",
+        )
         await query.edit_message_text("Can't find anything to cook")
         return ConversationHandler.END
 
     await query.edit_message_text(
-        f"<b>I have found few recipes, which one you want to cook?</b>",
+        "<b>I have found few recipes, which one you want to cook?</b>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(reply_keyboard),
     )

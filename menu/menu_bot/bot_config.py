@@ -1,3 +1,4 @@
+"""This module contains the bot configuration."""
 from telegram.ext import Application
 from menu.const import BOT_KEY
 

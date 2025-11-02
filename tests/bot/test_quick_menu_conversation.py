@@ -63,7 +63,7 @@ async def test_category_callback_with_cuisines(
     assert mock_context.user_data["category"] == "lunch"
     mock_update.callback_query.edit_message_text.assert_awaited_once()
     call_args = mock_update.callback_query.edit_message_text.await_args
-    assert "You selected lunch" in call_args.kwargs["text"]
+    assert "You selected lunch" in call_args.args[0]
     assert result == ConversationStages.CUISINE.value
 
 
@@ -102,7 +102,7 @@ async def test_recipe_selection_found(
     assert mock_context.user_data["cuisine"] == "italian"
     mock_update.callback_query.edit_message_text.assert_awaited_once()
     call_args = mock_update.callback_query.edit_message_text.await_args
-    assert "I have found few recipes" in call_args.kwargs["text"]
+    assert "I have found few recipes" in call_args.args[0]
     assert result == ConversationStages.SUMMARY.value
 
 

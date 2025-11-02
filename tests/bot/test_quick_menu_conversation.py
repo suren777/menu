@@ -1,3 +1,5 @@
+"""Tests for the quick menu conversation."""
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

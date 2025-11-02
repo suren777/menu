@@ -1,3 +1,5 @@
+"""Tests for the find ingredients conversation."""
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

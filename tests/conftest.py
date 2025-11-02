@@ -1,3 +1,5 @@
+"""Module with common fixtures for tests."""
+
 from collections.abc import Generator
 
 from pytest import fixture
@@ -11,11 +13,13 @@ test_engine = create_engine("sqlite:///:memory:", echo=True)
 
 
 def pytest_configure():
+    """Initialise the database for tests."""
     initialise(test_engine)
 
 
 @fixture
 def session() -> Generator[Session, None, None]:
+    """Fixture for database session."""
     initialise(test_engine)
-    with get_session(test_engine) as session:
-        yield session
+    with get_session(test_engine) as db_session:
+        yield db_session

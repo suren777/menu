@@ -1,6 +1,7 @@
 """This module contains the conversation handler for finding recipes by name."""
 import logging
 import random
+from typing import Any, cast
 from telegram import (
     Update,
     InlineKeyboardMarkup,
@@ -31,7 +32,9 @@ ONE, TWO = range(2)
 
 
 async def start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
-    """Starts the conversation and asks the user about their food category."""
+    if update.message is None:
+        logging.error("Message is None in start function.")
+        return ConversationHandler.END
 
     await update.message.reply_text(
         "<b>Welcome to the Food Recipe Bot!\n"
@@ -62,7 +65,9 @@ async def search_for_recipes(update: Update, _: ContextTypes.DEFAULT_TYPE):
             "Can't find anything to cook, try searching for something else"
         )
         return ConversationHandler.END
-    reply_keyboard = inline_keyboard_generator_from_dict(recipes, "name", "id")
+    reply_keyboard = inline_keyboard_generator_from_dict(
+        cast(list[dict[Any, Any]], recipes), "name", "id"
+    )
     await update.message.reply_text(
         "<b>I have found few recipes, which one you want to cook?</b>",
         parse_mode="HTML",

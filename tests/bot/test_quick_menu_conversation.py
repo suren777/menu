@@ -5,12 +5,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from telegram.ext import ConversationHandler
 
-from menu.menu_bot.helpers import MAIN_CATEGORIES, ConversationStages
-from menu.menu_bot.quick_menu_conversation import (
+from menu.menu_bot.conversation_helpers import (
     category_callback,
     recipe_selection,
-    start_15,
+    start_quick_recipe,
 )
+from menu.menu_bot.helpers import MAIN_CATEGORIES, ConversationStages
 
 pytestmark = pytest.mark.asyncio
 
@@ -32,13 +32,13 @@ def mock_context():
     return context
 
 
-async def test_start_15(mock_update: MagicMock, mock_context: MagicMock):
+async def test_start_quick_recipe(mock_update: MagicMock, mock_context: MagicMock):
     """Test the start function of the quick recipe conversation."""
     with patch(
-        "menu.menu_bot.quick_menu_conversation.inline_keyboard_generator"
+        "menu.menu_bot.conversation_helpers.inline_keyboard_generator"
     ) as mock_keyboard_gen:
         mock_keyboard_gen.return_value = [[]]  # dummy keyboard
-        result = await start_15(mock_update, mock_context)
+        result = await start_quick_recipe(mock_update, mock_context)
 
     mock_keyboard_gen.assert_called_once_with(MAIN_CATEGORIES)
     mock_update.message.reply_text.assert_awaited_once()
@@ -47,7 +47,7 @@ async def test_start_15(mock_update: MagicMock, mock_context: MagicMock):
     assert result == ConversationStages.MENU_TYPE.value
 
 
-@patch("menu.menu_bot.quick_menu_conversation.get_cuisines")
+@patch("menu.menu_bot.conversation_helpers.get_cuisines")
 async def test_category_callback_with_cuisines(
     mock_get_cuisines: MagicMock, mock_update: MagicMock, mock_context: MagicMock
 ):
@@ -56,7 +56,7 @@ async def test_category_callback_with_cuisines(
     mock_get_cuisines.return_value = ["italian", "mexican"]
 
     with patch(
-        "menu.menu_bot.quick_menu_conversation.inline_keyboard_generator"
+        "menu.menu_bot.conversation_helpers.inline_keyboard_generator"
     ) as mock_keyboard_gen:
         mock_keyboard_gen.return_value = [[]]
         result = await category_callback(mock_update, mock_context)
@@ -69,7 +69,7 @@ async def test_category_callback_with_cuisines(
     assert result == ConversationStages.CUISINE.value
 
 
-@patch("menu.menu_bot.quick_menu_conversation.get_cuisines")
+@patch("menu.menu_bot.conversation_helpers.get_cuisines")
 async def test_category_callback_no_cuisines(
     mock_get_cuisines: MagicMock, mock_update: MagicMock, mock_context: MagicMock
 ):
@@ -85,7 +85,7 @@ async def test_category_callback_no_cuisines(
     assert result == ConversationStages.SUMMARY.value
 
 
-@patch("menu.menu_bot.quick_menu_conversation.get_recipe_names")
+@patch("menu.menu_bot.conversation_helpers.get_recipe_names")
 async def test_recipe_selection_found(
     mock_get_recipes: MagicMock, mock_update: MagicMock, mock_context: MagicMock
 ):
@@ -95,7 +95,7 @@ async def test_recipe_selection_found(
     mock_get_recipes.return_value = [{"name": "Pizza", "id": 1}]
 
     with patch(
-        "menu.menu_bot.quick_menu_conversation.inline_keyboard_generator_from_dict"
+        "menu.menu_bot.conversation_helpers.inline_keyboard_generator_from_dict"
     ) as mock_keyboard_gen:
         mock_keyboard_gen.return_value = [[]]
         result = await recipe_selection(mock_update, mock_context)
@@ -108,7 +108,7 @@ async def test_recipe_selection_found(
     assert result == ConversationStages.SUMMARY.value
 
 
-@patch("menu.menu_bot.quick_menu_conversation.get_recipe_names")
+@patch("menu.menu_bot.conversation_helpers.get_recipe_names")
 async def test_recipe_selection_not_found(
     mock_get_recipes: MagicMock, mock_update: MagicMock, mock_context: MagicMock
 ):

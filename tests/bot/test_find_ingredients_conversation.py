@@ -5,11 +5,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from telegram.ext import ConversationHandler
 
+from menu.menu_bot.conversation_helpers import (
+    search_for_recipes_by_ingredients,
+    start_ingredients,
+)
 from menu.menu_bot.find_ingredients_conversation import (
     ONE,
     TWO,
-    search_for_recipes_by_ingredients,
-    start,
 )
 from menu.menu_bot.helpers import MAX_OPTIONS
 
@@ -36,7 +38,7 @@ def mock_context():
 async def test_start(mock_update, mock_context):
     """Test the start function of the conversation."""
     # Act
-    result = await start(mock_update, mock_context)
+    result = await start_ingredients(mock_update, mock_context)
 
     # Assert
     mock_update.message.reply_text.assert_awaited_once_with(
@@ -47,7 +49,7 @@ async def test_start(mock_update, mock_context):
     assert result == ONE
 
 
-@patch("menu.menu_bot.find_ingredients_conversation.search_recipes_by_ingredients")
+@patch("menu.menu_bot.conversation_helpers.search_recipes_by_ingredients")
 async def test_search_for_recipes_by_ingredients_found(
     mock_search, mock_update, mock_context
 ):
@@ -59,7 +61,7 @@ async def test_search_for_recipes_by_ingredients_found(
 
     # Act
     with patch(
-        "menu.menu_bot.find_ingredients_conversation.inline_keyboard_generator_from_dict"
+        "menu.menu_bot.conversation_helpers.inline_keyboard_generator_from_dict"
     ) as mock_keyboard_gen:
         mock_keyboard_gen.return_value = [[]]  # dummy keyboard
         result = await search_for_recipes_by_ingredients(mock_update, mock_context)
@@ -75,7 +77,7 @@ async def test_search_for_recipes_by_ingredients_found(
     assert result == TWO
 
 
-@patch("menu.menu_bot.find_ingredients_conversation.search_recipes_by_ingredients")
+@patch("menu.menu_bot.conversation_helpers.search_recipes_by_ingredients")
 async def test_search_for_recipes_by_ingredients_not_found(
     mock_search, mock_update, mock_context
 ):
@@ -95,8 +97,8 @@ async def test_search_for_recipes_by_ingredients_not_found(
     assert result == ConversationHandler.END
 
 
-@patch("menu.menu_bot.find_ingredients_conversation.random.sample")
-@patch("menu.menu_bot.find_ingredients_conversation.search_recipes_by_ingredients")
+@patch("menu.menu_bot.conversation_helpers.random.sample")
+@patch("menu.menu_bot.conversation_helpers.search_recipes_by_ingredients")
 async def test_search_for_recipes_by_ingredients_too_many_found(
     mock_search, mock_random_sample, mock_update, mock_context
 ):
@@ -112,7 +114,7 @@ async def test_search_for_recipes_by_ingredients_too_many_found(
 
     # Act
     with patch(
-        "menu.menu_bot.find_ingredients_conversation.inline_keyboard_generator_from_dict"
+        "menu.menu_bot.conversation_helpers.inline_keyboard_generator_from_dict"
     ) as mock_keyboard_gen:
         mock_keyboard_gen.return_value = [[]]
         result = await search_for_recipes_by_ingredients(mock_update, mock_context)

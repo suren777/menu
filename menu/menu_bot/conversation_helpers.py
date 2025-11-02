@@ -5,7 +5,12 @@ import random
 from typing import Any, cast
 
 from telegram import InlineKeyboardMarkup, Update
-from telegram.ext import ContextTypes, ConversationHandler
+from telegram.ext import (
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    ConversationHandler,
+)
 
 from menu.db.recipes.helpers import (
     get_cuisines,
@@ -27,6 +32,25 @@ logging.basicConfig(level=logging.INFO)
 ONE, TWO = range(2)
 
 
+def create_conversation_handler(command, start_function):
+    """Creates a conversation handler for the bot."""
+    return ConversationHandler(
+        entry_points=[CommandHandler(command, start_function)],
+        states={
+            ConversationStages.MENU_TYPE.value: [
+                CallbackQueryHandler(category_callback),
+            ],
+            ConversationStages.CUISINE.value: [
+                CallbackQueryHandler(recipe_selection),
+            ],
+            ConversationStages.SUMMARY.value: [
+                CallbackQueryHandler(summary),
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+
 async def start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
     """Starts the conversation and asks the user about their food category."""
 
@@ -44,6 +68,55 @@ async def start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
         reply_markup=InlineKeyboardMarkup(reply_keyboard),
     )
     return ConversationStages.MENU_TYPE.value
+
+
+async def start_quick_recipe(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
+    """Starts the quick recipe conversation."""
+
+    reply_keyboard = inline_keyboard_generator(MAIN_CATEGORIES)
+
+    if update.message is None:
+        logging.error("Message is None in start_quick_recipe function.")
+        return ConversationHandler.END
+
+    await update.message.reply_text(
+        "<b>Welcome to the Food Recipe Bot!\n"
+        "I understand that you are in a hurry, so let's find something to cook.\n"
+        "What is the meal type?</b>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(reply_keyboard),
+    )
+    return ConversationStages.MENU_TYPE.value
+
+
+async def start_search_recipes(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
+    """Starts the search recipes conversation."""
+
+    if update.message is None:
+        logging.error("Message is None in start_search_recipes function.")
+        return ConversationHandler.END
+
+    await update.message.reply_text(
+        "<b>Welcome to the Food Recipe Bot!\n"
+        "What Recipe do you want to search for?</b>",
+        parse_mode="HTML",
+    )
+    return ONE
+
+
+async def start_ingredients(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
+    """Starts the ingredients conversation."""
+
+    if update.message is None:
+        logging.error("Message is None in start_ingredients function.")
+        return ConversationHandler.END
+
+    await update.message.reply_text(
+        "<b>Welcome to the Food Recipe Bot!\n"
+        "Please enter a list of ingredients, separated by commas.</b>",
+        parse_mode="HTML",
+    )
+    return ONE
 
 
 async def category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

@@ -1,3 +1,4 @@
+"""API router for the menu application."""
 from fastapi import APIRouter
 
 from menu.api_routers.routes import router

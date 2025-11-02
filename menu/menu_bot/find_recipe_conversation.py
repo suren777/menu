@@ -33,6 +33,7 @@ ONE, TWO = range(2)
 
 
 async def start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> int:
+    """Starts the conversation and asks the user for a recipe to search for."""
     if update.message is None:
         logging.error("Message is None in start function.")
         return ConversationHandler.END

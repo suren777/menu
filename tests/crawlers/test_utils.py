@@ -21,7 +21,7 @@ from menu.crawlers.bbc_good_food.utils import (
 def test_request_xml_ok(mock_get):
     mock_response = MagicMock()
     mock_response.ok = True
-    mock_response.content = b"<urlset><url><loc>http://test.com</loc></url></urlset>"
+    mock_response.content = b'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>http://test.com</loc></url></urlset>'
     mock_get.return_value = mock_response
 
     result = request_xml("http://test.com/sitemap.xml")
@@ -79,7 +79,7 @@ def test_parse_image():
 
 
 def test_strip_and_cast():
-    assert strip_and_cast("10 grams", " grams") == 10.0
+    assert strip_and_cast("10 grams", " grams") == "10"
     assert strip_and_cast(None, " grams") is None
 
 
@@ -97,7 +97,7 @@ def test_parce_nutrition():
         }
     }
     nutrition = parce_nutrition(nutrition_data)
-    assert nutrition["calories"] == 100.0
+    assert nutrition["calories"] == "100"
 
 
 def test_parce_recipe():

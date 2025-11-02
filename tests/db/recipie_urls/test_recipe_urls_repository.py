@@ -32,7 +32,7 @@ def test_find_by_url():
     session = MagicMock()
     repo = RecipeUrlsRepository()
     repo.find_by_url("http://test.com", session)
-    session.query.assert_called_once()
+    session.scalars.assert_called_once()
 
 
 def test_url_exists():

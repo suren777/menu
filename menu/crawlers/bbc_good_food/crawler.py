@@ -35,11 +35,13 @@ def import_recipes(url: str) -> None:
     for recipe_url in request_xml(url):
         recipe = fetch_recipe(recipe_url)
         if contains_recipe(recipe):
-            recipe_data = json.loads(
-                recipe.find("script", {"data-testid": BBC_JSON_TEST_ID}).contents[0]
-            )
-            name = recipe.title.text
-            add_recipe(recipe_url, name, recipe_data)
+            script_tag = recipe.find("script", {"data-testid": BBC_JSON_TEST_ID})
+            if script_tag:
+                script_contents = getattr(script_tag, "contents", [])
+                if script_contents:
+                    recipe_data = json.loads(script_contents[0])
+                    name = recipe.title.text if recipe.title else ""
+                    add_recipe(recipe_url, name, recipe_data)
     finalise_sitemap(url)
 
 

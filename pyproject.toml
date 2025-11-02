@@ -56,3 +56,5 @@ ignore = [
     "venv",
     ".venv"
 ]
+[tool.pylint.master]
+extension-pkg-allow-list = "pydantic" 

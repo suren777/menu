@@ -1,10 +1,11 @@
 import os
 import shutil
-from fastapi import FastAPI
-from menu.routes import api_router
 from typing import Callable
 
+from fastapi import FastAPI
+
 from menu.config import ApplicationConfig
+from menu.routes import api_router
 
 
 def create_app():

@@ -1,30 +1,34 @@
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 import pytest
 from bs4 import BeautifulSoup
+
 from menu.crawlers.bbc_good_food.utils import (
-    request_xml,
-    get_sitemap,
+    FetchError,
     contains_recipe,
     fetch_recipe,
-    parse_keywords,
-    parse_image,
-    strip_and_cast,
+    get_sitemap,
     parce_nutrition,
     parce_recipe,
-    FetchError,
+    parse_image,
+    parse_keywords,
+    request_xml,
+    strip_and_cast,
 )
 
-@patch('requests.get')
+
+@patch("requests.get")
 def test_request_xml_ok(mock_get):
     mock_response = MagicMock()
     mock_response.ok = True
-    mock_response.content = b'<urlset><url><loc>http://test.com</loc></url></urlset>'
+    mock_response.content = b"<urlset><url><loc>http://test.com</loc></url></urlset>"
     mock_get.return_value = mock_response
 
     result = request_xml("http://test.com/sitemap.xml")
     assert result == ["http://test.com"]
 
-@patch('requests.get')
+
+@patch("requests.get")
 def test_request_xml_fail(mock_get):
     mock_response = MagicMock()
     mock_response.ok = False
@@ -33,39 +37,51 @@ def test_request_xml_fail(mock_get):
     with pytest.raises(FetchError):
         request_xml("http://test.com/sitemap.xml")
 
+
 def test_get_sitemap():
-    with patch('menu.crawlers.bbc_good_food.utils.request_xml', return_value=["http://test.com"]) as mock_request_xml:
+    with patch(
+        "menu.crawlers.bbc_good_food.utils.request_xml",
+        return_value=["http://test.com"],
+    ) as mock_request_xml:
         result = get_sitemap("http://test.com/sitemap.xml")
         assert result == ["http://test.com"]
         mock_request_xml.assert_called_once_with("http://test.com/sitemap.xml")
 
+
 def test_contains_recipe():
     html_with_recipe = '<html><body><ul class="breadcrumb__list body-copy-extra-small oflow-x-auto list"><li>Home</li><li>Recipes</li><li>Dessert</li></ul></body></html>'
-    soup_with_recipe = BeautifulSoup(html_with_recipe, 'html.parser')
+    soup_with_recipe = BeautifulSoup(html_with_recipe, "html.parser")
     assert contains_recipe(soup_with_recipe)
 
     html_without_recipe = '<html><body><ul class="breadcrumb__list body-copy-extra-small oflow-x-auto list"><li>Home</li><li>Recipes</li><li>Collection</li></ul></body></html>'
-    soup_without_recipe = BeautifulSoup(html_without_recipe, 'html.parser')
+    soup_without_recipe = BeautifulSoup(html_without_recipe, "html.parser")
     assert not contains_recipe(soup_without_recipe)
 
-@patch('requests.get')
+
+@patch("requests.get")
 def test_fetch_recipe(mock_get):
     mock_response = MagicMock()
-    mock_response.content = b'<html><body><h1>Test Recipe</h1></body></html>'
+    mock_response.content = b"<html><body><h1>Test Recipe</h1></body></html>"
     mock_get.return_value = mock_response
 
     result = fetch_recipe("http://test.com/recipe")
     assert "Test Recipe" in str(result)
 
+
 def test_parse_keywords():
     assert parse_keywords("one, two, three") == ["one", "two", "three"]
 
+
 def test_parse_image():
-    assert parse_image({"url": "http://test.com/image.jpg"}) == "http://test.com/image.jpg"
+    assert (
+        parse_image({"url": "http://test.com/image.jpg"}) == "http://test.com/image.jpg"
+    )
+
 
 def test_strip_and_cast():
     assert strip_and_cast("10 grams", " grams") == 10.0
     assert strip_and_cast(None, " grams") is None
+
 
 def test_parce_nutrition():
     nutrition_data = {
@@ -82,6 +98,7 @@ def test_parce_nutrition():
     }
     nutrition = parce_nutrition(nutrition_data)
     assert nutrition["calories"] == 100.0
+
 
 def test_parce_recipe():
     recipe_data = {

@@ -1,4 +1,5 @@
 """This module contains helper functions for the bot."""
+
 from enum import Enum
 from itertools import islice
 from typing import Any, Iterable, Iterator

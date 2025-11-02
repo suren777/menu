@@ -1,14 +1,15 @@
 # tests/bot/test_find_recipe_conversation.py
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 from telegram import Update
-from telegram.ext import ConversationHandler, ContextTypes
+from telegram.ext import ContextTypes, ConversationHandler
 
 from menu.menu_bot.find_recipe_conversation import (
-    start,
-    search_for_recipes,
     ONE,
     TWO,
+    search_for_recipes,
+    start,
 )
 from menu.menu_bot.helpers import MAX_OPTIONS
 
@@ -83,7 +84,6 @@ async def test_search_for_recipes_not_found(mock_search_recipe):
     assert result == ConversationHandler.END
 
 
-
 @pytest.mark.asyncio
 async def test_conversation_entry_points():
     """Check if the conversation handler is correctly set up with the /search command."""
@@ -108,8 +108,8 @@ async def test_conversation_states():
 @pytest.mark.asyncio
 async def test_conversation_fallbacks():
     """Check if the /cancel command is correctly set up as a fallback."""
-    from menu.menu_bot.find_recipe_conversation import find_recipes_conversation
     from menu.menu_bot.common import cancel
+    from menu.menu_bot.find_recipe_conversation import find_recipes_conversation
 
     assert len(find_recipes_conversation.fallbacks) == 1
     handler = find_recipes_conversation.fallbacks[0]
@@ -119,9 +119,8 @@ async def test_conversation_fallbacks():
 @pytest.mark.asyncio
 async def test_summary_callback():
     """Test that the summary function is called in state TWO."""
-    from menu.menu_bot.find_recipe_conversation import find_recipes_conversation
     from menu.menu_bot.common import summary
+    from menu.menu_bot.find_recipe_conversation import find_recipes_conversation
 
     handler = find_recipes_conversation.states[TWO][0]
     assert handler.callback == summary
-

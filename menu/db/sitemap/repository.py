@@ -1,7 +1,9 @@
 from dataclasses import dataclass
-from sqlalchemy import select, false
-from menu.db.database import Sitemap
+
+from sqlalchemy import false, select
 from sqlalchemy.orm import Session
+
+from menu.db.database import Sitemap
 
 
 @dataclass

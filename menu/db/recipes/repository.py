@@ -1,10 +1,11 @@
+import json
 from dataclasses import dataclass
 
 from sqlalchemy import ColumnExpressionArgument
+from sqlalchemy.orm import Session
+
 from menu.db.connection import get_ro_session
 from menu.db.database import RecipeTable
-from sqlalchemy.orm import Session
-import json
 
 
 @dataclass
@@ -51,8 +52,12 @@ class RecipesRepository:
             cuisine=str(record.cuisine),
             calories=str(record.calories) if record.calories is not None else None,
             fat=str(record.fat) if record.fat is not None else None,
-            saturated_fat=str(record.saturated_fat) if record.saturated_fat is not None else None,
-            carbohydrate=str(record.carbohydrate) if record.carbohydrate is not None else None,
+            saturated_fat=(
+                str(record.saturated_fat) if record.saturated_fat is not None else None
+            ),
+            carbohydrate=(
+                str(record.carbohydrate) if record.carbohydrate is not None else None
+            ),
             sugar=str(record.sugar) if record.sugar is not None else None,
             fiber=str(record.fiber) if record.fiber is not None else None,
             protein=str(record.protein) if record.protein is not None else None,

@@ -1,7 +1,8 @@
-
 """This module contains common functions for the bot."""
+
 import logging
 from typing import Any
+
 from telegram import (
     Update,
 )

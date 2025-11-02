@@ -1,13 +1,14 @@
 from typing import Any
-import requests
 from xml.etree import ElementTree
+
+import requests
 from bs4 import BeautifulSoup
-from menu.crawlers.bbc_good_food.common import Nutrition, ParsedRecipe, RecipeKeys
 from pydash import get
 
+from menu.crawlers.bbc_good_food.common import Nutrition, ParsedRecipe, RecipeKeys
 
-class FetchError(BaseException):
-    ...
+
+class FetchError(BaseException): ...
 
 
 def request_xml(url: str) -> list[str]:
@@ -81,9 +82,11 @@ def parce_recipe(recipe: dict[str, Any]) -> ParsedRecipe:
         name=recipe[RecipeKeys.NAME],
         description=recipe[RecipeKeys.DESCRIPTION],
         image=parse_image(recipe[RecipeKeys.IMAGE]),
-        keywords=parse_keywords(recipe[RecipeKeys.KEYWORDS])
-        if RecipeKeys.KEYWORDS in recipe
-        else [],
+        keywords=(
+            parse_keywords(recipe[RecipeKeys.KEYWORDS])
+            if RecipeKeys.KEYWORDS in recipe
+            else []
+        ),
         cook_time=get(recipe, RecipeKeys.COOK_TIME),
         prep_time=get(recipe, RecipeKeys.PREP_TIME),
         total_time=get(recipe, RecipeKeys.TOTAL_TIME),

@@ -1,13 +1,15 @@
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 from telegram.ext import ConversationHandler
 
 from menu.menu_bot.generate_recipe_conversation import (
-    start,
     category_callback,
     recipe_selection,
+    start,
 )
 from menu.menu_bot.helpers import ConversationStages
+
 
 @pytest.mark.asyncio
 async def test_start():
@@ -18,6 +20,7 @@ async def test_start():
     update.message.reply_text.assert_called_once()
     assert result == ConversationStages.MENU_TYPE.value
 
+
 @pytest.mark.asyncio
 async def test_start_no_message():
     update = MagicMock()
@@ -26,8 +29,12 @@ async def test_start_no_message():
     result = await start(update, context)
     assert result == ConversationHandler.END
 
+
 @pytest.mark.asyncio
-@patch('menu.menu_bot.generate_recipe_conversation.get_cuisines', return_value=['italian', 'mexican'])
+@patch(
+    "menu.menu_bot.generate_recipe_conversation.get_cuisines",
+    return_value=["italian", "mexican"],
+)
 async def test_category_callback(mock_get_cuisines):
     update = MagicMock()
     query = AsyncMock()
@@ -40,8 +47,12 @@ async def test_category_callback(mock_get_cuisines):
     query.edit_message_text.assert_called_once()
     assert result == ConversationStages.CUISINE.value
 
+
 @pytest.mark.asyncio
-@patch('menu.menu_bot.generate_recipe_conversation.get_cuisines', return_value=['italian', 'mexican'])
+@patch(
+    "menu.menu_bot.generate_recipe_conversation.get_cuisines",
+    return_value=["italian", "mexican"],
+)
 async def test_category_callback_no_user_data(mock_get_cuisines):
     update = MagicMock()
     query = AsyncMock()
@@ -54,6 +65,7 @@ async def test_category_callback_no_user_data(mock_get_cuisines):
     query.edit_message_text.assert_called_once()
     assert result == ConversationStages.CUISINE.value
 
+
 @pytest.mark.asyncio
 async def test_category_callback_no_query():
     update = MagicMock()
@@ -62,8 +74,9 @@ async def test_category_callback_no_query():
     result = await category_callback(update, context)
     assert result == ConversationHandler.END
 
+
 @pytest.mark.asyncio
-@patch('menu.menu_bot.generate_recipe_conversation.get_cuisines', return_value=[])
+@patch("menu.menu_bot.generate_recipe_conversation.get_cuisines", return_value=[])
 async def test_category_callback_no_cuisines(mock_get_cuisines):
     update = MagicMock()
     query = AsyncMock()
@@ -74,8 +87,12 @@ async def test_category_callback_no_cuisines(mock_get_cuisines):
     result = await category_callback(update, context)
     assert result == ConversationStages.SUMMARY.value
 
+
 @pytest.mark.asyncio
-@patch('menu.menu_bot.generate_recipe_conversation.get_recipe_names', return_value=[{'name': 'recipe1', 'id': 1}])
+@patch(
+    "menu.menu_bot.generate_recipe_conversation.get_recipe_names",
+    return_value=[{"name": "recipe1", "id": 1}],
+)
 async def test_recipe_selection(mock_get_recipe_names):
     update = MagicMock()
     query = AsyncMock()
@@ -88,8 +105,12 @@ async def test_recipe_selection(mock_get_recipe_names):
     query.edit_message_text.assert_called_once()
     assert result == ConversationStages.SUMMARY.value
 
+
 @pytest.mark.asyncio
-@patch('menu.menu_bot.generate_recipe_conversation.get_recipe_names', return_value=[{'name': 'recipe1', 'id': 1}])
+@patch(
+    "menu.menu_bot.generate_recipe_conversation.get_recipe_names",
+    return_value=[{"name": "recipe1", "id": 1}],
+)
 async def test_recipe_selection_no_user_data(mock_get_recipe_names):
     update = MagicMock()
     query = AsyncMock()
@@ -102,6 +123,7 @@ async def test_recipe_selection_no_user_data(mock_get_recipe_names):
     query.edit_message_text.assert_called_once()
     assert result == ConversationStages.SUMMARY.value
 
+
 @pytest.mark.asyncio
 async def test_recipe_selection_no_query():
     update = MagicMock()
@@ -110,8 +132,9 @@ async def test_recipe_selection_no_query():
     result = await recipe_selection(update, context)
     assert result == ConversationHandler.END
 
+
 @pytest.mark.asyncio
-@patch('menu.menu_bot.generate_recipe_conversation.get_recipe_names', return_value=[])
+@patch("menu.menu_bot.generate_recipe_conversation.get_recipe_names", return_value=[])
 async def test_recipe_selection_no_recipes(mock_get_recipe_names):
     update = MagicMock()
     query = AsyncMock()

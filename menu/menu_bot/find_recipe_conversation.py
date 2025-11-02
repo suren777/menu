@@ -1,16 +1,18 @@
 """This module contains the conversation handler for finding recipes by name."""
+
 import logging
 import random
 from typing import Any, cast
+
 from telegram import (
-    Update,
     InlineKeyboardMarkup,
+    Update,
 )
 from telegram.ext import (
+    CallbackQueryHandler,
+    CommandHandler,
     ContextTypes,
     ConversationHandler,
-    CommandHandler,
-    CallbackQueryHandler,
     MessageHandler,
     filters,
 )
@@ -18,11 +20,10 @@ from telegram.ext import (
 from menu.db.recipes.helpers import (
     search_recipe_by_name,
 )
-
-from menu.menu_bot.common import summary, cancel
+from menu.menu_bot.common import cancel, summary
 from menu.menu_bot.helpers import (
-    ConversationStages,
     MAX_OPTIONS,
+    ConversationStages,
     inline_keyboard_generator_from_dict,
 )
 

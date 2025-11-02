@@ -152,7 +152,5 @@ def get_recipes(
     filters = create_recipe_filters(cuisine, category, ingredient)
 
     with get_ro_session() as session:
-        result = (
-            session.query(RecipeTable).filter(*filters).limit(max_recipes).all()
-        )
+        result = session.query(RecipeTable).filter(*filters).limit(max_recipes).all()
     return [recipe_to_text(recipe) for recipe in result]

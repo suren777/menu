@@ -1,8 +1,10 @@
 from dataclasses import dataclass
-from sqlalchemy import select
 from typing import Any
-from menu.db.database import RecipeUrls
+
+from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+from menu.db.database import RecipeUrls
 
 
 @dataclass

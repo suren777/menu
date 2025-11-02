@@ -1,7 +1,9 @@
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 from menu.db.sitemap.actions import finalise_sitemap
 
-@patch('menu.db.sitemap.actions.get_session')
+
+@patch("menu.db.sitemap.actions.get_session")
 def test_finalise_sitemap(mock_get_session):
     mock_session = MagicMock()
     mock_query = MagicMock()

@@ -1,4 +1,5 @@
 """This module contains helper functions for the bot conversations."""
+
 import logging
 import random
 from typing import Any, cast
@@ -7,8 +8,11 @@ from telegram import InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, ConversationHandler
 
 from menu.db.recipes.helpers import (
-    get_cuisines, get_recipe_names, get_recipe_by_id, search_recipe_by_name,
-    search_recipes_by_ingredients
+    get_cuisines,
+    get_recipe_by_id,
+    get_recipe_names,
+    search_recipe_by_name,
+    search_recipes_by_ingredients,
 )
 from menu.menu_bot.helpers import (
     MAIN_CATEGORIES,

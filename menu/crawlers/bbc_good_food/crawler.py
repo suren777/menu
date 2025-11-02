@@ -1,8 +1,9 @@
 import json
 from multiprocessing import Pool
-from pydantic import BaseModel
-from menu.crawlers.bbc_good_food.const import BBC_JSON_TEST_ID, BBC_SITEMAP
 
+from pydantic import BaseModel
+
+from menu.crawlers.bbc_good_food.const import BBC_JSON_TEST_ID, BBC_SITEMAP
 from menu.crawlers.bbc_good_food.utils import (
     contains_recipe,
     fetch_recipe,

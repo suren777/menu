@@ -1,8 +1,10 @@
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 from telegram.ext import ConversationHandler
 
-from menu.menu_bot.common import summary, cancel
+from menu.menu_bot.common import cancel, summary
+
 
 @pytest.mark.asyncio
 async def test_summary_no_query():
@@ -11,6 +13,7 @@ async def test_summary_no_query():
     context = MagicMock()
     result = await summary(update, context)
     assert result == ConversationHandler.END
+
 
 @pytest.mark.asyncio
 async def test_summary_invalid_recipe_id():
@@ -24,8 +27,9 @@ async def test_summary_invalid_recipe_id():
     query.edit_message_text.assert_called_once_with("Invalid recipe ID.")
     assert result == ConversationHandler.END
 
+
 @pytest.mark.asyncio
-@patch('menu.menu_bot.common.get_recipe_by_id', return_value=None)
+@patch("menu.menu_bot.common.get_recipe_by_id", return_value=None)
 async def test_summary_recipe_not_found(mock_get_recipe):
     update = MagicMock()
     query = AsyncMock()
@@ -39,8 +43,9 @@ async def test_summary_recipe_not_found(mock_get_recipe):
     query.edit_message_text.assert_called_once_with("Can't find anything to cook")
     assert result == ConversationHandler.END
 
+
 @pytest.mark.asyncio
-@patch('menu.menu_bot.common.get_recipe_by_id', return_value="Test Recipe Details")
+@patch("menu.menu_bot.common.get_recipe_by_id", return_value="Test Recipe Details")
 async def test_summary_success_with_user_data(mock_get_recipe):
     update = MagicMock()
     query = AsyncMock()
@@ -59,8 +64,9 @@ async def test_summary_success_with_user_data(mock_get_recipe):
     )
     assert result == ConversationHandler.END
 
+
 @pytest.mark.asyncio
-@patch('menu.menu_bot.common.get_recipe_by_id', return_value="Test Recipe Details")
+@patch("menu.menu_bot.common.get_recipe_by_id", return_value="Test Recipe Details")
 async def test_summary_success_without_user_data(mock_get_recipe):
     update = MagicMock()
     query = AsyncMock()
@@ -78,6 +84,7 @@ async def test_summary_success_without_user_data(mock_get_recipe):
         parse_mode="HTML",
     )
     assert result == ConversationHandler.END
+
 
 @pytest.mark.asyncio
 async def test_cancel():

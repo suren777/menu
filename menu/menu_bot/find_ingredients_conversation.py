@@ -1,8 +1,9 @@
 """This module contains the conversation handler for finding recipes by ingredients."""
+
 import logging
 import random
-
 from typing import Any, cast
+
 from telegram import InlineKeyboardMarkup, Update
 from telegram.ext import (
     CallbackQueryHandler,

@@ -1,7 +1,9 @@
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 from menu.teleapp import main
 
-@patch('menu.teleapp.telegram_bot')
+
+@patch("menu.teleapp.telegram_bot")
 def test_main(mock_telegram_bot):
     mock_app = MagicMock()
     mock_telegram_bot.build.return_value = mock_app

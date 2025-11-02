@@ -56,10 +56,10 @@ def parse_literal_array(
 
 def recipe_to_text(recipe: RecipeTable) -> str:
 
-    result = f"<b>{str(recipe.name)}</b>\n\n"
+    result = f"<b>{recipe.name}</b>\n\n"
     if recipe.portions is not None or recipe.portions != 0:
-        result += f"Portions: {str(recipe.portions)}\n"
-    result += f"<i>{str(recipe.description)}</i>\n\n"
+        result += f"Portions: {recipe.portions}\n"
+    result += f"<i>{recipe.description}</i>\n\n"
     result += "<b>Ingredients:</b>\n"
     result += parse_literal_array(recipe.ingredients) + "\n\n"
     result += "<b>Instructions:</b>\n"
@@ -149,22 +149,10 @@ def get_recipes(
     ingredient: str | None = None,
     max_recipes: int = 3,
 ) -> list[str]:
-    filters: list[ColumnExpressionArgument[bool]] = []
-    if cuisine is not None:
-        filters.append(RecipeTable.cuisine == cuisine)
-    if category is not None:
-        filters.append(func.lower(RecipeTable.category).like(f"%{category.lower()}%"))
-    if ingredient is not None:
-        filters.append(
-            func.lower(RecipeTable.ingredients).like(f"% {ingredient.lower()}%")
-        )
+    filters = create_recipe_filters(cuisine, category, ingredient)
 
     with get_ro_session() as session:
-        result = [
-            recipe_to_text(recipe)
-            for recipe in session.query(RecipeTable)
-            .filter(*filters)
-            .limit(max_recipes)
-            .all()
-        ]
-    return result
+        result = (
+            session.query(RecipeTable).filter(*filters).limit(max_recipes).all()
+        )
+    return [recipe_to_text(recipe) for recipe in result]

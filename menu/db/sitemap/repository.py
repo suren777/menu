@@ -21,7 +21,7 @@ class SitemapRepository:
         return Sitemap(id=entity.id, url=entity.url, completed=entity.completed)
 
     def find_by_url(self, url: str, session: Session) -> SitemapModel | None:
-        result = session.query(select(SitemapModel).filter(SitemapModel.url == url))
+        result = session.query(Sitemap).filter(Sitemap.url == url).first()
         if result is not None:
             return SitemapRepository.from_record(result)
         return None

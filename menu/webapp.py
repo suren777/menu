@@ -2,6 +2,7 @@ import os
 import shutil
 from fastapi import FastAPI
 from menu.routes import api_router
+from typing import Callable
 
 from menu.config import ApplicationConfig
 
@@ -28,6 +29,10 @@ def start_server(host: str, port: str) -> None:
     os.execl(*[str(v) for v in args])
 
 
-if __name__ == "__main__":
+def main(server_runner: Callable[[str, str], None] = start_server):
     config = ApplicationConfig()
-    start_server(host=config.host, port=config.port)
+    server_runner(host=config.host, port=config.port)
+
+
+if __name__ == "__main__":
+    main()

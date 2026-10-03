@@ -1,0 +1,96 @@
+"""Hand-seeded ingredient data: aliases, densities, unit weights.
+
+Two things cannot come from the parser and are curated here by hand:
+
+- Variant canonicalisation ("warm milk" -> "milk") is alias-driven;
+  the parser keeps modifiers fused into the name.
+- USDA FoodData Central has no directly usable density, so
+  volume->mass aggregation needs these measured values.
+
+Rerunning is idempotent: missing rows are created, and an alias that
+already exists but points elsewhere (typically a parse-time self-alias
+of a variant name) is re-pointed to the canonical ingredient.
+"""
+
+from typing import TYPE_CHECKING
+
+from sqlalchemy import select
+
+from menu.db.database import Ingredient, IngredientAlias
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
+# alias -> (canonical ingredient, variant)
+ALIASES: list[tuple[str, str, str | None]] = [
+    ("warm milk", "milk", "warm"),
+    ("whole milk", "milk", "whole"),
+    ("salted butter", "butter", "salted"),
+    ("unsalted butter", "butter", "unsalted"),
+    ("melted butter", "butter", "melted"),
+    ("plain flour", "flour", "plain"),
+    ("bread flour", "flour", "bread"),
+    ("strong white bread flour", "flour", "bread"),
+    ("egg white", "egg", "white"),
+    ("egg yolk", "egg", "yolk"),
+    ("instant dried yeast", "fast-action dried yeast", None),
+    (
+        "whole blanched almonds roughly chopped",
+        "blanched almond",
+        "whole, roughly chopped",
+    ),
+]
+
+# g/ml, cooking-standard measured values
+DENSITIES_G_PER_ML: dict[str, float] = {
+    "milk": 1.03,
+    "butter": 0.96,
+    "flour": 0.55,
+    "caster sugar": 0.85,
+}
+
+# g per piece
+UNIT_WEIGHTS_G: dict[str, float] = {
+    "egg": 50.0,
+}
+
+
+def _canonical_ingredient(name: str, session: Session) -> Ingredient:
+    ingredient = session.scalar(select(Ingredient).where(Ingredient.name == name))
+    if ingredient is None:
+        ingredient = Ingredient(name=name)
+        session.add(ingredient)
+        session.flush()
+    return ingredient
+
+
+def seed_ingredient_data(session: Session) -> None:
+    """Create the seed rows; safe to rerun."""
+    for alias, canonical, variant in ALIASES:
+        target = _canonical_ingredient(canonical, session)
+        existing = session.scalar(
+            select(IngredientAlias).where(IngredientAlias.alias == alias)
+        )
+        if existing is None:
+            session.add(
+                IngredientAlias(
+                    alias=alias, ingredient_id=target.id, variant=variant
+                )
+            )
+        elif existing.ingredient_id != target.id:
+            existing.ingredient_id = target.id
+            existing.variant = variant
+
+    for name, density in DENSITIES_G_PER_ML.items():
+        ingredient = session.scalar(
+            select(Ingredient).where(Ingredient.name == name)
+        )
+        if ingredient is not None:
+            ingredient.density_g_per_ml = density
+
+    for name, weight in UNIT_WEIGHTS_G.items():
+        ingredient = session.scalar(
+            select(Ingredient).where(Ingredient.name == name)
+        )
+        if ingredient is not None:
+            ingredient.unit_weight_g = weight

@@ -16,10 +16,12 @@ from urllib.robotparser import RobotFileParser
 from bs4 import BeautifulSoup
 from requests.exceptions import RequestException
 
-from menu.ingest.errors import DisallowedError, FetchError
+from menu.ingest.errors import BlockedError, DisallowedError, FetchError
 from menu.ingest.http import USER_AGENT, session
 
 if TYPE_CHECKING:
+    from requests import Response
+
     from menu.ingest.registry import SiteConfig
 
 # Anchored to the project root so the cache doesn't depend on the
@@ -92,6 +94,14 @@ def _cache_path(url: str, cache_dir: Path) -> Path:
     return cache_dir / f"{digest}.html"
 
 
+def _retry_after(response: Response) -> float:
+    """Seconds to wait after a 429: a numeric Retry-After, else 5."""
+    try:
+        return max(float(response.headers["Retry-After"]), 1.0)
+    except (KeyError, TypeError, ValueError):
+        return 5.0
+
+
 def fetch_page(
     url: str,
     site: SiteConfig,
@@ -113,6 +123,15 @@ def fetch_page(
         delay = site.politeness_delay
     _politeness.wait(site.base_url, delay)
     response = session.get(url, timeout=10)
+    if response.status_code == 429:
+        # Rate-limited: wait out the site's own pacing once, then a
+        # second 429 is a block.
+        time.sleep(_retry_after(response))
+        response = session.get(url, timeout=10)
+        if response.status_code == 429:
+            raise BlockedError(f"Still rate-limited: {url!r}")
+    if response.status_code in (401, 402, 403):
+        raise BlockedError(f"Blocked with HTTP {response.status_code}: {url!r}")
     if not response.ok:
         raise FetchError(f"Can't fetch {url!r}")
 

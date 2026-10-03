@@ -27,11 +27,15 @@ from menu.db.recipe_urls.actions import add_recipe
 from menu.db.sitemap.actions import finalise_sitemap
 from menu.db.sitemap.repository import get_unfinished, url_exists
 from menu.ingest.discover import discover_urls, request_xml
+from menu.ingest.errors import BlockedError, CrawlBlockedError
 from menu.ingest.extract import extract_recipe_data
 from menu.ingest.fetch import fetch_recipe
 from menu.ingest.registry import SiteConfig, get_site
 
 logger = logging.getLogger(__name__)
+
+# Consecutive blocked URLs before the crawl gives up on the site.
+_BLOCK_LIMIT = 5
 
 
 @dataclass
@@ -94,14 +98,29 @@ def process_sitemap(url: str, site: SiteConfig) -> CrawlReport:
     two is likely and one of them must not stop the crawl. The sitemap
     is finalised either way — a permanently dead URL would otherwise
     wedge the queue forever, since it fails identically on every re-run.
+
+    A block is different: consecutive BlockedErrors mean the site is
+    shutting the crawl out as a whole, so this sitemap is abandoned
+    UNfinalised (its URLs stay queued for a later run) and
+    CrawlBlockedError stops the whole crawl.
     """
     report = CrawlReport()
+    blocked = 0
     for recipe_url in discover_urls(site, url):
         report.fetched += 1
         try:
             if process_url(recipe_url, site):
                 report.stored += 1
+            blocked = 0
+        except BlockedError as exc:
+            blocked += 1
+            logger.warning("Blocked on %s: %s", recipe_url, exc)
+            if blocked >= _BLOCK_LIMIT:
+                raise CrawlBlockedError(
+                    f"{site.name}: {blocked} URLs blocked in a row"
+                ) from exc
         except Exception as exc:  # noqa: BLE001 - a bad URL must not stop the crawl
+            blocked = 0
             report.failed += 1
             logger.warning("Skipping %s: %s: %s", recipe_url, type(exc).__name__, exc)
     finalise_sitemap(url, site.name)
@@ -117,7 +136,9 @@ def crawl_sitemap(site: SiteConfig) -> CrawlReport:
     reason).
 
     A sitemap whose discovery fails (unreachable, broken XML) is logged
-    and finalised so the crawl moves on to the next one.
+    and finalised so the crawl moves on to the next one. A site-wide
+    block is the opposite: the run stops and everything unfinalised
+    stays queued for a later run.
     """
     with get_session() as session:
         urls = [s.url for s in get_unfinished(session, site.name)]
@@ -126,6 +147,9 @@ def crawl_sitemap(site: SiteConfig) -> CrawlReport:
     for url in urls:
         try:
             report.merge(process_sitemap(url, site))
+        except CrawlBlockedError as exc:
+            logger.error("Stopping %s: %s", site.name, exc)
+            break
         except Exception as exc:  # noqa: BLE001
             report.failed += 1
             logger.warning("Skipping sitemap %s: %s: %s", url, type(exc).__name__, exc)

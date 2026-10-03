@@ -4,7 +4,7 @@ import pytest
 
 from menu.db.connection import get_session
 from menu.db.database import RecipeUrls
-from menu.ingest.errors import FetchError
+from menu.ingest.errors import BlockedError, CrawlBlockedError, FetchError
 from menu.ingest.pipeline import (
     CrawlReport,
     crawl_sitemap,
@@ -149,6 +149,50 @@ def test_process_sitemap_skips_bad_urls(
     mock_finalise.assert_called_once_with("https://test.com/sitemap1", SITE.name)
 
 
+@patch("menu.ingest.pipeline.finalise_sitemap")
+@patch("menu.ingest.pipeline.process_url")
+@patch("menu.ingest.pipeline.discover_urls")
+def test_process_sitemap_abandons_on_consecutive_blocks(
+    mock_discover: MagicMock,
+    mock_process_url: MagicMock,
+    mock_finalise: MagicMock,
+) -> None:
+    mock_discover.return_value = [f"https://test.com/recipes/{i}" for i in range(6)]
+    mock_process_url.side_effect = BlockedError("Blocked with HTTP 403")
+
+    with pytest.raises(CrawlBlockedError):
+        process_sitemap("https://test.com/sitemap1", SITE)
+
+    assert mock_process_url.call_count == 5
+    # Not finalised: the remaining URLs stay queued for a later run.
+    mock_finalise.assert_not_called()
+
+
+@patch("menu.ingest.pipeline.finalise_sitemap")
+@patch("menu.ingest.pipeline.process_url")
+@patch("menu.ingest.pipeline.discover_urls")
+def test_process_sitemap_resets_block_streak(
+    mock_discover: MagicMock,
+    mock_process_url: MagicMock,
+    mock_finalise: MagicMock,
+) -> None:
+    mock_discover.return_value = [
+        "https://test.com/recipes/a",
+        "https://test.com/recipes/b",
+        "https://test.com/recipes/c",
+    ]
+    mock_process_url.side_effect = [
+        BlockedError("Blocked with HTTP 403"),
+        True,
+        BlockedError("Blocked with HTTP 403"),
+    ]
+
+    report = process_sitemap("https://test.com/sitemap1", SITE)
+
+    assert report == CrawlReport(fetched=3, stored=1)
+    mock_finalise.assert_called_once_with("https://test.com/sitemap1", SITE.name)
+
+
 @patch("menu.ingest.pipeline.process_sitemap")
 @patch("menu.ingest.pipeline.get_session")
 @patch("menu.ingest.pipeline.get_unfinished")
@@ -207,6 +251,32 @@ def test_crawl_sitemap_skips_dead_sitemap(
     mock_finalise.assert_called_once_with("https://test.com/sitemap2", SITE.name)
     assert report == CrawlReport(fetched=3, stored=3, failed=1)
     assert "3 fetched, 3 stored, 1 failed" in capsys.readouterr().out
+
+
+@patch("menu.ingest.pipeline.process_sitemap")
+@patch("menu.ingest.pipeline.get_session")
+@patch("menu.ingest.pipeline.get_unfinished")
+def test_crawl_sitemap_stops_when_blocked(
+    mock_get_unfinished: MagicMock,
+    mock_get_session: MagicMock,
+    mock_process_sitemap: MagicMock,
+) -> None:
+    mock_session = MagicMock()
+    mock_get_session.return_value.__enter__.return_value = mock_session
+    mock_get_unfinished.return_value = [
+        MagicMock(url="https://test.com/sitemap1"),
+        MagicMock(url="https://test.com/sitemap2"),
+        MagicMock(url="https://test.com/sitemap3"),
+    ]
+    mock_process_sitemap.side_effect = [
+        CrawlReport(fetched=2, stored=2),
+        CrawlBlockedError("test: 5 URLs blocked in a row"),
+    ]
+
+    report = crawl_sitemap(SITE)
+
+    assert mock_process_sitemap.call_count == 2
+    assert report == CrawlReport(fetched=2, stored=2)
 
 
 def test_bbc_site_registered() -> None:

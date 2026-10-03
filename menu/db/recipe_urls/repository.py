@@ -1,10 +1,15 @@
+"""RecipeUrls queries: plain functions over a caller-supplied session."""
+
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.dialects.sqlite import insert
 
 from menu.db.database import RecipeUrls
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 
 @dataclass
@@ -15,53 +20,38 @@ class RecipeUrlsModel:
     data: dict[str, Any]
 
 
-class RecipeUrlsRepository:
-    @staticmethod
-    def from_record(record: RecipeUrls) -> RecipeUrlsModel:
-        return RecipeUrlsModel(
-            id=int(record.id),
-            url=str(record.url),
-            name=str(record.name),
-            data=dict(record.data),
-        )
+def to_model(record: RecipeUrls) -> RecipeUrlsModel:
+    return RecipeUrlsModel(
+        id=record.id, url=record.url, name=record.name, data=dict(record.data)
+    )
 
-    @staticmethod
-    def to_record(entity: RecipeUrlsModel) -> RecipeUrls:
-        return RecipeUrls(
-            id=entity.id, url=entity.url, name=entity.name, data=entity.data
-        )
 
-    def find_by_url(self, url: str, session: Session) -> RecipeUrlsModel | None:
-        result = session.scalars(select(RecipeUrls).filter_by(url=url)).first()
-        if result is not None:
-            return RecipeUrlsRepository.from_record(result)
-        return None
+def find_by_url(url: str, session: Session) -> RecipeUrlsModel | None:
+    record = session.scalars(select(RecipeUrls).where(RecipeUrls.url == url)).first()
+    return to_model(record) if record is not None else None
 
-    @staticmethod
-    def url_exists(url: str, session: Session) -> bool:
-        return bool(
-            session.query(
-                select(RecipeUrls).filter(RecipeUrls.url == url).exists()
-            ).scalar()
-        )
 
-    @staticmethod
-    def get_all(session: Session) -> list[RecipeUrlsModel]:
-        return [
-            RecipeUrlsRepository.from_record(record)
-            for record in session.query(RecipeUrls)
-        ]
+def get_all(session: Session) -> list[RecipeUrlsModel]:
+    return [to_model(record) for record in session.scalars(select(RecipeUrls))]
 
-    @staticmethod
-    def get_all_by_id(ids: list[int], session: Session) -> list[RecipeUrlsModel]:
-        return [
-            RecipeUrlsRepository.from_record(record)
-            for record in session.query(RecipeUrls).filter(RecipeUrls.id.in_(ids))
-        ]
 
-    @staticmethod
-    def add_recipe(
-        url: str, name: str, recipe_data: dict[str, Any], session: Session
-    ) -> None:
-        if not RecipeUrlsRepository.url_exists(url, session):
-            session.add(RecipeUrls(url=url, name=name, data=recipe_data))
+def get_all_by_id(ids: list[int], session: Session) -> list[RecipeUrlsModel]:
+    return [
+        to_model(record)
+        for record in session.scalars(select(RecipeUrls).where(RecipeUrls.id.in_(ids)))
+    ]
+
+
+def add_recipe(
+    url: str, name: str, recipe_data: dict[str, Any], session: Session
+) -> None:
+    """Insert the recipe; a URL that is already stored is left untouched.
+
+    The conflict is ignored in the INSERT itself (RecipeUrls.url is
+    unique), so no lookup is needed first.
+    """
+    session.execute(
+        insert(RecipeUrls)
+        .values(url=url, name=name, data=recipe_data)
+        .on_conflict_do_nothing(index_elements=["url"])
+    )

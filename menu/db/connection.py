@@ -1,27 +1,32 @@
-from collections.abc import Generator
-from contextlib import contextmanager
-from typing import Any
+"""Session factories for the scratch database.
 
-from sqlalchemy.engine import Engine
+The default engine is resolved at call time (not bound into a default
+argument at import time) so tests can patch it.
+"""
+
+from contextlib import contextmanager
+from typing import TYPE_CHECKING
+
 from sqlalchemy.orm import Session
 
-from menu.db.engine import engine
+from menu.db.engine import engine as default_engine
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    from sqlalchemy.engine import Engine
 
 
 @contextmanager
-def get_session(engine: Engine = engine) -> Generator[Session, Any, Any]:
-    session = Session(engine)
-    try:
+def get_session(engine: Engine | None = None) -> Iterator[Session]:
+    """Session bound to one transaction: commits on success, rolls back
+    if the body raises."""
+    with Session(engine or default_engine) as session, session.begin():
         yield session
-        session.commit()
-    finally:
-        session.close()
 
 
 @contextmanager
-def get_ro_session(engine: Engine = engine) -> Generator[Session]:
-    session = Session(engine)
-    try:
+def get_ro_session(engine: Engine | None = None) -> Iterator[Session]:
+    """Read-only session: nothing is committed."""
+    with Session(engine or default_engine) as session:
         yield session
-    finally:
-        session.close()

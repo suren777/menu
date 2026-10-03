@@ -43,15 +43,15 @@ Useful during development: `uv run pytest`, `uv run mypy menu tests`,
 
 ## Tooling (kept in lockstep with food-guru)
 
-- `uv` for package management, Python 3.11+
+- `uv` for package management, Python 3.14+
 - Pydantic v2, SQLAlchemy 2
 - `ruff` for linting, `black` + `isort` for formatting
 - strict `mypy`
 
 ## The old database
 
-`menu/db/database.db` (~14.7k cleaned BBC Good Food recipes) is kept on
-disk but gitignored. It's useful for checking whether a new extractor
+`database.db` at the project root (~14.7k cleaned BBC Good Food
+recipes) is kept on disk but gitignored. It's useful for checking whether a new extractor
 produces the same results as the old one. Nothing new should be built
 on top of its schema — port code to food-guru's models instead.
 

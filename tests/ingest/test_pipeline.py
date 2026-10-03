@@ -1,6 +1,5 @@
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from menu.ingest.errors import FetchError
 from menu.ingest.pipeline import (
@@ -10,8 +9,11 @@ from menu.ingest.pipeline import (
     process_sitemap,
     process_url,
 )
-from menu.ingest.registry import SiteConfig
+from menu.ingest.registry import SiteConfig, get_site
 from menu.ingest.sites.bbc_good_food import BBC_GOOD_FOOD
+
+if TYPE_CHECKING:
+    import pytest
 
 SITE = SiteConfig(
     name="test",
@@ -20,22 +22,21 @@ SITE = SiteConfig(
 )
 
 
-@patch("menu.ingest.pipeline.SitemapRepository")
 @patch("menu.ingest.pipeline.get_session")
-@patch("menu.ingest.pipeline.request_xml")
+@patch("menu.ingest.pipeline.url_exists")
 def test_import_sitemap(
-    mock_request_xml: MagicMock,
+    mock_url_exists: MagicMock,
     mock_get_session: MagicMock,
-    mock_sitemap_repo: MagicMock,
 ) -> None:
-    mock_request_xml.return_value = ["https://test.com/sitemap1"]
-    mock_sitemap_repo.url_exists.return_value = False
+    mock_url_exists.return_value = False
     mock_session = MagicMock()
     mock_get_session.return_value.__enter__.return_value = mock_session
 
-    import_sitemap(SITE)
+    with patch("menu.ingest.pipeline.request_xml") as mock_request_xml:
+        mock_request_xml.return_value = ["https://test.com/sitemap1"]
+        import_sitemap(SITE)
 
-    mock_sitemap_repo.url_exists.assert_called_once_with(
+    mock_url_exists.assert_called_once_with(
         "https://test.com/sitemap1", SITE.name, mock_session
     )
     mock_session.add.assert_called_once()
@@ -45,7 +46,7 @@ def test_import_sitemap(
 @patch("menu.ingest.pipeline.extract_recipe_data")
 @patch("menu.ingest.pipeline.fetch_recipe")
 def test_process_url_stores_recipe(
-    _mock_fetch: MagicMock,
+    mock_fetch: MagicMock,
     mock_extract: MagicMock,
     mock_add_recipe: MagicMock,
 ) -> None:
@@ -54,6 +55,7 @@ def test_process_url_stores_recipe(
     stored = process_url("https://test.com/recipes/cake", SITE)
 
     assert stored is True
+    mock_fetch.assert_called_once_with("https://test.com/recipes/cake", SITE)
     mock_add_recipe.assert_called_once()
     args = mock_add_recipe.call_args.args
     assert args[0] == "https://test.com/recipes/cake"
@@ -64,7 +66,7 @@ def test_process_url_stores_recipe(
 @patch("menu.ingest.pipeline.extract_recipe_data")
 @patch("menu.ingest.pipeline.fetch_recipe")
 def test_process_url_skips_non_recipes(
-    _mock_fetch: MagicMock,
+    mock_fetch: MagicMock,
     mock_extract: MagicMock,
     mock_add_recipe: MagicMock,
 ) -> None:
@@ -73,6 +75,7 @@ def test_process_url_skips_non_recipes(
     stored = process_url("https://test.com/about", SITE)
 
     assert stored is False
+    mock_fetch.assert_called_once_with("https://test.com/about", SITE)
     mock_add_recipe.assert_not_called()
 
 
@@ -117,15 +120,15 @@ def test_process_sitemap_skips_bad_urls(
 
 @patch("menu.ingest.pipeline.process_sitemap")
 @patch("menu.ingest.pipeline.get_session")
-@patch("menu.ingest.pipeline.SitemapRepository")
+@patch("menu.ingest.pipeline.get_unfinished")
 def test_crawl_sitemap(
-    mock_sitemap_repo: MagicMock,
+    mock_get_unfinished: MagicMock,
     mock_get_session: MagicMock,
     mock_process_sitemap: MagicMock,
 ) -> None:
     mock_session = MagicMock()
     mock_get_session.return_value.__enter__.return_value = mock_session
-    mock_sitemap_repo.get_unfinished.return_value = [
+    mock_get_unfinished.return_value = [
         MagicMock(url="https://test.com/sitemap1"),
         MagicMock(url="https://test.com/sitemap2"),
     ]
@@ -136,7 +139,7 @@ def test_crawl_sitemap(
 
     report = crawl_sitemap(SITE)
 
-    mock_sitemap_repo.get_unfinished.assert_called_once_with(mock_session, SITE.name)
+    mock_get_unfinished.assert_called_once_with(mock_session, SITE.name)
     assert mock_process_sitemap.call_count == 2
     mock_process_sitemap.assert_any_call("https://test.com/sitemap1", SITE)
     mock_process_sitemap.assert_any_call("https://test.com/sitemap2", SITE)
@@ -146,9 +149,9 @@ def test_crawl_sitemap(
 @patch("menu.ingest.pipeline.finalise_sitemap")
 @patch("menu.ingest.pipeline.process_sitemap")
 @patch("menu.ingest.pipeline.get_session")
-@patch("menu.ingest.pipeline.SitemapRepository")
+@patch("menu.ingest.pipeline.get_unfinished")
 def test_crawl_sitemap_skips_dead_sitemap(
-    mock_sitemap_repo: MagicMock,
+    mock_get_unfinished: MagicMock,
     mock_get_session: MagicMock,
     mock_process_sitemap: MagicMock,
     mock_finalise: MagicMock,
@@ -156,7 +159,7 @@ def test_crawl_sitemap_skips_dead_sitemap(
 ) -> None:
     mock_session = MagicMock()
     mock_get_session.return_value.__enter__.return_value = mock_session
-    mock_sitemap_repo.get_unfinished.return_value = [
+    mock_get_unfinished.return_value = [
         MagicMock(url="https://test.com/sitemap1"),
         MagicMock(url="https://test.com/sitemap2"),
         MagicMock(url="https://test.com/sitemap3"),
@@ -176,6 +179,4 @@ def test_crawl_sitemap_skips_dead_sitemap(
 
 
 def test_bbc_site_registered() -> None:
-    from menu.ingest.registry import get_site
-
     assert get_site("bbc_good_food").name == BBC_GOOD_FOOD.name

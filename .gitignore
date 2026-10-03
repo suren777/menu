@@ -163,5 +163,5 @@ cython_debug/
 .vscode
 .DS_Store
 .cache/
-menu/db/database.db
+/database.db
 GEMINI.md

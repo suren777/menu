@@ -1,67 +1,69 @@
-from unittest.mock import MagicMock, patch
+from typing import TYPE_CHECKING, Any
 
 from menu.db.database import RecipeUrls
-from menu.db.recipe_urls.repository import RecipeUrlsRepository
+from menu.db.recipe_urls import repository
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
+RECIPE_DATA: dict[str, Any] = {"key": "value"}
 
 
-def test_from_record() -> None:
+def test_to_model() -> None:
     record = RecipeUrls(
-        id=1, url="http://test.com", name="Test Recipe", data={"key": "value"}
+        id=1, url="http://test.com", name="Test Recipe", data=RECIPE_DATA
     )
-    model = RecipeUrlsRepository.from_record(record)
+
+    model = repository.to_model(record)
+
     assert model.id == 1
     assert model.url == "http://test.com"
     assert model.name == "Test Recipe"
-    assert model.data == {"key": "value"}
+    assert model.data == RECIPE_DATA
 
 
-def test_to_record() -> None:
-    model = MagicMock()
-    model.id = 1
-    model.url = "http://test.com"
-    model.name = "Test Recipe"
-    model.data = {"key": "value"}
-    record = RecipeUrlsRepository.to_record(model)
-    assert record.id == 1
-    assert record.url == "http://test.com"
-    assert record.name == "Test Recipe"
-    assert record.data == {"key": "value"}
+def test_find_by_url(session: Session) -> None:
+    session.add(RecipeUrls(url="http://test.com", name="Test Recipe", data=RECIPE_DATA))
+    session.flush()
+
+    model = repository.find_by_url("http://test.com", session)
+
+    assert model is not None
+    assert model.id == 1
+    assert model.name == "Test Recipe"
+    assert model.data == RECIPE_DATA
 
 
-def test_find_by_url() -> None:
-    session = MagicMock()
-    repo = RecipeUrlsRepository()
-    repo.find_by_url("http://test.com", session)
-    session.scalars.assert_called_once()
+def test_find_by_url_missing(session: Session) -> None:
+    assert repository.find_by_url("http://missing.com", session) is None
 
 
-def test_url_exists() -> None:
-    session = MagicMock()
-    RecipeUrlsRepository.url_exists("http://test.com", session)
-    session.query.assert_called_once()
+def test_get_all(session: Session) -> None:
+    repository.add_recipe("http://test.com", "Test Recipe", RECIPE_DATA, session)
+    repository.add_recipe("http://other.com", "Other Recipe", {}, session)
+
+    models = repository.get_all(session)
+
+    assert {model.url for model in models} == {"http://test.com", "http://other.com"}
 
 
-def test_get_all() -> None:
-    session = MagicMock()
-    RecipeUrlsRepository.get_all(session)
-    session.query.assert_called_once()
+def test_get_all_by_id(session: Session) -> None:
+    repository.add_recipe("http://test.com", "Test Recipe", RECIPE_DATA, session)
+    repository.add_recipe("http://other.com", "Other Recipe", {}, session)
+    first = repository.find_by_url("http://test.com", session)
+    assert first is not None
+
+    models = repository.get_all_by_id([first.id], session)
+
+    assert [model.url for model in models] == ["http://test.com"]
 
 
-def test_get_all_by_id() -> None:
-    session = MagicMock()
-    RecipeUrlsRepository.get_all_by_id([1, 2], session)
-    session.query.assert_called_once()
+def test_add_recipe_ignores_duplicates(session: Session) -> None:
+    """RecipeUrls.url is unique, so re-storing must not duplicate the row."""
+    repository.add_recipe("http://test.com", "Test Recipe", RECIPE_DATA, session)
+    repository.add_recipe("http://test.com", "Renamed Recipe", {}, session)
 
+    models = repository.get_all(session)
 
-def test_add_recipe() -> None:
-    session = MagicMock()
-    with patch.object(RecipeUrlsRepository, "url_exists", return_value=False):
-        RecipeUrlsRepository.add_recipe("http://test.com", "Test Recipe", {}, session)
-        session.add.assert_called_once()
-
-
-def test_add_recipe_exists() -> None:
-    session = MagicMock()
-    with patch.object(RecipeUrlsRepository, "url_exists", return_value=True):
-        RecipeUrlsRepository.add_recipe("http://test.com", "Test Recipe", {}, session)
-        session.add.assert_not_called()
+    assert len(models) == 1
+    assert models[0].name == "Test Recipe"

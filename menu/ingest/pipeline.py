@@ -17,7 +17,7 @@ from menu.db.connection import get_session
 from menu.db.database import Sitemap, initialise
 from menu.db.recipe_urls.actions import add_recipe
 from menu.db.sitemap.actions import finalise_sitemap
-from menu.db.sitemap.repository import SitemapRepository
+from menu.db.sitemap.repository import get_unfinished, url_exists
 from menu.ingest.discover import discover_urls, request_xml
 from menu.ingest.extract import extract_recipe_data
 from menu.ingest.fetch import fetch_recipe
@@ -46,7 +46,7 @@ def import_sitemap(site: SiteConfig, sitemap_url: str | None = None) -> None:
 
     with get_session() as session:
         for url in urls:
-            if not SitemapRepository.url_exists(url, site.name, session):
+            if not url_exists(url, site.name, session):
                 session.add(Sitemap(url=url, site=site.name))
 
 
@@ -83,11 +83,9 @@ def process_sitemap(url: str, site: SiteConfig) -> CrawlReport:
         try:
             if process_url(recipe_url, site):
                 report.stored += 1
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - a bad URL must not stop the crawl
             report.failed += 1
-            logger.warning(
-                "Skipping %s: %s: %s", recipe_url, type(exc).__name__, exc
-            )
+            logger.warning("Skipping %s: %s: %s", recipe_url, type(exc).__name__, exc)
     finalise_sitemap(url, site.name)
     return report
 
@@ -104,19 +102,15 @@ def crawl_sitemap(site: SiteConfig) -> CrawlReport:
     and finalised so the crawl moves on to the next one.
     """
     with get_session() as session:
-        urls = [
-            s.url for s in SitemapRepository.get_unfinished(session, site.name)
-        ]
+        urls = [s.url for s in get_unfinished(session, site.name)]
 
     report = CrawlReport()
     for url in urls:
         try:
             report.merge(process_sitemap(url, site))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             report.failed += 1
-            logger.warning(
-                "Skipping sitemap %s: %s: %s", url, type(exc).__name__, exc
-            )
+            logger.warning("Skipping sitemap %s: %s: %s", url, type(exc).__name__, exc)
             finalise_sitemap(url, site.name)
 
     print(

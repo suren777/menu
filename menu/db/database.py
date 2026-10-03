@@ -1,32 +1,45 @@
-from sqlalchemy import JSON, Boolean, Column, Integer, String
-from sqlalchemy.engine import Engine
-from sqlalchemy.orm import DeclarativeBase
+"""Models for the scratch SQLite database.
 
-from menu.db.engine import engine
+Typed 2.0-style columns (Mapped/mapped_column) so mypy sees the column
+types and call sites need no casts.
+"""
+
+from typing import TYPE_CHECKING, Any
+
+from sqlalchemy import JSON
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from menu.db.engine import engine as default_engine
+
+if TYPE_CHECKING:
+    from sqlalchemy.engine import Engine
 
 
 class Base(DeclarativeBase):
     pass
 
 
-class MyMixin:
-    id = Column(Integer, primary_key=True)
-
-
-class Sitemap(MyMixin, Base):
+class Sitemap(Base):
     __tablename__ = "sitemap"
-    url = Column(String, nullable=False, unique=True)
-    site = Column(String, nullable=False)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    url: Mapped[str] = mapped_column(nullable=False, unique=True)
+    site: Mapped[str] = mapped_column(nullable=False)
     """Registry name of the site this sitemap belongs to."""
-    completed = Column(Boolean, default=False)
+    completed: Mapped[bool] = mapped_column(default=False)
 
 
-class RecipeUrls(MyMixin, Base):
+class RecipeUrls(Base):
     __tablename__ = "recipe_urls"
-    url = Column(String, nullable=False)
-    name = Column(String, nullable=False)
-    data = Column(JSON, nullable=False)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    url: Mapped[str] = mapped_column(nullable=False, unique=True)
+    """Unique: recipes are deduplicated on their URL."""
+    name: Mapped[str] = mapped_column(nullable=False)
+    data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
 
 
-def initialise(db_engine: Engine = engine) -> None:
-    Base.metadata.create_all(db_engine)
+def initialise(db_engine: Engine | None = None) -> None:
+    """Create the tables. The default engine is resolved at call time so
+    tests can patch it."""
+    Base.metadata.create_all(db_engine or default_engine)

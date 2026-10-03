@@ -1,9 +1,14 @@
-from dataclasses import dataclass
+"""Sitemap queries: plain functions over a caller-supplied session."""
 
-from sqlalchemy import false, select
-from sqlalchemy.orm import Session
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+from sqlalchemy import exists, false, select
 
 from menu.db.database import Sitemap
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 
 @dataclass
@@ -14,49 +19,31 @@ class SitemapModel:
     completed: bool
 
 
-class SitemapRepository:
-    @staticmethod
-    def from_record(record: Sitemap) -> SitemapModel:
-        return SitemapModel(
-            id=int(record.id),
-            url=str(record.url),
-            site=str(record.site),
-            completed=bool(record.completed),
+def to_model(record: Sitemap) -> SitemapModel:
+    return SitemapModel(
+        id=record.id, url=record.url, site=record.site, completed=record.completed
+    )
+
+
+def find_by_url(url: str, session: Session) -> SitemapModel | None:
+    record = session.scalars(select(Sitemap).where(Sitemap.url == url)).first()
+    return to_model(record) if record is not None else None
+
+
+def url_exists(url: str, site: str, session: Session) -> bool:
+    return bool(
+        session.scalar(select(exists().where(Sitemap.url == url, Sitemap.site == site)))
+    )
+
+
+def get_all(session: Session) -> list[SitemapModel]:
+    return [to_model(record) for record in session.scalars(select(Sitemap))]
+
+
+def get_unfinished(session: Session, site: str) -> list[SitemapModel]:
+    return [
+        to_model(record)
+        for record in session.scalars(
+            select(Sitemap).where(Sitemap.completed == false(), Sitemap.site == site)
         )
-
-    @staticmethod
-    def to_record(entity: SitemapModel) -> Sitemap:
-        return Sitemap(
-            id=entity.id, url=entity.url, site=entity.site, completed=entity.completed
-        )
-
-    def find_by_url(self, url: str, session: Session) -> SitemapModel | None:
-        result = session.query(Sitemap).filter(Sitemap.url == url).first()
-        if result is not None:
-            return SitemapRepository.from_record(result)
-        return None
-
-    @staticmethod
-    def url_exists(url: str, site: str, session: Session) -> bool:
-        return bool(
-            session.query(
-                select(Sitemap)
-                .filter(Sitemap.url == url, Sitemap.site == site)
-                .exists()
-            ).scalar()
-        )
-
-    @staticmethod
-    def get_all(session: Session) -> list[SitemapModel]:
-        return [
-            SitemapRepository.from_record(record) for record in session.query(Sitemap)
-        ]
-
-    @staticmethod
-    def get_unfinished(session: Session, site: str) -> list[SitemapModel]:
-        return [
-            SitemapRepository.from_record(record)
-            for record in session.query(Sitemap).filter(
-                Sitemap.completed == false(), Sitemap.site == site
-            )
-        ]
+    ]

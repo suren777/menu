@@ -1,25 +1,37 @@
-"""Module with common fixtures for tests."""
+"""Common fixtures: a temporary file-backed SQLite database."""
 
-from collections.abc import Generator
+from typing import TYPE_CHECKING
 
-from pytest import fixture
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from menu.db.connection import get_session
+import menu.db.connection
 from menu.db.database import initialise
 
-test_engine = create_engine("sqlite:///:memory:", echo=True)
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from pathlib import Path
+
+    from sqlalchemy.engine import Engine
 
 
-def pytest_configure() -> None:
-    """Initialise the database for tests."""
-    initialise(test_engine)
+@pytest.fixture
+def db_engine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Engine]:
+    """A temp-file SQLite engine with the schema created.
+
+    It is also installed as the default engine, so actions that open
+    their own session (via get_session) operate on the same database.
+    """
+    engine = create_engine(f"sqlite:///{tmp_path}/test.db")
+    monkeypatch.setattr(menu.db.connection, "default_engine", engine)
+    initialise(engine)
+    yield engine
+    engine.dispose()
 
 
-@fixture
-def session() -> Generator[Session]:
-    """Fixture for database session."""
-    initialise(test_engine)
-    with get_session(test_engine) as db_session:
+@pytest.fixture
+def session(db_engine: Engine) -> Iterator[Session]:
+    """A session on the test database."""
+    with Session(db_engine) as db_session:
         yield db_session

@@ -1,20 +1,18 @@
-from unittest.mock import MagicMock, patch
+from typing import TYPE_CHECKING, Any
 
-from menu.db.recipe_urls.actions import add_recipe
+from menu.db.recipe_urls import actions, repository
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 
-@patch("menu.db.recipe_urls.actions.get_session")
-@patch("menu.db.recipe_urls.actions.RecipeUrlsRepository")
-def test_add_recipe(mock_repo: MagicMock, mock_get_session: MagicMock) -> None:
-    mock_session = MagicMock()
-    mock_get_session.return_value.__enter__.return_value = mock_session
-    recipe_data = {"key": "value"}
+def test_add_recipe(session: Session) -> None:
+    """add_recipe opens its own session on the (patched) default engine."""
+    recipe_data: dict[str, Any] = {"key": "value"}
 
-    add_recipe("http://test.com", "Test Recipe", recipe_data)
+    actions.add_recipe("http://test.com", "Test Recipe", recipe_data)
 
-    mock_repo.add_recipe.assert_called_once_with(
-        url="http://test.com",
-        name="Test Recipe",
-        recipe_data=recipe_data,
-        session=mock_session,
-    )
+    model = repository.find_by_url("http://test.com", session)
+    assert model is not None
+    assert model.name == "Test Recipe"
+    assert model.data == recipe_data

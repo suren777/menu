@@ -19,6 +19,7 @@ from menu.ingest.ingredients import (
 )
 from menu.ingest.sites.bbc_good_food import BBC_GOOD_FOOD
 from menu.ingest.sites.king_arthur import KING_ARTHUR
+from menu.ingest.sites.ottolenghi import OTTOLENGHI
 
 US = BBC_GOOD_FOOD.model_copy(update={"unit_system": "us"})
 
@@ -286,4 +287,26 @@ def test_king_arthur_cached_lines_parse(case: dict[str, object]) -> None:
     lines = cast("list[str]", case["lines"])
     for line in lines:
         parsed = parse_line(line, KING_ARTHUR)
+        assert parsed.raw_text == line
+
+
+OTTOLENGHI_FIXTURE = Path(__file__).parent / "fixtures" / "ottolenghi_lines.json"
+
+
+def _ottolenghi_cases() -> list[dict[str, object]]:
+    return cast(
+        "list[dict[str, object]]", json.loads(OTTOLENGHI_FIXTURE.read_text())
+    )
+
+
+@pytest.mark.parametrize(
+    "case", _ottolenghi_cases(), ids=lambda case: str(case["name"])
+)
+def test_ottolenghi_cached_lines_parse(case: dict[str, object]) -> None:
+    """The cached Ottolenghi pages' verbatim lines parse cleanly —
+    unicode fractions, 'plus extra' and parenthesised choices
+    included."""
+    lines = cast("list[str]", case["lines"])
+    for line in lines:
+        parsed = parse_line(line, OTTOLENGHI)
         assert parsed.raw_text == line

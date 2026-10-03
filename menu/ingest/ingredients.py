@@ -22,6 +22,7 @@ from ingredient_parser.dataclasses import (
     CompositeIngredientAmount,
     IngredientAmount,
     ParsedIngredient,
+    UnitSystem,
 )
 
 from menu.ingest.units import to_base
@@ -141,14 +142,25 @@ def line_needs_review(
 
 def _primary_amount(parsed: ParsedIngredient) -> IngredientAmount | None:
     """The first amount, counting only the first option of an
-    alternative ("2 tsp vanilla or 1 tsp essential oil")."""
+    alternative ("2 tsp vanilla or 1 tsp essential oil").
+
+    Dual-unit lines ("3 cups (360g) flour") parse to parallel
+    amounts, not composites: prefer the metric member there, so the
+    quantity doesn't depend on how a cup is interpreted.
+    """
+    options: list[IngredientAmount] = []
     for amount in parsed.amount:
         if isinstance(amount, CompositeIngredientAmount):
             if amount.amounts:
-                return amount.amounts[0]
+                options.append(amount.amounts[0])
             continue
-        return amount
-    return None
+        options.append(amount)
+    if not options:
+        return None
+    for amount in options:
+        if amount.unit_system == UnitSystem.METRIC:
+            return amount
+    return options[0]
 
 
 def parse_line(text: str, site: SiteConfig) -> ParsedLine:

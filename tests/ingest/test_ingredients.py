@@ -18,6 +18,7 @@ from menu.ingest.ingredients import (
     parse_line,
 )
 from menu.ingest.sites.bbc_good_food import BBC_GOOD_FOOD
+from menu.ingest.sites.king_arthur import KING_ARTHUR
 
 US = BBC_GOOD_FOOD.model_copy(update={"unit_system": "us"})
 
@@ -256,4 +257,33 @@ def test_real_cached_lines_parse(case: dict[str, object]) -> None:
     lines = cast("list[str]", case["lines"])
     for line in lines:
         parsed = parse_line(line, BBC_GOOD_FOOD)
+        assert parsed.raw_text == line
+
+
+def test_parse_line_prefers_metric_amount_in_dual_units() -> None:
+    """Dual-unit lines ("3 cups (360g) flour") parse to parallel
+    amounts, not composites; the gram figure doesn't depend on how a
+    cup is interpreted."""
+    parsed = parse_line(
+        "3 cups (360g) King Arthur Unbleached All-Purpose Flour", US
+    )
+    assert parsed.quantity == 360.0
+    assert parsed.base_unit == "g"
+    assert parsed.original_quantity_text == "360 g"
+
+
+KAB_FIXTURE = Path(__file__).parent / "fixtures" / "king_arthur_lines.json"
+
+
+def _kab_cases() -> list[dict[str, object]]:
+    return cast("list[dict[str, object]]", json.loads(KAB_FIXTURE.read_text()))
+
+
+@pytest.mark.parametrize("case", _kab_cases(), ids=lambda case: str(case["name"]))
+def test_king_arthur_cached_lines_parse(case: dict[str, object]) -> None:
+    """The cached King Arthur pages' verbatim lines parse cleanly, and
+    every dual-unit line prefers its metric amount."""
+    lines = cast("list[str]", case["lines"])
+    for line in lines:
+        parsed = parse_line(line, KING_ARTHUR)
         assert parsed.raw_text == line

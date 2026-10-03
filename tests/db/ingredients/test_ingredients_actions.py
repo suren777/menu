@@ -655,3 +655,18 @@ def test_aggregate_real_cached_cordon_bleu() -> None:
     assert flour.total == pytest.approx(100 + 2 * 17.7581640625 * 0.55)
     emmental = next(line for line in lines if line.label == "emmental")
     assert emmental.total == 150.0
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (6, 6),
+        ("Serves 12", 12),
+        ("Makes 1 loaf", 1),
+        # King Arthur yields are lists: the first integer wins.
+        (["12", "1 loaf"], 12),
+        (["60", "60 bites"], 60),
+    ],
+)
+def test_servings_from_yield(value: object, expected: int) -> None:
+    assert actions._servings_from_yield(value) == expected

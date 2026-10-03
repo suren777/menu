@@ -1,7 +1,11 @@
 """Site-specific configurations for the ingest pipeline."""
 
-from menu.ingest.registry import SiteConfig
+from typing import TYPE_CHECKING
+
 from menu.ingest.sites.bbc_good_food import BBC_GOOD_FOOD
+
+if TYPE_CHECKING:
+    from menu.ingest.registry import SiteConfig
 
 REGISTRY: dict[str, SiteConfig] = {
     BBC_GOOD_FOOD.name: BBC_GOOD_FOOD,

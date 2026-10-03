@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class SiteConfig(BaseModel):
@@ -12,7 +12,7 @@ class SiteConfig(BaseModel):
     menu.ingest.sites; the ingest pipeline itself stays generic.
     """
 
-    model_config = {"frozen": True}
+    model_config = ConfigDict(frozen=True, use_attribute_docstrings=True)
 
     name: str
     base_url: str

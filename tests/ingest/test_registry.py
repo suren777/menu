@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from menu.ingest.registry import SiteConfig, get_site
 from menu.ingest.sites.bbc_good_food import BBC_GOOD_FOOD
 
@@ -7,19 +10,12 @@ def test_bbc_good_food_is_registered() -> None:
 
 
 def test_unknown_site_raises() -> None:
-    try:
+    with pytest.raises(KeyError, match="does_not_exist"):
         get_site("does_not_exist")
-    except KeyError as err:
-        assert "does_not_exist" in str(err)
-    else:
-        raise AssertionError("expected KeyError")
 
 
 def test_site_config_is_frozen() -> None:
-    import pytest
-    from pydantic import ValidationError
-
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="frozen"):
         BBC_GOOD_FOOD.name = "other"
 
 

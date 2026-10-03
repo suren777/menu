@@ -7,7 +7,7 @@ Agent-facing conventions for the menu repo. Facts only — verify against the co
 Menu is a recipe **sourcing lab**: discovering recipe URLs, fetching pages politely, and extracting recipe data. It has no bot, no API and no deployment. Code that works here graduates to
 [food-guru](https://github.com/surenislyaev/food-guru)'s `backend/app/ingest/` with minimal rework — so module layout, naming, tooling and code style deliberately mirror food-guru. When in doubt about how something should be implemented here, check how food-guru's ingest does it.
 
-The boundary with food-guru: menu discovers, fetches and extracts **raw** JSON-LD; parsing/structuring recipes into a real data model is food-guru's job. The SQLite database in `menu/db/` is scratch storage for experiments, never the source of truth — don't build anything on its schema.
+The boundary with food-guru: menu discovers, fetches and extracts **raw** JSON-LD; parsing/structuring recipes into a real data model is food-guru's job. The ingredient-line parsing below is the one deliberate exception: a menu prototype that moves to food-guru with the ingest code. The SQLite database in `menu/db/` is scratch storage for experiments, never the source of truth — don't build anything on its schema (the ingredient tables included).
 
 ## Python 3.14
 
@@ -27,7 +27,14 @@ uv run ruff check .        # lint (rule set matches food-guru's)
 - **Politeness delay** — `fetch.py` spaces requests to a site's host by the site's `politeness_delay`. The delay lives in process memory (`_politeness`), so the crawl must stay **single-process**: parallel workers would each hammer the site at full speed. Same reason food-guru's worker is single-process.
 - **Disk cache** — fetched pages are cached under `.cache/` (gitignored, safe to delete) and reused on re-runs. A failed fetch is never cached, so a transient error can't poison later runs.
 - **Test against saved pages** — don't write tests that hit live sites. Save the page HTML and test the parsing against the saved fixture.
-- **Bad URLs don't stop the crawl** — `pipeline.py` catches errors per URL (and per sub-sitemap), logs them, counts them and moves on; the sitemap is finalised either way. Mirrors food-guru's worker, which counts a failure and moves on.
+- **Bad URLs don't stop the crawl** — `pipeline.py` catches errors per URL (and per sub-sitemap), logs them, counts them and moves on; the sitemap is finalised either way. Mirrors food-guru's worker, which counts a failure and moves on. The same rule holds per ingredient line: `store_recipe_ingredients` logs and skips a line that fails to parse.
+
+## Ingredients prototype
+
+Ingredient lines are parsed and normalised in menu: `menu/ingest/ingredients.py` wraps `ingredient-parser-nlp` behind a `ParsedLine` dataclass, and `menu/ingest/units.py` converts quantities to base units (mass → g, volume → ml, count → piece, plus named count units such as slice) with pint — never hand-written factors. Lines are stored in `recipe_ingredient` with canonical `ingredient` / `ingredient_alias` rows; `recipe_urls` gained `site` and `servings`. The pipeline hooks this after `add_recipe`, and `uv run menu-ingest bbc_good_food --reparse` re-parses stored recipes without re-fetching. Like everything here it lives on the scratch DB and graduates to food-guru with the rest of the ingest.
+
+- **Canonicalisation is alias-driven** — the parser keeps modifiers fused into the name ("warm milk"), so `ingredient_alias` maps variants to canonical `ingredient` rows ("milk"); aliases are hand-seeded where needed.
+- **Cross-dimension aggregation is opt-in** — volume→mass needs `ingredient.density_g_per_ml` and count→mass needs `unit_weight_g`, both hand-seeded (USDA FoodData Central has no usable density). Without them, lines stay separate ("250 ml + 100 g").
 
 ## Adding a site
 

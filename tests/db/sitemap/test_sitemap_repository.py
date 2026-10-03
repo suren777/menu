@@ -5,10 +5,11 @@ from menu.db.sitemap.repository import SitemapRepository
 
 
 def test_from_record() -> None:
-    record = Sitemap(id=1, url="http://test.com", completed=False)
+    record = Sitemap(id=1, url="http://test.com", site="test", completed=False)
     model = SitemapRepository.from_record(record)
     assert model.id == 1
     assert model.url == "http://test.com"
+    assert model.site == "test"
     assert not model.completed
 
 
@@ -16,10 +17,12 @@ def test_to_record() -> None:
     model = MagicMock()
     model.id = 1
     model.url = "http://test.com"
+    model.site = "test"
     model.completed = False
     record = SitemapRepository.to_record(model)
     assert record.id == 1
     assert record.url == "http://test.com"
+    assert record.site == "test"
     assert not record.completed
 
 
@@ -32,7 +35,7 @@ def test_find_by_url() -> None:
 
 def test_url_exists() -> None:
     session = MagicMock()
-    SitemapRepository.url_exists("http://test.com", session)
+    SitemapRepository.url_exists("http://test.com", "test", session)
     session.query.assert_called_once()
 
 
@@ -44,5 +47,5 @@ def test_get_all() -> None:
 
 def test_get_unfinished() -> None:
     session = MagicMock()
-    SitemapRepository.get_unfinished(session)
+    SitemapRepository.get_unfinished(session, "test")
     session.query.assert_called_once()

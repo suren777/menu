@@ -32,22 +32,19 @@ def test_import_sitemap(
     import_sitemap(SITE)
 
     mock_sitemap_repo.url_exists.assert_called_once_with(
-        "https://test.com/sitemap1", mock_session
+        "https://test.com/sitemap1", SITE.name, mock_session
     )
     mock_session.add.assert_called_once()
 
 
 @patch("menu.ingest.pipeline.add_recipe")
 @patch("menu.ingest.pipeline.extract_recipe_data")
-@patch("menu.ingest.pipeline.looks_like_recipe")
 @patch("menu.ingest.pipeline.fetch_recipe")
 def test_process_url_stores_recipe(
-    mock_fetch: MagicMock,
-    mock_looks: MagicMock,
+    _mock_fetch: MagicMock,
     mock_extract: MagicMock,
     mock_add_recipe: MagicMock,
 ) -> None:
-    mock_looks.return_value = True
     mock_extract.return_value = {"@type": "Recipe", "name": "Cake"}
 
     process_url("https://test.com/recipes/cake", SITE)
@@ -60,15 +57,13 @@ def test_process_url_stores_recipe(
 
 @patch("menu.ingest.pipeline.add_recipe")
 @patch("menu.ingest.pipeline.extract_recipe_data")
-@patch("menu.ingest.pipeline.looks_like_recipe")
 @patch("menu.ingest.pipeline.fetch_recipe")
 def test_process_url_skips_non_recipes(
-    mock_fetch: MagicMock,
-    mock_looks: MagicMock,
+    _mock_fetch: MagicMock,
     mock_extract: MagicMock,
     mock_add_recipe: MagicMock,
 ) -> None:
-    mock_looks.return_value = False
+    mock_extract.return_value = None
 
     process_url("https://test.com/about", SITE)
 
@@ -88,16 +83,16 @@ def test_process_sitemap(
     process_sitemap("https://test.com/sitemap1", SITE)
 
     assert mock_process_url.call_count == 2
-    mock_finalise.assert_called_once_with("https://test.com/sitemap1")
+    mock_finalise.assert_called_once_with("https://test.com/sitemap1", SITE.name)
 
 
-@patch("menu.ingest.pipeline.Pool")
+@patch("menu.ingest.pipeline.process_sitemap")
 @patch("menu.ingest.pipeline.get_session")
 @patch("menu.ingest.pipeline.SitemapRepository")
 def test_crawl_sitemap(
     mock_sitemap_repo: MagicMock,
     mock_get_session: MagicMock,
-    mock_pool: MagicMock,
+    mock_process_sitemap: MagicMock,
 ) -> None:
     mock_session = MagicMock()
     mock_get_session.return_value.__enter__.return_value = mock_session
@@ -108,15 +103,10 @@ def test_crawl_sitemap(
 
     crawl_sitemap(SITE)
 
-    mock_sitemap_repo.get_unfinished.assert_called_once_with(mock_session)
-    pool_instance = mock_pool.return_value.__enter__.return_value
-    pool_instance.starmap.assert_called_once_with(
-        process_sitemap,
-        [
-            ("https://test.com/sitemap1", SITE),
-            ("https://test.com/sitemap2", SITE),
-        ],
-    )
+    mock_sitemap_repo.get_unfinished.assert_called_once_with(mock_session, SITE.name)
+    assert mock_process_sitemap.call_count == 2
+    mock_process_sitemap.assert_any_call("https://test.com/sitemap1", SITE)
+    mock_process_sitemap.assert_any_call("https://test.com/sitemap2", SITE)
 
 
 def test_bbc_site_registered() -> None:

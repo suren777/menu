@@ -10,7 +10,6 @@ backend/app/ingest/ with minimal rework.
 """
 
 from argparse import ArgumentParser
-from multiprocessing import Pool
 
 from menu.db.connection import get_session
 from menu.db.database import Sitemap, initialise
@@ -18,7 +17,7 @@ from menu.db.recipe_urls.actions import add_recipe
 from menu.db.sitemap.actions import finalise_sitemap
 from menu.db.sitemap.repository import SitemapRepository
 from menu.ingest.discover import discover_urls, request_xml
-from menu.ingest.extract import extract_recipe_data, looks_like_recipe
+from menu.ingest.extract import extract_recipe_data
 from menu.ingest.fetch import fetch_recipe
 from menu.ingest.registry import SiteConfig, get_site
 
@@ -29,16 +28,14 @@ def import_sitemap(site: SiteConfig, sitemap_url: str | None = None) -> None:
 
     with get_session() as session:
         for url in urls:
-            if not SitemapRepository.url_exists(url, session):
-                session.add(Sitemap(url=url))
+            if not SitemapRepository.url_exists(url, site.name, session):
+                session.add(Sitemap(url=url, site=site.name))
 
 
 def process_url(url: str, site: SiteConfig) -> None:
-    """Fetch one recipe URL (cached, polite), extract its JSON-LD and
-    store the raw data in the scratch database."""
+    """Fetch one recipe URL (cached, polite) and store its raw JSON-LD
+    in the scratch database."""
     soup = fetch_recipe(url, site)
-    if not looks_like_recipe(site, soup):
-        return
 
     recipe_data = extract_recipe_data(site, soup)
     if recipe_data is None:
@@ -51,16 +48,24 @@ def process_url(url: str, site: SiteConfig) -> None:
 def process_sitemap(url: str, site: SiteConfig) -> None:
     for recipe_url in discover_urls(site, url):
         process_url(recipe_url, site)
-    finalise_sitemap(url)
+    finalise_sitemap(url, site.name)
 
 
-def crawl_sitemap(site: SiteConfig, processes: int = 4) -> None:
-    """Crawl every unfinished sitemap for a site."""
+def crawl_sitemap(site: SiteConfig) -> None:
+    """Crawl every unfinished sitemap for a site.
+
+    Single process on purpose: the per-host politeness delay lives in
+    process memory, so parallel workers would each hammer the site at
+    full speed (food-guru's worker is single-process for the same
+    reason).
+    """
     with get_session() as session:
-        urls = [s.url for s in SitemapRepository.get_unfinished(session)]
+        urls = [
+            s.url for s in SitemapRepository.get_unfinished(session, site.name)
+        ]
 
-    with Pool(processes=processes) as pool:
-        pool.starmap(process_sitemap, [(url, site) for url in urls])
+    for url in urls:
+        process_sitemap(url, site)
 
 
 def main() -> None:

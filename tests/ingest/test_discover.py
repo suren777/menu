@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
 
-from menu.ingest.discover import FetchError, discover_urls, request_xml
+from menu.ingest.discover import discover_urls, request_xml
+from menu.ingest.errors import FetchError
 from menu.ingest.registry import SiteConfig
 from menu.ingest.sites.bbc_good_food import BBC_GOOD_FOOD
 
@@ -19,6 +20,24 @@ def test_request_xml_ok(mock_get: MagicMock) -> None:
     mock_get.return_value = mock_response
 
     assert request_xml("https://test.com/sitemap.xml") == ["http://test.com"]
+
+
+@patch("menu.ingest.discover.requests.get")
+def test_request_xml_sitemap_index(mock_get: MagicMock) -> None:
+    mock_response = MagicMock()
+    mock_response.ok = True
+    mock_response.content = (
+        b'<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        b"<sitemap><loc>https://test.com/recipes-1.xml</loc></sitemap>"
+        b"<sitemap><loc>https://test.com/recipes-2.xml</loc></sitemap>"
+        b"</sitemapindex>"
+    )
+    mock_get.return_value = mock_response
+
+    assert request_xml("https://test.com/sitemap.xml") == [
+        "https://test.com/recipes-1.xml",
+        "https://test.com/recipes-2.xml",
+    ]
 
 
 @patch("menu.ingest.discover.requests.get")

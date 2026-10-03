@@ -10,6 +10,7 @@ from menu.db.database import Sitemap
 class SitemapModel:
     id: int
     url: str
+    site: str
     completed: bool
 
 
@@ -17,12 +18,17 @@ class SitemapRepository:
     @staticmethod
     def from_record(record: Sitemap) -> SitemapModel:
         return SitemapModel(
-            id=int(record.id), url=str(record.url), completed=bool(record.completed)
+            id=int(record.id),
+            url=str(record.url),
+            site=str(record.site),
+            completed=bool(record.completed),
         )
 
     @staticmethod
     def to_record(entity: SitemapModel) -> Sitemap:
-        return Sitemap(id=entity.id, url=entity.url, completed=entity.completed)
+        return Sitemap(
+            id=entity.id, url=entity.url, site=entity.site, completed=entity.completed
+        )
 
     def find_by_url(self, url: str, session: Session) -> SitemapModel | None:
         result = session.query(Sitemap).filter(Sitemap.url == url).first()
@@ -31,9 +37,13 @@ class SitemapRepository:
         return None
 
     @staticmethod
-    def url_exists(url: str, session: Session) -> bool:
+    def url_exists(url: str, site: str, session: Session) -> bool:
         return bool(
-            session.query(select(Sitemap).filter(Sitemap.url == url).exists()).scalar()
+            session.query(
+                select(Sitemap)
+                .filter(Sitemap.url == url, Sitemap.site == site)
+                .exists()
+            ).scalar()
         )
 
     @staticmethod
@@ -43,8 +53,10 @@ class SitemapRepository:
         ]
 
     @staticmethod
-    def get_unfinished(session: Session) -> list[SitemapModel]:
+    def get_unfinished(session: Session, site: str) -> list[SitemapModel]:
         return [
             SitemapRepository.from_record(record)
-            for record in session.query(Sitemap).filter(Sitemap.completed == false())
+            for record in session.query(Sitemap).filter(
+                Sitemap.completed == false(), Sitemap.site == site
+            )
         ]

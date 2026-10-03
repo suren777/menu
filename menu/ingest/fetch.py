@@ -11,7 +11,7 @@ from pathlib import Path
 import requests
 from bs4 import BeautifulSoup
 
-from menu.ingest.discover import FetchError
+from menu.ingest.errors import FetchError
 from menu.ingest.registry import SiteConfig
 
 DEFAULT_CACHE_DIR = Path(".cache")

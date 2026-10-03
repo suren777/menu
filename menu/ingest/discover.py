@@ -6,26 +6,27 @@ from xml.etree import ElementTree
 
 import requests
 
+from menu.ingest.errors import FetchError
 from menu.ingest.registry import SiteConfig
 
 SITEMAP_NAMESPACE = {"sitemap": "http://www.sitemaps.org/schemas/sitemap/0.9"}
 
 
-class FetchError(Exception):
-    """Raised when a site cannot be fetched."""
-
-
 def request_xml(url: str) -> list[str]:
-    """Fetch a sitemap and return the URLs listed in it."""
+    """Fetch a sitemap and return the URLs listed in it.
+
+    Handles both plain urlsets (<url><loc>) and sitemap indexes
+    (<sitemap><loc>), matching food-guru's _urls_from_xml.
+    """
     response = requests.get(url, timeout=10)
     if not response.ok:
         raise FetchError(f"Can't fetch {url!r}")
 
     tree = ElementTree.fromstring(response.content)
     return [
-        loc.text
-        for loc in tree.findall("sitemap:url/sitemap:loc", namespaces=SITEMAP_NAMESPACE)
-        if loc.text is not None
+        child.text
+        for child in tree.iter()
+        if child.tag.endswith("loc") and child.text is not None
     ]
 
 

@@ -15,7 +15,9 @@ class MyMixin:
 
 class Sitemap(MyMixin, Base):
     __tablename__ = "sitemap"
-    url = Column(String, nullable=False)
+    url = Column(String, nullable=False, unique=True)
+    site = Column(String, nullable=False)
+    """Registry name of the site this sitemap belongs to."""
     completed = Column(Boolean, default=False)
 
 

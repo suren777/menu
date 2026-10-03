@@ -10,7 +10,7 @@ def test_finalise_sitemap(mock_get_session: MagicMock) -> None:
     mock_session.query.return_value = mock_query
     mock_get_session.return_value.__enter__.return_value = mock_session
 
-    finalise_sitemap("http://test.com")
+    finalise_sitemap("http://test.com", "test")
 
     mock_session.query.assert_called_once()
     mock_query.filter.assert_called_once()

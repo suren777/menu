@@ -13,11 +13,15 @@ import logging
 from argparse import ArgumentParser
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from menu.db.connection import get_session
 from menu.db.database import RecipeUrls, Sitemap, initialise
-from menu.db.ingredients.actions import store_recipe_ingredients
+from menu.db.ingredients.actions import (
+    prune_orphan_ingredients,
+    store_recipe_ingredients,
+)
+from menu.db.ingredients.seed import seed_ingredient_data
 from menu.db.recipe_urls.actions import add_recipe
 from menu.db.sitemap.actions import finalise_sitemap
 from menu.db.sitemap.repository import get_unfinished, url_exists
@@ -127,15 +131,24 @@ def crawl_sitemap(site: SiteConfig) -> CrawlReport:
 def reparse_site(site: SiteConfig) -> None:
     """Backfill: re-parse stored ingredient lines without re-fetching.
 
-    Reads each stored recipe's raw JSON-LD again and runs it through
-    the parser. Per-recipe failures are counted and logged, like a
-    crawl's bad URLs; store_recipe_ingredients replaces a recipe's
-    previous rows, so reparsing is idempotent.
+    Only the site's recipes are reparsed — plus rows stamped before
+    sites existed (site IS NULL), which get stamped here. Reads each
+    stored recipe's raw JSON-LD again and runs it through the parser.
+    Per-recipe failures are counted and logged, like a crawl's bad
+    URLs; store_recipe_ingredients replaces a recipe's previous rows,
+    so reparsing is idempotent. Afterwards ingredients no line and no
+    alias points at are pruned: the reparse re-resolves lines through
+    the seeded aliases, stranding the junk canonical ingredients the
+    first pass created.
     """
     with get_session() as session:
         recipes = [
             (record.url, dict(record.data))
-            for record in session.scalars(select(RecipeUrls))
+            for record in session.scalars(
+                select(RecipeUrls).where(
+                    or_(RecipeUrls.site == site.name, RecipeUrls.site.is_(None))
+                )
+            )
         ]
 
     stored = 0
@@ -149,7 +162,9 @@ def reparse_site(site: SiteConfig) -> None:
             logger.warning(
                 "Reparse failed for %s: %s: %s", url, type(exc).__name__, exc
             )
-    print(f"Reparsed: {stored} recipes, {failed} failed")
+    with get_session() as session:
+        pruned = prune_orphan_ingredients(session)
+    print(f"Reparsed: {stored} recipes, {failed} failed, {pruned} orphans pruned")
 
 
 def main() -> None:
@@ -165,6 +180,10 @@ def main() -> None:
 
     site = get_site(args.site)
     initialise()
+    # Seed before parsing or reparsing: the aliases decide canonical
+    # resolution, so a fresh database must not parse unseeded.
+    with get_session() as session:
+        seed_ingredient_data(session)
     if args.reparse:
         reparse_site(site)
         return

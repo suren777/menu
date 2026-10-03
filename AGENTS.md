@@ -33,7 +33,12 @@ uv run ruff check .        # lint (rule set matches food-guru's)
 
 Ingredient lines are parsed and normalised in menu: `menu/ingest/ingredients.py` wraps `ingredient-parser-nlp` behind a `ParsedLine` dataclass, and `menu/ingest/units.py` converts quantities to base units (mass → g, volume → ml, count → piece, plus named count units such as slice) with pint — never hand-written factors. Lines are stored in `recipe_ingredient` with canonical `ingredient` / `ingredient_alias` rows; `recipe_urls` gained `site` and `servings`. The pipeline hooks this after `add_recipe`, and `uv run menu-ingest bbc_good_food --reparse` re-parses stored recipes without re-fetching. Like everything here it lives on the scratch DB and graduates to food-guru with the rest of the ingest.
 
-- **Canonicalisation is alias-driven** — the parser keeps modifiers fused into the name ("warm milk"), so `ingredient_alias` maps variants to canonical `ingredient` rows ("milk"); aliases are hand-seeded where needed.
+- **Canonicalisation is alias-driven** — the parser keeps modifiers fused into the name ("warm milk"), so `ingredient_alias` maps variants to canonical `ingredient` rows ("milk"); aliases are hand-seeded where needed. Singularisation uses inflect (`canonical_name`), with leave-alone rules for words ending in "us"/"ss" — the old strip-a-trailing-s rule produced junk like "asparagu".
+- **Seeding runs at startup** — `main()` seeds the ingredient data right after `initialise()`, before crawling or reparsing, so a fresh DB never parses unseeded. `--reparse` afterwards prunes ingredients no line and no inbound alias points at (`prune_orphan_ingredients`).
+- **The review queue is real** — names the parser likely mangled (`name_needs_review`: ≥5 words, or containing " and "/" or ") stay unresolved (`ingredient_id` NULL) instead of becoming canonical ingredients. A seeded alias wins over the heuristic, and `seed.LINE_OVERRIDES` fixes lines the parser merges outright ("70g milk or dark chocolate" parses as name "milk"; override → milk chocolate).
+- **Variants are recorded** — a line stores which alias variant it resolved through; `aggregate(..., keep_variants=True)` splits the list back out ("milk (whole)"). Range quantities buy the upper end ("2-3 onions" → 3).
+- **Tests use the real lines** — `tests/ingest/fixtures/bbc_lines.json` holds the ingredient lines taken verbatim from the cached pages (double spaces, no commas); the parse edge-case table is hand-written examples.
+
 - **Cross-dimension aggregation is opt-in** — volume→mass needs `ingredient.density_g_per_ml` and count→mass needs `unit_weight_g`, both hand-seeded (USDA FoodData Central has no usable density). Without them, lines stay separate ("250 ml + 100 g").
 
 ## Adding a site

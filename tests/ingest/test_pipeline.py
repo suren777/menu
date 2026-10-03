@@ -1,6 +1,9 @@
-from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from menu.db.connection import get_session
+from menu.db.database import RecipeUrls
 from menu.ingest.errors import FetchError
 from menu.ingest.pipeline import (
     CrawlReport,
@@ -8,12 +11,10 @@ from menu.ingest.pipeline import (
     import_sitemap,
     process_sitemap,
     process_url,
+    reparse_site,
 )
 from menu.ingest.registry import SiteConfig, get_site
 from menu.ingest.sites.bbc_good_food import BBC_GOOD_FOOD
-
-if TYPE_CHECKING:
-    import pytest
 
 SITE = SiteConfig(
     name="test",
@@ -185,3 +186,37 @@ def test_crawl_sitemap_skips_dead_sitemap(
 
 def test_bbc_site_registered() -> None:
     assert get_site("bbc_good_food").name == BBC_GOOD_FOOD.name
+
+
+@pytest.mark.usefixtures("db_engine")
+def test_reparse_site_only_touches_its_recipes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reparse filters on the site (plus unstamped rows): other
+    sites' recipes keep their own parser once a second site lands."""
+    with get_session() as session:
+        session.add(
+            RecipeUrls(
+                url="https://x/bbc",
+                name="X",
+                data={"recipeIngredient": ["25g butter"]},
+                site="bbc_good_food",
+            )
+        )
+        session.add(
+            RecipeUrls(url="https://x/other", name="X", data={}, site="other_site")
+        )
+        session.add(RecipeUrls(url="https://x/unstamped", name="X", data={}))
+
+    called: list[str] = []
+
+    def fake_store(
+        url: str, _recipe_data: dict[str, object], _site: SiteConfig
+    ) -> None:
+        called.append(url)
+
+    monkeypatch.setattr("menu.ingest.pipeline.store_recipe_ingredients", fake_store)
+
+    reparse_site(BBC_GOOD_FOOD)
+
+    assert sorted(called) == ["https://x/bbc", "https://x/unstamped"]

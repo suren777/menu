@@ -379,14 +379,19 @@ def test_seeded_alias_rescues_mangled_name() -> None:
 
 @pytest.mark.usefixtures("db_engine")
 def test_line_override_fixes_wrong_merge() -> None:
-    """"70g milk or dark chocolate roughly chopped" parses as name
-    "milk" with confidence 1.0 — no threshold catches it, only the
-    curated line override does."""
+    """"70g  milk or dark chocolate roughly chopped (optional)" — the
+    real cached line, double space and all — parses as name "milk"
+    with confidence 1.0. No threshold catches it, only the curated
+    line override does, and the override matches the squashed line."""
     recipe_id = add_recipe("https://x/babka")
 
     actions.store_recipe_ingredients(
         "https://x/babka",
-        {"recipeIngredient": ["70g milk or dark chocolate roughly chopped"]},
+        {
+            "recipeIngredient": [
+                "70g  milk or dark chocolate roughly chopped (optional)"
+            ]
+        },
         BBC_GOOD_FOOD,
     )
 

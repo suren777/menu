@@ -45,12 +45,14 @@ ALIASES: list[tuple[str, str, str | None]] = [
 ]
 
 # Whitespace-normalised raw line -> canonical ingredient, for lines the
-# parser merges wrongly. "70g milk or dark chocolate roughly chopped"
-# parses as name "milk" with confidence 1.0 — no confidence threshold
-# catches it, only curated data does. Checked before the parser's name
-# is trusted.
+# parser merges wrongly. The real cached line "70g  milk or dark
+# chocolate roughly chopped (optional)" (double space) parses as name
+# "milk" with confidence 1.0 — no confidence threshold catches it, only
+# curated data does. Lookup squashes the line's whitespace, so keys
+# hold the single-spaced form. Checked before the parser's name is
+# trusted.
 LINE_OVERRIDES: dict[str, str] = {
-    "70g milk or dark chocolate roughly chopped": "milk chocolate",
+    "70g milk or dark chocolate roughly chopped (optional)": "milk chocolate",
 }
 
 # g/ml, cooking-standard measured values

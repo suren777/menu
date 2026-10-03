@@ -42,6 +42,7 @@ def test_import_sitemap(
     mock_session.add.assert_called_once()
 
 
+@patch("menu.ingest.pipeline.store_recipe_ingredients")
 @patch("menu.ingest.pipeline.add_recipe")
 @patch("menu.ingest.pipeline.extract_recipe_data")
 @patch("menu.ingest.pipeline.fetch_recipe")
@@ -49,6 +50,7 @@ def test_process_url_stores_recipe(
     mock_fetch: MagicMock,
     mock_extract: MagicMock,
     mock_add_recipe: MagicMock,
+    mock_store_ingredients: MagicMock,
 ) -> None:
     mock_extract.return_value = {"@type": "Recipe", "name": "Cake"}
 
@@ -60,6 +62,9 @@ def test_process_url_stores_recipe(
     args = mock_add_recipe.call_args.args
     assert args[0] == "https://test.com/recipes/cake"
     assert args[2] == {"@type": "Recipe", "name": "Cake"}
+    mock_store_ingredients.assert_called_once_with(
+        "https://test.com/recipes/cake", {"@type": "Recipe", "name": "Cake"}, SITE
+    )
 
 
 @patch("menu.ingest.pipeline.add_recipe")

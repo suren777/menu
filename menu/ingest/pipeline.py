@@ -13,8 +13,11 @@ import logging
 from argparse import ArgumentParser
 from dataclasses import dataclass
 
+from sqlalchemy import select
+
 from menu.db.connection import get_session
-from menu.db.database import Sitemap, initialise
+from menu.db.database import RecipeUrls, Sitemap, initialise
+from menu.db.ingredients.actions import store_recipe_ingredients
 from menu.db.recipe_urls.actions import add_recipe
 from menu.db.sitemap.actions import finalise_sitemap
 from menu.db.sitemap.repository import get_unfinished, url_exists
@@ -52,7 +55,7 @@ def import_sitemap(site: SiteConfig, sitemap_url: str | None = None) -> None:
 
 def process_url(url: str, site: SiteConfig) -> bool:
     """Fetch one recipe URL (cached, polite) and store its raw JSON-LD
-    in the scratch database.
+    plus its parsed ingredient lines in the scratch database.
 
     Returns True if a recipe was stored, False if the page yielded no
     recipe data.
@@ -65,6 +68,7 @@ def process_url(url: str, site: SiteConfig) -> bool:
 
     name = soup.title.text if soup.title else ""
     add_recipe(url, name, recipe_data)
+    store_recipe_ingredients(url, recipe_data, site)
     return True
 
 
@@ -120,14 +124,50 @@ def crawl_sitemap(site: SiteConfig) -> CrawlReport:
     return report
 
 
+def reparse_site(site: SiteConfig) -> None:
+    """Backfill: re-parse stored ingredient lines without re-fetching.
+
+    Reads each stored recipe's raw JSON-LD again and runs it through
+    the parser. Per-recipe failures are counted and logged, like a
+    crawl's bad URLs; store_recipe_ingredients replaces a recipe's
+    previous rows, so reparsing is idempotent.
+    """
+    with get_session() as session:
+        recipes = [
+            (record.url, dict(record.data))
+            for record in session.scalars(select(RecipeUrls))
+        ]
+
+    stored = 0
+    failed = 0
+    for url, recipe_data in recipes:
+        try:
+            store_recipe_ingredients(url, recipe_data, site)
+            stored += 1
+        except Exception as exc:  # noqa: BLE001 - a bad recipe must not stop the backfill
+            failed += 1
+            logger.warning(
+                "Reparse failed for %s: %s: %s", url, type(exc).__name__, exc
+            )
+    print(f"Reparsed: {stored} recipes, {failed} failed")
+
+
 def main() -> None:
     logging.basicConfig()
     parser = ArgumentParser(description="Ingest recipes for a registered site.")
     parser.add_argument("site", help="site name from the registry")
+    parser.add_argument(
+        "--reparse",
+        action="store_true",
+        help="re-parse stored ingredient lines without re-fetching",
+    )
     args = parser.parse_args()
 
     site = get_site(args.site)
     initialise()
+    if args.reparse:
+        reparse_site(site)
+        return
     import_sitemap(site)
     crawl_sitemap(site)
 

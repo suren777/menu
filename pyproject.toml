@@ -7,7 +7,6 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "beautifulsoup4>=4.12",
-    "more-itertools>=10.1",
     "pydantic>=2.5",
     "requests>=2.31",
     "sqlalchemy>=2.0.22",

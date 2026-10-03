@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from defusedxml.ElementTree import fromstring
 
 from menu.ingest.errors import FetchError
+from menu.ingest.fetch import check_robots
 from menu.ingest.http import session
 
 if TYPE_CHECKING:
@@ -14,10 +15,13 @@ if TYPE_CHECKING:
     from menu.ingest.registry import SiteConfig
 
 
-def request_xml(url: str) -> tuple[str, list[str]]:
+def request_xml(url: str, site: SiteConfig | None = None) -> tuple[str, list[str]]:
     """Fetch a sitemap and return its root kind ("sitemapindex" or
     "urlset") with the URLs listed in it, matching food-guru's
-    _urls_from_xml."""
+    _urls_from_xml. Sitemap fetches honour robots.txt too when the
+    site is given."""
+    if site is not None:
+        check_robots(url, site)
     response = session.get(url, timeout=10)
     if not response.ok:
         raise FetchError(f"Can't fetch {url!r}")
@@ -37,7 +41,7 @@ def discover_urls(site: SiteConfig, sitemap_url: str | None = None) -> Iterator[
     pattern = re.compile(site.url_pattern) if site.url_pattern else None
     sitemaps = [sitemap_url] if sitemap_url else site.sitemap_urls
     for sitemap in sitemaps:
-        _, locs = request_xml(sitemap)
+        _, locs = request_xml(sitemap, site)
         for url in locs:
             if pattern is None or pattern.match(url):
                 yield url

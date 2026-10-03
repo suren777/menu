@@ -62,6 +62,8 @@ def test_request_xml_fail(mock_get: MagicMock) -> None:
 def test_discover_urls_filters_by_pattern(mock_get: MagicMock) -> None:
     mock_response = MagicMock()
     mock_response.ok = True
+    mock_response.status_code = 200
+    mock_response.text = ""
     mock_response.content = (
         b'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
         b"<url><loc>https://test.com/recipes/cake</loc></url>"
@@ -79,6 +81,8 @@ def test_discover_urls_filters_by_pattern(mock_get: MagicMock) -> None:
 def test_discover_urls_without_pattern_yields_all(mock_get: MagicMock) -> None:
     mock_response = MagicMock()
     mock_response.ok = True
+    mock_response.status_code = 200
+    mock_response.text = ""
     mock_response.content = (
         b'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
         b"<url><loc>https://test.com/a</loc></url>"

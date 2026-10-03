@@ -1,10 +1,14 @@
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, call, patch
 
-from menu.ingest.fetch import _cache_path, fetch_page, fetch_recipe
+import pytest
+
+from menu.ingest.errors import DisallowedError
+from menu.ingest.fetch import _cache_path, _robots, fetch_page, fetch_recipe
 from menu.ingest.registry import SiteConfig
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from pathlib import Path
 
 SITE = SiteConfig(
@@ -15,10 +19,21 @@ SITE = SiteConfig(
 )
 
 
+@pytest.fixture(autouse=True)
+def _fresh_robots_cache() -> Iterator[None]:
+    """Isolate the module-level robots cache: every test fetches (and
+    mocks) its own robots.txt."""
+    _robots._parsers.clear()
+    yield
+    _robots._parsers.clear()
+
+
 @patch("menu.ingest.fetch.session.get")
 def test_fetch_page_caches_to_disk(mock_get: MagicMock, tmp_path: Path) -> None:
     mock_response = MagicMock()
     mock_response.ok = True
+    mock_response.status_code = 200
+    mock_response.text = ""
     mock_response.content = b"<html>cached</html>"
     mock_get.return_value = mock_response
 
@@ -42,12 +57,15 @@ def test_fetch_page_bypasses_cache_when_disabled(
 ) -> None:
     mock_response = MagicMock()
     mock_response.ok = True
+    mock_response.status_code = 200
+    mock_response.text = ""
     mock_response.content = b"fresh"
     mock_get.return_value = mock_response
 
     result = fetch_page("https://test.com/x", SITE, cache_dir=tmp_path, use_cache=False)
     assert result == b"fresh"
-    mock_get.assert_called_once()
+    # The last of the two calls (robots.txt, then the page) is the page.
+    mock_get.assert_called_with("https://test.com/x", timeout=10)
 
 
 @patch("menu.ingest.fetch._politeness.wait")
@@ -57,6 +75,8 @@ def test_fetch_recipe_parses_html(
 ) -> None:
     mock_response = MagicMock()
     mock_response.ok = True
+    mock_response.status_code = 200
+    mock_response.text = ""
     mock_response.content = b"<html><body><h1>Test Recipe</h1></body></html>"
     mock_get.return_value = mock_response
 
@@ -65,3 +85,26 @@ def test_fetch_recipe_parses_html(
     mock_wait.assert_has_calls(
         [call(SITE.base_url, SITE.politeness_delay)], any_order=False
     )
+
+
+@patch("menu.ingest.fetch.session.get")
+def test_fetch_page_raises_when_disallowed(
+    mock_get: MagicMock, tmp_path: Path
+) -> None:
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.text = "User-agent: *\nDisallow: /"
+    mock_get.return_value = mock_response
+
+    with pytest.raises(DisallowedError, match=r"robots\.txt"):
+        fetch_page("https://test.com/recipes/cake", SITE, cache_dir=tmp_path)
+
+
+@patch("menu.ingest.fetch.session.get")
+def test_robots_5xx_disallows_all(mock_get: MagicMock, tmp_path: Path) -> None:
+    mock_response = MagicMock()
+    mock_response.status_code = 503
+    mock_get.return_value = mock_response
+
+    with pytest.raises(DisallowedError, match=r"robots\.txt"):
+        fetch_page("https://test.com/recipes/cake", SITE, cache_dir=tmp_path)

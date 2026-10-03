@@ -59,7 +59,7 @@ def import_sitemap(site: SiteConfig, sitemap_url: str | None = None) -> None:
 
     with get_session() as session:
         for url in urls:
-            kind, locs = request_xml(url)
+            kind, locs = request_xml(url, site)
             if kind == "urlset":
                 locs = [url]
             for loc in locs:

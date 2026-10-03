@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Recipe sourcing lab: discover, fetch and extract recipes. Code graduates to food-guru's ingest."
 authors = [{ name = "Suren Islyaev" }]
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 dependencies = [
     "beautifulsoup4>=4.12",
     "more-itertools>=10.1",
@@ -39,14 +39,14 @@ addopts = "-ra -q"
 testpaths = ["tests"]
 
 [tool.black]
-target-version = ["py311"]
+target-version = ["py314"]
 
 [tool.isort]
 profile = "black"
 
 [tool.ruff]
 line-length = 88
-target-version = "py311"
+target-version = "py314"
 extend-exclude = [".venv"]
 
 [tool.ruff.lint]
@@ -62,5 +62,5 @@ select = [
 ]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.14"
 strict = true

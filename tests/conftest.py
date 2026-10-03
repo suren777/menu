@@ -18,7 +18,7 @@ def pytest_configure() -> None:
 
 
 @fixture
-def session() -> Generator[Session, None, None]:
+def session() -> Generator[Session]:
     """Fixture for database session."""
     initialise(test_engine)
     with get_session(test_engine) as db_session:

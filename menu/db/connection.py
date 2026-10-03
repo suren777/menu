@@ -19,7 +19,7 @@ def get_session(engine: Engine = engine) -> Generator[Session, Any, Any]:
 
 
 @contextmanager
-def get_ro_session(engine: Engine = engine) -> Generator[Session, None, None]:
+def get_ro_session(engine: Engine = engine) -> Generator[Session]:
     session = Session(engine)
     try:
         yield session

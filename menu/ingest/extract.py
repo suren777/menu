@@ -1,9 +1,11 @@
-"""Extract raw recipe JSON-LD from fetched pages.
+"""Extract raw recipe data from fetched pages.
 
 JSON-LD first: standard `application/ld+json` Recipe objects, with a
 per-site fallback (test-id script tags) for sites that don't publish
-standard JSON-LD. Parsing into structured recipes happens in food-guru;
-menu only stores the raw data.
+standard JSON-LD, and schema.org microdata (Jetpack-style HTML
+attributes) for sites without any JSON-LD at all. Parsing into
+structured recipes happens in food-guru; menu only stores the raw
+data.
 """
 
 import json
@@ -33,7 +35,7 @@ def extract_json_ld(soup: BeautifulSoup) -> list[dict[str, Any]]:
     nodes: list[dict[str, Any]] = []
     for script in soup.find_all("script", {"type": JSON_LD_TYPE}):
         try:
-            data = json.loads(script.string or "")
+            data = json.loads(script.string or "", strict=False)
         except json.JSONDecodeError, TypeError:
             continue
         queue = deque(data if isinstance(data, list) else [data])
@@ -55,18 +57,67 @@ def extract_json_ld_recipe(soup: BeautifulSoup) -> dict[str, Any] | None:
     return None
 
 
+def extract_microdata_recipe(soup: BeautifulSoup) -> dict[str, Any] | None:
+    """Return the schema.org Recipe microdata on the page (Smitten
+    Kitchen's Jetpack markup), shaped like JSON-LD so the scratch
+    store and ingredient pipeline don't change.
+
+    Flat items only: anything inside a nested itemscope is skipped,
+    not recursed into — Smitten Kitchen has none. Jetpack publishes
+    no recipeInstructions itemprop; the steps sit in the h-recipe's
+    .e-instructions block, so those are filled in when missing.
+    """
+    scope = soup.select_one('[itemtype*="schema.org/Recipe"]')
+    if scope is None:
+        return None
+
+    recipe: dict[str, Any] = {"@type": "Recipe"}
+    for prop in scope.find_all(itemprop=True):
+        # Flat items only: skip anything inside a nested itemscope.
+        if any(
+            parent is not scope and parent.has_attr("itemscope")
+            for parent in prop.parents
+        ):
+            continue
+        value = (
+            prop.get("content")
+            or prop.get("datetime")
+            or prop.get_text(" ", strip=True)
+        )
+        if not value:
+            continue
+        name = prop["itemprop"]
+        if isinstance(name, list):  # bs4 types every attribute as str | list
+            name = " ".join(name)
+        existing = recipe.get(name)
+        if existing is None:
+            recipe[name] = value
+        elif isinstance(existing, list):
+            existing.append(value)
+        else:
+            recipe[name] = [existing, value]
+    if isinstance(recipe.get("recipeIngredient"), str):
+        recipe["recipeIngredient"] = [recipe["recipeIngredient"]]
+    if "recipeInstructions" not in recipe:
+        steps = scope.select_one(".e-instructions")
+        if steps is not None:
+            recipe["recipeInstructions"] = steps.get_text(" ", strip=True)
+    return recipe
+
+
 def extract_recipe_data(site: SiteConfig, soup: BeautifulSoup) -> dict[str, Any] | None:
     """Recipe JSON for a page: the site's test-id script if it declares
-    one, then standard JSON-LD, then None. Doubles as the recipe check:
-    a page is a recipe iff it yields a Recipe object."""
+    one, then standard JSON-LD, then schema.org microdata, then None.
+    Doubles as the recipe check: a page is a recipe iff it yields a
+    Recipe object."""
     if site.json_ld_test_id:
         script = soup.find("script", {"data-testid": site.json_ld_test_id})
         if script and script.contents:
             try:
-                data = json.loads(str(script.contents[0]))
+                data = json.loads(str(script.contents[0]), strict=False)
             except json.JSONDecodeError:
                 data = None
             if isinstance(data, dict) and _is_recipe(data):
                 return data
 
-    return extract_json_ld_recipe(soup)
+    return extract_json_ld_recipe(soup) or extract_microdata_recipe(soup)

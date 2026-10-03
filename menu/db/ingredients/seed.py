@@ -95,16 +95,14 @@ def seed_ingredient_data(session: Session) -> None:
             existing.ingredient_id = target.id
             existing.variant = variant
 
+    # Density and unit-weight ingredients are created even when
+    # nothing points at them yet: caster sugar is no alias target, so
+    # a fresh crawl would otherwise meet it before the next startup
+    # and miss its density for a run.
     for name, density in DENSITIES_G_PER_ML.items():
-        ingredient = session.scalar(
-            select(Ingredient).where(Ingredient.name == name)
-        )
-        if ingredient is not None:
-            ingredient.density_g_per_ml = density
+        ingredient = _canonical_ingredient(name, session)
+        ingredient.density_g_per_ml = density
 
     for name, weight in UNIT_WEIGHTS_G.items():
-        ingredient = session.scalar(
-            select(Ingredient).where(Ingredient.name == name)
-        )
-        if ingredient is not None:
-            ingredient.unit_weight_g = weight
+        ingredient = _canonical_ingredient(name, session)
+        ingredient.unit_weight_g = weight

@@ -60,3 +60,14 @@ def test_seed_sets_densities_and_weights_on_existing(session: Session) -> None:
     egg = repository.find_ingredient_by_name("egg", session)
     assert egg is not None
     assert egg.unit_weight_g == 50.0
+
+
+def test_seed_creates_density_ingredients_up_front(session: Session) -> None:
+    """No alias points at caster sugar, yet a fresh crawl must see its
+    density on the first run — the seed creates the ingredient instead
+    of waiting for the crawl to."""
+    seed_ingredient_data(session)
+
+    caster = repository.find_ingredient_by_name("caster sugar", session)
+    assert caster is not None
+    assert caster.density_g_per_ml == 0.85

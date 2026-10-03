@@ -145,18 +145,26 @@ def store_recipe_ingredients(
 
 def _split_or_alternative(raw: str, site: SiteConfig) -> ParsedLine | None:
     """The second option of "2 tsp vanilla or 1 tsp essential oil",
-    parsed on its own. None when the line has no unhandled "or" or the
-    remainder fails to parse."""
+    parsed on its own. None when the line has no unhandled "or", when
+    the "or" sits inside brackets ("(or 3 small)" is a parenthetical,
+    not an alternative) or when the remainder has no ingredient name
+    ("or to taste", "or more if needed") — storing those would flood
+    the review queue with nameless rows."""
     parts = _OR_ALTERNATIVE.split(raw, maxsplit=1)
     if len(parts) != 2 or not parts[1].strip():
         return None
+    if parts[0].count("(") > parts[0].count(")"):
+        return None
     try:
-        return parse_line(parts[1].strip(), site)
+        alt = parse_line(parts[1].strip(), site)
     except Exception as exc:  # noqa: BLE001 - a bad line must not stop the recipe
         logger.warning(
             "Skipping alternative of %r: %s: %s", raw, type(exc).__name__, exc
         )
         return None
+    if alt.name is None:
+        return None
+    return alt
 
 
 def _resolve_ingredient(

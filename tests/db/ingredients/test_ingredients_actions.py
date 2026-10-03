@@ -436,6 +436,33 @@ def test_quantity_level_or_alternative_kept() -> None:
 
 
 @pytest.mark.usefixtures("db_engine")
+def test_nameless_or_remainders_not_stored() -> None:
+    """Bracketed parentheticals and nameless remainders — "(or 3
+    small)", "or to taste", "or more if needed" — are not alternatives;
+    storing them would flood the review queue with nameless rows."""
+    recipe_id = add_recipe("https://x/curry")
+
+    actions.store_recipe_ingredients(
+        "https://x/curry",
+        {
+            "recipeIngredient": [
+                "2 large eggs (or 3 small)",
+                "1 tsp salt or to taste",
+                "1 tbsp milk, or more if needed",
+            ]
+        },
+        BBC_GOOD_FOOD,
+    )
+
+    with get_session() as session:
+        lines = session.scalars(
+            select(RecipeIngredient).where(RecipeIngredient.recipe_id == recipe_id)
+        ).all()
+        assert len(lines) == 3
+        assert all(line.alternative_of is None for line in lines)
+
+
+@pytest.mark.usefixtures("db_engine")
 def test_variant_recorded_and_keep_variants_splits() -> None:
     """A line remembers which alias variant it resolved through;
     keep_variants splits the shopping list back out by variant."""

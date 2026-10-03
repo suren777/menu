@@ -17,7 +17,7 @@ def test_seed_creates_aliases_and_canonicals(session: Session) -> None:
     assert milk is not None
     warm = repository.alias_target("warm milk", session)
     assert warm is not None
-    assert warm.id == milk.id
+    assert warm[0].id == milk.id
 
     flour = repository.find_ingredient_by_name("flour", session)
     assert flour is not None
@@ -48,7 +48,7 @@ def test_seed_repoints_parse_time_self_aliases(session: Session) -> None:
     repointed = repository.alias_target("warm milk", session)
     assert milk is not None
     assert repointed is not None
-    assert repointed.id == milk.id
+    assert repointed[0].id == milk.id
 
 
 def test_seed_sets_densities_and_weights_on_existing(session: Session) -> None:

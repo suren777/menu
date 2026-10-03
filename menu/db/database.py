@@ -96,6 +96,10 @@ class RecipeIngredient(Base):
     for sites with sectioned ingredient groups."""
     raw_text: Mapped[str] = mapped_column(nullable=False)
     ingredient_id: Mapped[int | None] = mapped_column(ForeignKey("ingredient.id"))
+    variant: Mapped[str | None]
+    """Which alias variant the line resolved through ("whole",
+    "unsalted"); lets a shopping list keep variants apart. Set only
+    when an alias row carried a variant."""
     quantity: Mapped[float | None]
     """Base units (g / ml / piece)."""
     quantity_max: Mapped[float | None]

@@ -25,11 +25,15 @@ def test_alias_target(session: Session) -> None:
     ingredient = Ingredient(name="milk")
     session.add(ingredient)
     session.flush()
-    session.add(IngredientAlias(alias="warm milk", ingredient_id=ingredient.id))
+    session.add(
+        IngredientAlias(
+            alias="warm milk", ingredient_id=ingredient.id, variant="warm"
+        )
+    )
 
     found = repository.alias_target("warm milk", session)
     assert found is not None
-    assert found.name == "milk"
+    assert (found[0].name, found[1]) == ("milk", "warm")
     assert repository.alias_target("cold milk", session) is None
 
 

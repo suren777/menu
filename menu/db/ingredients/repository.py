@@ -35,15 +35,20 @@ def find_ingredient_by_name(name: str, session: Session) -> IngredientModel | No
     return to_model(record) if record is not None else None
 
 
-def alias_target(alias: str, session: Session) -> IngredientModel | None:
-    """The canonical ingredient an alias resolves to, if any."""
-    ingredient_id = session.scalar(
-        select(IngredientAlias.ingredient_id).where(IngredientAlias.alias == alias)
-    )
-    if ingredient_id is None:
+def alias_target(
+    alias: str, session: Session
+) -> tuple[IngredientModel, str | None] | None:
+    """The canonical ingredient an alias resolves to, with the variant
+    the alias carries ("whole" for whole milk), if any."""
+    row = session.execute(
+        select(Ingredient, IngredientAlias.variant).join(
+            IngredientAlias, IngredientAlias.ingredient_id == Ingredient.id
+        ).where(IngredientAlias.alias == alias)
+    ).first()
+    if row is None:
         return None
-    record = session.get(Ingredient, ingredient_id)
-    return to_model(record) if record is not None else None
+    record, variant = row
+    return to_model(record), variant
 
 
 @dataclass
@@ -64,6 +69,7 @@ class RecipeIngredientModel:
     size: str | None
     note: str | None
     optional: bool
+    variant: str | None
     alternative_of: int | None
     parse_confidence: float | None
 
@@ -76,6 +82,7 @@ def to_recipe_ingredient_model(record: RecipeIngredient) -> RecipeIngredientMode
         section=record.section,
         raw_text=record.raw_text,
         ingredient_id=record.ingredient_id,
+        variant=record.variant,
         quantity=record.quantity,
         quantity_max=record.quantity_max,
         dimension=record.dimension,

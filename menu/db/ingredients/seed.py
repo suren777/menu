@@ -34,12 +34,24 @@ ALIASES: list[tuple[str, str, str | None]] = [
     ("egg white", "egg", "white"),
     ("egg yolk", "egg", "yolk"),
     ("instant dried yeast", "fast-action dried yeast", None),
+    # The parser turns "rosewater or vanilla extract" into
+    # "rosewater extract"; map it back to rosewater.
+    ("rosewater extract", "rosewater", None),
     (
         "whole blanched almonds roughly chopped",
         "blanched almond",
         "whole, roughly chopped",
     ),
 ]
+
+# Whitespace-normalised raw line -> canonical ingredient, for lines the
+# parser merges wrongly. "70g milk or dark chocolate roughly chopped"
+# parses as name "milk" with confidence 1.0 — no confidence threshold
+# catches it, only curated data does. Checked before the parser's name
+# is trusted.
+LINE_OVERRIDES: dict[str, str] = {
+    "70g milk or dark chocolate roughly chopped": "milk chocolate",
+}
 
 # g/ml, cooking-standard measured values
 DENSITIES_G_PER_ML: dict[str, float] = {

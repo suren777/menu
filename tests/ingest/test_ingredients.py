@@ -10,7 +10,13 @@ from typing import cast
 
 import pytest
 
-from menu.ingest.ingredients import canonical_name, name_needs_review, parse_line
+from menu.db.ingredients.actions import _split_or_alternative
+from menu.ingest.ingredients import (
+    canonical_name,
+    line_needs_review,
+    name_needs_review,
+    parse_line,
+)
 from menu.ingest.sites.bbc_good_food import BBC_GOOD_FOOD
 
 US = BBC_GOOD_FOOD.model_copy(update={"unit_system": "us"})
@@ -179,12 +185,46 @@ def test_rosewater_or_vanilla_parser_quirk() -> None:
             {"dimension": "count", "quantity": 1.0, "base_unit": "stick"},
             id="stick-butter",
         ),
+        pytest.param(
+            "pink and yellow food colouring gels",
+            {
+                "name": "pink food colouring gel",
+                "alternatives": ("yellow food colouring gel",),
+            },
+            id="and-captured-as-alternatives",
+        ),
     ],
 )
 def test_parse_edge_cases(line: str, expected: dict[str, object]) -> None:
     parsed = parse_line(line, BBC_GOOD_FOOD)
     for field, value in expected.items():
         assert getattr(parsed, field) == value, field
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("pink and yellow food colouring gels", True),
+        ("200g good-quality candied orange and lemon peel", True),
+        ("rosewater or vanilla extract", False),
+        ("1 tsp salt or to taste", False),
+        ("1 tbsp milk, or more if needed", False),
+        ("1 orange, zested and juiced", False),
+        ("2 large eggs (or 3 small)", False),
+        ("2 tsp vanilla or 1 tsp essential oil", False),
+        ("100g butter, plus extra for the tin", False),
+        ("250g bread flour plus 20g for the yukone and extra for dusting", False),
+    ],
+)
+def test_line_needs_review(line: str, expected: bool) -> None:
+    """A conjunction the parse dropped sends the line to the review
+    queue; one accounted for by the name, a sidecar, a bracketed
+    parenthetical or a stored alternative does not."""
+    parsed = parse_line(line, BBC_GOOD_FOOD)
+    or_alternative = (
+        None if parsed.alternatives else _split_or_alternative(line, BBC_GOOD_FOOD)
+    )
+    assert line_needs_review(line, parsed, or_alternative) is expected
 
 
 def test_cup_is_ambiguous_between_systems() -> None:

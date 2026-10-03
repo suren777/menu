@@ -347,6 +347,90 @@ def test_review_queue_catches_mangled_names() -> None:
 
 
 @pytest.mark.usefixtures("db_engine")
+def test_lost_conjunction_goes_to_review_queue() -> None:
+    """"pink and yellow food colouring gels" parses as "pink food
+    colouring gel" with "yellow food colouring gel" as an alternative —
+    but a shopping list needs both gels, so the line stays unresolved
+    for review."""
+    recipe_id = add_recipe("https://x/cake")
+
+    actions.store_recipe_ingredients(
+        "https://x/cake",
+        {"recipeIngredient": ["pink and yellow food colouring gels"]},
+        BBC_GOOD_FOOD,
+    )
+
+    with get_session() as session:
+        lines = session.scalars(
+            select(RecipeIngredient).where(RecipeIngredient.recipe_id == recipe_id)
+        ).all()
+        primary = next(line for line in lines if line.alternative_of is None)
+        assert primary.ingredient_id is None
+
+
+@pytest.mark.usefixtures("db_engine")
+def test_seeded_alias_rescues_lost_conjunction() -> None:
+    """A seeded alias wins over the lost-conjunction heuristic, like it
+    does over the mangled-name one."""
+    with get_session() as session:
+        ingredient = Ingredient(name="food colouring gel", fdc_id=None)
+        session.add(ingredient)
+        session.flush()
+        session.add(
+            IngredientAlias(
+                alias="pink food colouring gel", ingredient_id=ingredient.id
+            )
+        )
+    recipe_id = add_recipe("https://x/cake")
+
+    actions.store_recipe_ingredients(
+        "https://x/cake",
+        {"recipeIngredient": ["pink and yellow food colouring gels"]},
+        BBC_GOOD_FOOD,
+    )
+
+    with get_session() as session:
+        lines = session.scalars(
+            select(RecipeIngredient).where(RecipeIngredient.recipe_id == recipe_id)
+        ).all()
+        primary = next(line for line in lines if line.alternative_of is None)
+        assert primary.ingredient_id is not None
+        resolved = session.get(Ingredient, primary.ingredient_id)
+        assert resolved is not None
+        assert resolved.name == "food colouring gel"
+
+
+@pytest.mark.usefixtures("db_engine")
+def test_fdc_id_conflicts_reported_not_merged() -> None:
+    """Canonical ingredients sharing an fdc_id with no alias between
+    them are reported as hand-seeding candidates; a group the seed
+    already linked and single-member groups are not."""
+    with get_session() as session:
+        session.add_all(
+            [
+                Ingredient(name="almond", fdc_id=12756),
+                Ingredient(name="vanilla", fdc_id=12756),
+                Ingredient(name="rosewater", fdc_id=12756),
+                Ingredient(name="butter", fdc_id=173430),
+            ]
+        )
+
+    assert actions.fdc_id_conflicts() == [
+        (12756, ["almond", "rosewater", "vanilla"])
+    ]
+
+    with get_session() as session:
+        almond = session.scalars(
+            select(Ingredient).where(Ingredient.name == "almond")
+        ).first()
+        assert almond is not None
+        session.add(IngredientAlias(alias="vanilla", ingredient_id=almond.id))
+
+    # The curated alias links the pair, so the group is no longer a conflict.
+    assert actions.fdc_id_conflicts() == []
+
+
+@pytest.mark.usefixtures("db_engine")
 def test_seeded_alias_rescues_mangled_name() -> None:
     """A seeded alias wins over the review heuristic: the real cached
     line "30g whole blanched almonds roughly chopped or flaked almonds"

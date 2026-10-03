@@ -11,6 +11,7 @@ extract" -> rosewater extract, then vanilla extract). The first option
 is the one a shopping list counts; the rest are kept as alternatives.
 """
 
+import re
 from dataclasses import dataclass
 from fractions import Fraction
 from typing import TYPE_CHECKING
@@ -103,6 +104,39 @@ def name_needs_review(name: str) -> bool:
     orange and lemon peel")."""
     words = name.split()
     return len(words) >= 5 or " or " in name or " and " in name
+
+
+_BRACKETS = re.compile(r"\([^)]*\)")
+_AND = re.compile(r"\band\b")
+_OR = re.compile(r"\bor\b")
+
+
+def line_needs_review(
+    raw_text: str, parsed: ParsedLine, or_alternative: ParsedLine | None
+) -> bool:
+    """Full-line review heuristic: the name check above, plus
+    conjunctions the parse dropped. A conjunction is accounted for by
+    the name, the note/preparation text, a bracketed parenthetical
+    ("(or 3 small)") or a stored alternative; anything else was lost.
+    "and" is flagged even when the parser captured it as an
+    alternative: "pink and yellow food colouring gels" needs both
+    gels, so alternative semantics would drop one from the shopping
+    list. "or" is only flagged when nothing captured the second
+    option."""
+    if parsed.name is None:
+        return False
+    if name_needs_review(parsed.name):
+        return True
+    # "(or 3 small)" is a parenthetical, not line content.
+    text = _BRACKETS.sub(" ", raw_text.lower())
+    sidecars = " ".join(
+        part.lower() for part in (parsed.note, parsed.preparation) if part
+    )
+    if _AND.search(text) and not _AND.search(sidecars):
+        return True
+    if _OR.search(text) and not _OR.search(sidecars):
+        return not (parsed.alternatives or or_alternative is not None)
+    return False
 
 
 def _primary_amount(parsed: ParsedIngredient) -> IngredientAmount | None:

@@ -18,6 +18,7 @@ from menu.db.ingredients import repository
 from menu.db.ingredients.seed import LINE_OVERRIDES
 from menu.ingest.ingredients import (
     canonical_name,
+    line_needs_review,
     name_needs_review,
     parse_line,
 )
@@ -82,10 +83,15 @@ def store_recipe_ingredients(
                 )
                 continue
             override = LINE_OVERRIDES.get(" ".join(raw.lower().split()))
+            alt_parsed = (
+                None if parsed.alternatives else _split_or_alternative(raw, site)
+            )
             ingredient_id, variant = _resolve_ingredient(
                 override if override is not None else parsed.name,
                 parsed.fdc_id,
                 session,
+                needs_review=override is None
+                and line_needs_review(raw, parsed, alt_parsed),
             )
             line = RecipeIngredient(
                 recipe_id=record.id,
@@ -108,7 +114,12 @@ def store_recipe_ingredients(
             session.add(line)
             session.flush()  # the row's id is needed by the alternative rows
             for alternative in parsed.alternatives:
-                alternative_id, _ = _resolve_ingredient(alternative, None, session)
+                alternative_id, _ = _resolve_ingredient(
+                    alternative,
+                    None,
+                    session,
+                    needs_review=name_needs_review(alternative),
+                )
                 session.add(
                     RecipeIngredient(
                         recipe_id=record.id,
@@ -122,25 +133,26 @@ def store_recipe_ingredients(
             # but drops the second option of "2 tsp vanilla or 1 tsp
             # essential oil" into the note. Split it off here so it is
             # still kept as an alternative row.
-            if not parsed.alternatives:
-                alt_parsed = _split_or_alternative(raw, site)
-                if alt_parsed is not None:
-                    alternative_id, _ = _resolve_ingredient(
-                        alt_parsed.name, alt_parsed.fdc_id, session
+            if alt_parsed is not None:
+                alternative_id, _ = _resolve_ingredient(
+                    alt_parsed.name,
+                    alt_parsed.fdc_id,
+                    session,
+                    needs_review=name_needs_review(alt_parsed.name or ""),
+                )
+                session.add(
+                    RecipeIngredient(
+                        recipe_id=record.id,
+                        position=position,
+                        raw_text=raw,
+                        ingredient_id=alternative_id,
+                        quantity=alt_parsed.quantity,
+                        quantity_max=alt_parsed.quantity_max,
+                        dimension=alt_parsed.dimension,
+                        base_unit=alt_parsed.base_unit,
+                        alternative_of=line.id,
                     )
-                    session.add(
-                        RecipeIngredient(
-                            recipe_id=record.id,
-                            position=position,
-                            raw_text=raw,
-                            ingredient_id=alternative_id,
-                            quantity=alt_parsed.quantity,
-                            quantity_max=alt_parsed.quantity_max,
-                            dimension=alt_parsed.dimension,
-                            base_unit=alt_parsed.base_unit,
-                            alternative_of=line.id,
-                        )
-                    )
+                )
 
 
 def _split_or_alternative(raw: str, site: SiteConfig) -> ParsedLine | None:
@@ -168,7 +180,10 @@ def _split_or_alternative(raw: str, site: SiteConfig) -> ParsedLine | None:
 
 
 def _resolve_ingredient(
-    name: str | None, fdc_id: int | None, session: Session
+    name: str | None,
+    fdc_id: int | None,
+    session: Session,
+    needs_review: bool = False,
 ) -> tuple[int | None, str | None]:
     """Id and variant of the canonical ingredient a parsed name
     resolves to, in the order trusted:
@@ -176,9 +191,10 @@ def _resolve_ingredient(
     1. A curated line override already decided the name before this
        call, so an alias match carries the variant ("whole milk" ->
        milk, variant "whole").
-    2. A name the parser likely mangled (name_needs_review) stays
-       unresolved (None) for the review queue instead of becoming a
-       junk canonical ingredient.
+    2. A line flagged for review — a mangled name, or a conjunction
+       the parse dropped (line_needs_review) — stays unresolved (None)
+       for the review queue instead of becoming a junk canonical
+       ingredient.
     3. Otherwise the ingredient is created, with a self-alias so later
        variants ("warm milk") can attach to it.
 
@@ -191,7 +207,7 @@ def _resolve_ingredient(
     if match is not None:
         ingredient, variant = match
         return ingredient.id, variant
-    if name_needs_review(name):
+    if needs_review:
         return None, None
     by_name = repository.find_ingredient_by_name(name, session)
     if by_name is not None:
@@ -211,6 +227,43 @@ def _servings_from_yield(value: Any) -> int | None:
         return None
     match = _YIELD_NUMBER.search(str(value))
     return int(match.group()) if match else None
+
+
+def fdc_id_conflicts() -> list[tuple[int, list[str]]]:
+    """Canonical ingredients sharing an fdc_id with no alias between
+    them, as candidates to hand-seed into seed.py — a report, never an
+    auto-merge. Shared USDA ids catch real variants (milk / warm milk)
+    but also lump distinct ingredients (almond / vanilla / rosewater)."""
+    with get_session() as session:
+        ingredients = [
+            repository.to_model(record)
+            for record in session.scalars(select(Ingredient))
+        ]
+        links = {
+            (alias.alias, alias.ingredient_id)
+            for alias in session.scalars(select(IngredientAlias))
+        }
+
+    by_fdc: dict[int, list[repository.IngredientModel]] = {}
+    for ingredient in ingredients:
+        if ingredient.fdc_id is not None:
+            by_fdc.setdefault(ingredient.fdc_id, []).append(ingredient)
+
+    conflicts = []
+    for fdc_id, group in sorted(by_fdc.items()):
+        if len(group) < 2:
+            continue
+        # An alias row pointing one member's name at another member
+        # means the pair is already linked by a curated seed.
+        if any(
+            (other.name, ingredient.id) in links
+            for ingredient in group
+            for other in group
+            if ingredient.id != other.id
+        ):
+            continue
+        conflicts.append((fdc_id, sorted(ing.name for ing in group)))
+    return conflicts
 
 
 @dataclass

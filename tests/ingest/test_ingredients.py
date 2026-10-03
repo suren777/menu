@@ -4,12 +4,72 @@ Every line below was taken from a saved .cache page (AGENTS.md: no
 live requests) and the parser runs locally.
 """
 
+import json
+from pathlib import Path
+from typing import cast
+
 import pytest
 
-from menu.ingest.ingredients import parse_line
+from menu.ingest.ingredients import canonical_name, name_needs_review, parse_line
 from menu.ingest.sites.bbc_good_food import BBC_GOOD_FOOD
 
 US = BBC_GOOD_FOOD.model_copy(update={"unit_system": "us"})
+
+FIXTURE = Path(__file__).parent / "fixtures" / "bbc_lines.json"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # words inflect must leave alone
+        ("asparagus", "asparagus"),
+        ("couscous", "couscous"),
+        ("hummus", "hummus"),
+        ("molasses", "molasses"),
+        ("cassis", "cassis"),
+        ("milk", "milk"),
+        # real plurals
+        ("eggs", "egg"),
+        ("raspberries", "raspberry"),
+        ("cherry tomatoes", "cherry tomato"),
+        ("bay leaves", "bay leaf"),
+        ("anchovy fillets", "anchovy fillet"),
+        ("golden caster sugar", "golden caster sugar"),
+    ],
+)
+def test_canonical_name_singularises(raw: str, expected: str) -> None:
+    """Proper singularisation: no more "asparagu", "raspberrie",
+    "cherry tomatoe" from the old strip-a-trailing-s rule."""
+    assert canonical_name(raw) == expected
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("milk", False),
+        ("warm milk", False),
+        ("smooth lotus biscoff spread", False),
+        # long modifier chains and unsplit conjunctions
+        ("whole blanched almonds roughly chopped", True),
+        ("good-quality candied orange and lemon peel", True),
+        ("milk or dark chocolate", True),
+    ],
+)
+def test_name_needs_review(name: str, expected: bool) -> None:
+    """The review-queue heuristic: names the parser likely mangled
+    must not become canonical ingredients unchecked."""
+    assert name_needs_review(name) == expected
+
+
+def test_rosewater_or_vanilla_parser_quirk() -> None:
+    """The parser turns "rosewater or vanilla extract" into the name
+    "rosewater extract" — a known quirk. The seed alias maps it back
+    to rosewater; the alternative keeps vanilla extract."""
+    parsed = parse_line("rosewater or vanilla extract", BBC_GOOD_FOOD)
+
+    assert parsed.name is not None
+    assert parsed.name.startswith("rosewater")
+    assert parsed.alternatives == ("vanilla extract",)
 
 
 @pytest.mark.parametrize(
@@ -86,7 +146,7 @@ US = BBC_GOOD_FOOD.model_copy(update={"unit_system": "us"})
         ),
         pytest.param(
             "rosewater or vanilla extract",
-            {"name": "rosewater extract", "alternatives": ("vanilla extract",)},
+            {"alternatives": ("vanilla extract",)},
             id="alternatives",
         ),
         pytest.param(
@@ -140,3 +200,20 @@ def test_optional_defaults_to_false() -> None:
     parsed = parse_line("25g butter", BBC_GOOD_FOOD)
 
     assert parsed.optional is False
+
+
+def _fixture_cases() -> list[dict[str, object]]:
+    cases: list[dict[str, object]] = json.loads(FIXTURE.read_text())
+    return cases
+
+
+@pytest.mark.parametrize("case", _fixture_cases(), ids=lambda case: case["name"])
+def test_real_cached_lines_parse(case: dict[str, object]) -> None:
+    """Every ingredient line of the cached BBC recipes parses without
+    raising, verbatim — double spaces, no commas, exactly as stored.
+    The earlier test table used cleaned-up lines; these are the real
+    fixture."""
+    lines = cast("list[str]", case["lines"])
+    for line in lines:
+        parsed = parse_line(line, BBC_GOOD_FOOD)
+        assert parsed.raw_text == line

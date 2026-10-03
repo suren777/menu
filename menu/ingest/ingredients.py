@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 from typing import TYPE_CHECKING
 
+import inflect
 from ingredient_parser import parse_ingredient
 from ingredient_parser.dataclasses import (
     CompositeIngredientAmount,
@@ -66,17 +67,42 @@ class ParsedLine:
     """USDA FoodData Central id when the parser matched one."""
 
 
+_INFLECT = inflect.engine()
+
+# inflect gets these wrong ("molass", "cassi"); they are already
+# singular or uncountable, so leave them exactly as parsed.
+_LEAVE_ALONE = frozenset({"molasses", "cassis"})
+
+
 def canonical_name(text: str) -> str:
-    """Lowercase and naively singularise a parsed name: "eggs" -> "egg".
+    """Lowercase and properly singularise a parsed name: "cherry
+    tomatoes" -> "cherry tomato".
 
     Real canonicalisation is the alias table's job (warm milk ->
-    milk); this only fixes case and the common plural so the table
-    always has one form to map.
+    milk); this only fixes case and the plural so the table always
+    has one form to map. Words ending in "us" or "ss" are never
+    touched: they are already singular or uncountable (asparagus,
+    couscous, hummus, molasses) and inflect strips them to junk
+    ("asparagu", "molass").
     """
-    name = text.strip().lower()
-    if name.endswith("s") and not name.endswith("ss"):
-        name = name[:-1]
-    return name
+    name = " ".join(text.lower().split())
+    if not name:
+        return name
+    *lead, last = name.split()
+    if last.endswith(("us", "ss")) or last in _LEAVE_ALONE:
+        return name
+    singular = _INFLECT.singular_noun(last)
+    return " ".join([*lead, singular if isinstance(singular, str) else last])
+
+
+def name_needs_review(name: str) -> bool:
+    """Heuristic for names the parser likely mangled, which should go
+    to the review queue (ingredient_id NULL) instead of becoming
+    canonical ingredients: long modifier chains ("whole blanched
+    almonds roughly chopped") and unsplit conjunctions ("candied
+    orange and lemon peel")."""
+    words = name.split()
+    return len(words) >= 5 or " or " in name or " and " in name
 
 
 def _primary_amount(parsed: ParsedIngredient) -> IngredientAmount | None:

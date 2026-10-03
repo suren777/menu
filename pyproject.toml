@@ -8,6 +8,7 @@ requires-python = ">=3.14"
 dependencies = [
     "beautifulsoup4>=4.12",
     "defusedxml>=0.7",
+    "inflect>=7.5.0",
     "ingredient-parser-nlp>=2.8.0",
     "pydantic>=2.5",
     "requests>=2.31",

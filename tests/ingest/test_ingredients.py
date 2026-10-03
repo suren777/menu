@@ -20,6 +20,7 @@ from menu.ingest.ingredients import (
 from menu.ingest.sites.bbc_good_food import BBC_GOOD_FOOD
 from menu.ingest.sites.king_arthur import KING_ARTHUR
 from menu.ingest.sites.ottolenghi import OTTOLENGHI
+from menu.ingest.sites.smitten_kitchen import SMITTEN_KITCHEN
 
 US = BBC_GOOD_FOOD.model_copy(update={"unit_system": "us"})
 
@@ -309,4 +310,27 @@ def test_ottolenghi_cached_lines_parse(case: dict[str, object]) -> None:
     lines = cast("list[str]", case["lines"])
     for line in lines:
         parsed = parse_line(line, OTTOLENGHI)
+        assert parsed.raw_text == line
+
+
+SMITTEN_KITCHEN_FIXTURE = (
+    Path(__file__).parent / "fixtures" / "smitten_kitchen_lines.json"
+)
+
+
+def _smitten_kitchen_cases() -> list[dict[str, object]]:
+    return cast(
+        "list[dict[str, object]]", json.loads(SMITTEN_KITCHEN_FIXTURE.read_text())
+    )
+
+
+@pytest.mark.parametrize(
+    "case", _smitten_kitchen_cases(), ids=lambda case: str(case["name"])
+)
+def test_smitten_kitchen_cached_lines_parse(case: dict[str, object]) -> None:
+    """The cached Smitten Kitchen pages' verbatim lines parse cleanly —
+    word quantities, prose yields and dual units included."""
+    lines = cast("list[str]", case["lines"])
+    for line in lines:
+        parsed = parse_line(line, SMITTEN_KITCHEN)
         assert parsed.raw_text == line

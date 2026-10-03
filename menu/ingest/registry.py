@@ -1,6 +1,6 @@
 """Site registry: adding a site to menu is mostly config."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -25,6 +25,10 @@ class SiteConfig(BaseModel):
     json_ld_test_id: str | None = None
     """Some sites embed their recipe JSON-LD behind a test id rather than
     a plain application/ld+json script tag."""
+    unit_system: Literal["us", "imperial", "metric"] = "us"
+    """Unit system the site's recipes are written in: decides how
+    ambiguous units (cup, pint) are interpreted when parsing ingredient
+    lines."""
 
 
 def get_site(name: str) -> SiteConfig:

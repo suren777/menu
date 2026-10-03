@@ -9,7 +9,6 @@ dependencies = [
     "beautifulsoup4>=4.12",
     "more-itertools>=10.1",
     "pydantic>=2.5",
-    "pydash>=7.0.6",
     "requests>=2.31",
     "sqlalchemy>=2.0.22",
 ]
@@ -54,11 +53,15 @@ select = [
     "E",   # pycodestyle errors
     "W",   # pycodestyle warnings
     "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
     "UP",  # pyupgrade
     "B",   # flake8-bugbear
     "SIM", # flake8-simplify
     "C4",  # flake8-comprehensions
     "RUF", # ruff-specific
+    "ARG", # flake8-unused-arguments
+    "PTH", # use pathlib instead of os
 ]
 
 [tool.mypy]

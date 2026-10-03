@@ -39,9 +39,11 @@ class RecipeUrlsRepository:
 
     @staticmethod
     def url_exists(url: str, session: Session) -> bool:
-        return session.query(
-            select(RecipeUrls).filter(RecipeUrls.url == url).exists()
-        ).scalar()
+        return bool(
+            session.query(
+                select(RecipeUrls).filter(RecipeUrls.url == url).exists()
+            ).scalar()
+        )
 
     @staticmethod
     def get_all(session: Session) -> list[RecipeUrlsModel]:
@@ -58,6 +60,8 @@ class RecipeUrlsRepository:
         ]
 
     @staticmethod
-    def add_recipe(url: str, name: str, recipe_data: dict[str, Any], session: Session):
+    def add_recipe(
+        url: str, name: str, recipe_data: dict[str, Any], session: Session
+    ) -> None:
         if not RecipeUrlsRepository.url_exists(url, session):
             session.add(RecipeUrls(url=url, name=name, data=recipe_data))

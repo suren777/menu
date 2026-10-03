@@ -1,5 +1,6 @@
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Any, Generator
+from typing import Any
 
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
@@ -18,7 +19,7 @@ def get_session(engine: Engine = engine) -> Generator[Session, Any, Any]:
 
 
 @contextmanager
-def get_ro_session(engine: Engine = engine):
+def get_ro_session(engine: Engine = engine) -> Generator[Session, None, None]:
     session = Session(engine)
     try:
         yield session

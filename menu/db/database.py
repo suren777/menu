@@ -26,5 +26,5 @@ class RecipeUrls(MyMixin, Base):
     data = Column(JSON, nullable=False)
 
 
-def initialise(db_engine: Engine = engine):
+def initialise(db_engine: Engine = engine) -> None:
     Base.metadata.create_all(db_engine)

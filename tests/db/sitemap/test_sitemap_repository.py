@@ -4,7 +4,7 @@ from menu.db.database import Sitemap
 from menu.db.sitemap.repository import SitemapRepository
 
 
-def test_from_record():
+def test_from_record() -> None:
     record = Sitemap(id=1, url="http://test.com", completed=False)
     model = SitemapRepository.from_record(record)
     assert model.id == 1
@@ -12,7 +12,7 @@ def test_from_record():
     assert not model.completed
 
 
-def test_to_record():
+def test_to_record() -> None:
     model = MagicMock()
     model.id = 1
     model.url = "http://test.com"
@@ -23,26 +23,26 @@ def test_to_record():
     assert not record.completed
 
 
-def test_find_by_url():
+def test_find_by_url() -> None:
     session = MagicMock()
     repo = SitemapRepository()
     repo.find_by_url("http://test.com", session)
     session.query.assert_called_once()
 
 
-def test_url_exists():
+def test_url_exists() -> None:
     session = MagicMock()
     SitemapRepository.url_exists("http://test.com", session)
     session.query.assert_called_once()
 
 
-def test_get_all():
+def test_get_all() -> None:
     session = MagicMock()
     SitemapRepository.get_all(session)
     session.query.assert_called_once()
 
 
-def test_get_unfinished():
+def test_get_unfinished() -> None:
     session = MagicMock()
     SitemapRepository.get_unfinished(session)
     session.query.assert_called_once()

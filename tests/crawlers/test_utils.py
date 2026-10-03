@@ -18,7 +18,7 @@ from menu.crawlers.bbc_good_food.utils import (
 
 
 @patch("requests.get")
-def test_request_xml_ok(mock_get):
+def test_request_xml_ok(mock_get: MagicMock) -> None:
     mock_response = MagicMock()
     mock_response.ok = True
     mock_response.content = b'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>http://test.com</loc></url></urlset>'
@@ -29,7 +29,7 @@ def test_request_xml_ok(mock_get):
 
 
 @patch("requests.get")
-def test_request_xml_fail(mock_get):
+def test_request_xml_fail(mock_get: MagicMock) -> None:
     mock_response = MagicMock()
     mock_response.ok = False
     mock_get.return_value = mock_response
@@ -38,7 +38,7 @@ def test_request_xml_fail(mock_get):
         request_xml("http://test.com/sitemap.xml")
 
 
-def test_get_sitemap():
+def test_get_sitemap() -> None:
     with patch(
         "menu.crawlers.bbc_good_food.utils.request_xml",
         return_value=["http://test.com"],
@@ -48,18 +48,18 @@ def test_get_sitemap():
         mock_request_xml.assert_called_once_with("http://test.com/sitemap.xml")
 
 
-def test_contains_recipe():
-    html_with_recipe = '<html><body><ul class="breadcrumb__list body-copy-extra-small oflow-x-auto list"><li>Home</li><li>Recipes</li><li>Dessert</li></ul></body></html>'
+def test_contains_recipe() -> None:
+    html_with_recipe = '<html><body><ul class="breadcrumb__list body-copy-extra-small oflow-x-auto list"><li>Home</li><li>Recipes</li><li>Dessert</li></ul></body></html>'  # noqa: E501
     soup_with_recipe = BeautifulSoup(html_with_recipe, "html.parser")
     assert contains_recipe(soup_with_recipe)
 
-    html_without_recipe = '<html><body><ul class="breadcrumb__list body-copy-extra-small oflow-x-auto list"><li>Home</li><li>Recipes</li><li>Collection</li></ul></body></html>'
+    html_without_recipe = '<html><body><ul class="breadcrumb__list body-copy-extra-small oflow-x-auto list"><li>Home</li><li>Recipes</li><li>Collection</li></ul></body></html>'  # noqa: E501
     soup_without_recipe = BeautifulSoup(html_without_recipe, "html.parser")
     assert not contains_recipe(soup_without_recipe)
 
 
 @patch("requests.get")
-def test_fetch_recipe(mock_get):
+def test_fetch_recipe(mock_get: MagicMock) -> None:
     mock_response = MagicMock()
     mock_response.content = b"<html><body><h1>Test Recipe</h1></body></html>"
     mock_get.return_value = mock_response
@@ -68,22 +68,22 @@ def test_fetch_recipe(mock_get):
     assert "Test Recipe" in str(result)
 
 
-def test_parse_keywords():
+def test_parse_keywords() -> None:
     assert parse_keywords("one, two, three") == ["one", "two", "three"]
 
 
-def test_parse_image():
+def test_parse_image() -> None:
     assert (
         parse_image({"url": "http://test.com/image.jpg"}) == "http://test.com/image.jpg"
     )
 
 
-def test_strip_and_cast():
+def test_strip_and_cast() -> None:
     assert strip_and_cast("10 grams", " grams") == "10"
     assert strip_and_cast(None, " grams") is None
 
 
-def test_parce_nutrition():
+def test_parce_nutrition() -> None:
     nutrition_data = {
         "nutrition": {
             "calories": "100 calories",
@@ -100,7 +100,7 @@ def test_parce_nutrition():
     assert nutrition["calories"] == "100"
 
 
-def test_parce_recipe():
+def test_parce_recipe() -> None:
     recipe_data = {
         "name": "Test Recipe",
         "description": "A test recipe",

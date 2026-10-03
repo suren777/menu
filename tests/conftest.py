@@ -12,7 +12,7 @@ from menu.db.database import initialise
 test_engine = create_engine("sqlite:///:memory:", echo=True)
 
 
-def pytest_configure():
+def pytest_configure() -> None:
     """Initialise the database for tests."""
     initialise(test_engine)
 

@@ -1,8 +1,6 @@
 import json
 from multiprocessing import Pool
 
-from pydantic import BaseModel
-
 from menu.crawlers.bbc_good_food.const import BBC_JSON_TEST_ID, BBC_SITEMAP
 from menu.crawlers.bbc_good_food.utils import (
     contains_recipe,
@@ -17,12 +15,7 @@ from menu.db.sitemap.actions import finalise_sitemap
 from menu.db.sitemap.repository import SitemapRepository
 
 
-class Crawler(BaseModel):
-    def __init__(self, url: str):
-        self.url = url
-
-
-def import_sitemap():
+def import_sitemap() -> None:
     sitemap = get_sitemap(BBC_SITEMAP)
 
     with get_session() as session:

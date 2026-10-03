@@ -5,7 +5,7 @@ from menu.db.recipie_urls.actions import add_recipe
 
 @patch("menu.db.recipie_urls.actions.get_session")
 @patch("menu.db.recipie_urls.actions.RecipeUrlsRepository")
-def test_add_recipe(mock_repo, mock_get_session):
+def test_add_recipe(mock_repo: MagicMock, mock_get_session: MagicMock) -> None:
     mock_session = MagicMock()
     mock_get_session.return_value.__enter__.return_value = mock_session
     recipe_data = {"key": "value"}

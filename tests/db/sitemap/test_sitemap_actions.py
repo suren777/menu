@@ -4,7 +4,7 @@ from menu.db.sitemap.actions import finalise_sitemap
 
 
 @patch("menu.db.sitemap.actions.get_session")
-def test_finalise_sitemap(mock_get_session):
+def test_finalise_sitemap(mock_get_session: MagicMock) -> None:
     mock_session = MagicMock()
     mock_query = MagicMock()
     mock_session.query.return_value = mock_query

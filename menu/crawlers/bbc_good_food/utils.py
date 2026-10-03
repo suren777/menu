@@ -53,7 +53,7 @@ def parse_keywords(keywords: str) -> list[str]:
 
 
 def parse_image(img: dict[str, Any]) -> str:
-    return img["url"]
+    return str(img["url"])
 
 
 def strip_and_cast(original: str | None, strip: str) -> str | None:
@@ -62,7 +62,7 @@ def strip_and_cast(original: str | None, strip: str) -> str | None:
     return None
 
 
-def parce_nutrition(nutrition: dict[str, str]) -> Nutrition:
+def parce_nutrition(nutrition: dict[str, Any]) -> Nutrition:
     calories: str | None = get(nutrition, f"{RecipeKeys.NUTRITION}.calories")
     fat: str | None = get(nutrition, f"{RecipeKeys.NUTRITION}.fatContent")
     saturated_fat: str | None = get(

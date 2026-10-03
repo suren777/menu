@@ -32,9 +32,9 @@ class SitemapRepository:
 
     @staticmethod
     def url_exists(url: str, session: Session) -> bool:
-        return session.query(
-            select(Sitemap).filter(Sitemap.url == url).exists()
-        ).scalar()
+        return bool(
+            session.query(select(Sitemap).filter(Sitemap.url == url).exists()).scalar()
+        )
 
     @staticmethod
     def get_all(session: Session) -> list[SitemapModel]:

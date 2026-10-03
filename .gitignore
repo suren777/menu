@@ -162,14 +162,6 @@ cython_debug/
 .venv
 .vscode
 .DS_Store
-.gitignore
-test.py
+.cache/
 menu/db/database.db
-menu/const.py
-menu/cloud_fn_app.py
-menu/get_webhook_url.py
-deploy.sh
-Procfile
-poetry.lock
-requirements.txt
 GEMINI.md

@@ -1,45 +1,68 @@
-# Menu Project
+# Menu — recipe sourcing lab
 
-## Overview
-This project is designed to create a dynamic and interactive weekly menu for a home and to reduce food waste. The menu will be easy to update and manage, providing a seamless experience for the family. The tool will help the family optimize their shopping and have tasty, nutritious meals throughout the week.
+Menu is where recipe **sourcing** is developed and experimented with:
+discovering recipe URLs, fetching pages politely, and extracting recipe
+data from them. Code that works here graduates to
+[food-guru](https://github.com/surenislyaev/food-guru)'s
+`backend/app/ingest/` with minimal rework — which is why the module
+layout, tooling and code style deliberately match food-guru's.
 
-## Features
-- **Dynamic Menu:** Easily add, remove, or update menu items.
-- **Interactive UI:** User-friendly interface for browsing the menu.
-- **Responsive Design:** Works on both desktop and mobile devices.
-- **Category Management:** Organize items into categories for easy navigation.
-- **Search Functionality:** Quickly find items using the search feature.
+There is no bot, no REST API and no deployment here. Menu is a lab, not
+a service.
 
-## Installation
-To get started with the project, clone the repository and install the necessary dependencies:
+## How it works
 
-```bash
-git clone https://github.com/yourusername/menu.git
-cd menu
-npm install
-```
+The ingest pipeline lives in `menu/ingest/` and runs four stages:
+
+1. **Discover** — `discover.py` walks a site's sitemaps to find
+   candidate recipe URLs, filtering them with the site's URL pattern.
+2. **Fetch** — `fetch.py` downloads pages with a disk cache (`.cache/`)
+   so repeat runs don't hit the sites again, and respects a per-site
+   politeness delay between requests.
+3. **Extract** — `extract.py` pulls recipe data out of pages. JSON-LD
+   (`application/ld+json`, including `@graph` documents) is the primary
+   source; sites that embed their schema behind a test-id script tag
+   (like BBC Good Food's `page-schema`) are handled via the site config.
+4. **Store** — results land in a local SQLite database (`menu/db/`).
+   This is **scratch storage for experiments only, never the source of
+   truth** — food-guru owns the real data model.
+
+Adding a site is mostly config: add a frozen `SiteConfig` entry in
+`menu/ingest/sites/`, plus a site-specific helper or two if the site
+needs a non-standard extraction path. BBC Good Food is the first entry.
 
 ## Usage
-To run the project locally, use the following command:
 
 ```bash
-npm start
+uv sync                                  # install dependencies
+uv run python -m menu.ingest bbc_good_food   # run the full pipeline
 ```
 
-Open your browser and navigate to `http://localhost:3000` to view the menu.
+Useful during development: `uv run pytest`, `uv run mypy menu tests`,
+`uv run ruff check .`.
 
-## Contributing
-We welcome contributions to the project. Please follow these steps to contribute:
+## Tooling (kept in lockstep with food-guru)
 
-1. Fork the repository.
-2. Create a new branch (`git checkout -b feature-branch`).
-3. Make your changes.
-4. Commit your changes (`git commit -m 'Add new feature'`).
-5. Push to the branch (`git push origin feature-branch`).
-6. Create a pull request.
+- `uv` for package management, Python 3.11+
+- Pydantic v2, SQLAlchemy 2
+- `ruff` for linting, `black` + `isort` for formatting
+- strict `mypy`
 
-## License
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for more details.
+## The old database
 
-## Contact
-For any questions or suggestions, please open an issue or contact us at [email@example.com](mailto:email@example.com).
+`menu/db/database.db` (~14.7k cleaned BBC Good Food recipes) is kept on
+disk but gitignored. It's useful for checking whether a new extractor
+produces the same results as the old one. Nothing new should be built
+on top of its schema — port code to food-guru's models instead.
+
+## Moving code to food-guru
+
+Code here is written to be copy-and-adjust, not rewritten:
+
+- Same stage names as food-guru's ingest (`discover`, `fetch`,
+  `extract`) and same tooling, so a module moves over with little more
+  than an import-path change.
+- Site-specific logic is isolated in `menu/ingest/sites/`, so the
+  generic pipeline modules move over without site baggage.
+- The SQLite scratch store is intentionally throwaway — anything that
+  matters belongs in food-guru's data layer.

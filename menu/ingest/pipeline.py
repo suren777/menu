@@ -49,13 +49,22 @@ class CrawlReport:
 
 
 def import_sitemap(site: SiteConfig, sitemap_url: str | None = None) -> None:
-    """Store the sitemap's URLs in the scratch database, ready to crawl."""
-    urls = request_xml(sitemap_url or site.sitemap_url)
+    """Store the sitemap's URLs in the scratch database, ready to crawl.
+
+    A sitemap index stores its children — the sub-sitemaps to crawl.
+    A plain urlset stores the sitemap URL itself as the single row, so
+    process_sitemap reads its page URLs as normal.
+    """
+    urls = [sitemap_url] if sitemap_url else list(site.sitemap_urls)
 
     with get_session() as session:
         for url in urls:
-            if not url_exists(url, site.name, session):
-                session.add(Sitemap(url=url, site=site.name))
+            kind, locs = request_xml(url)
+            if kind == "urlset":
+                locs = [url]
+            for loc in locs:
+                if not url_exists(loc, site.name, session):
+                    session.add(Sitemap(url=loc, site=site.name))
 
 
 def process_url(url: str, site: SiteConfig) -> bool:

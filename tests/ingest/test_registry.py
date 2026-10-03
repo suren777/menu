@@ -20,7 +20,9 @@ def test_site_config_is_frozen() -> None:
 
 
 def test_site_config_defaults() -> None:
-    site = SiteConfig(name="x", base_url="https://x.com", sitemap_url="https://x.com/s")
+    site = SiteConfig(
+        name="x", base_url="https://x.com", sitemap_urls=("https://x.com/s",)
+    )
     assert site.politeness_delay == 1.0
     assert site.url_pattern is None
     assert site.json_ld_test_id is None

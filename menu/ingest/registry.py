@@ -16,8 +16,8 @@ class SiteConfig(BaseModel):
 
     name: str
     base_url: str
-    sitemap_url: str
-    """Top-level sitemap to start discovery from."""
+    sitemap_urls: tuple[str, ...]
+    """Top-level sitemaps to start discovery from: indexes or plain urlsets."""
     url_pattern: str | None = None
     """Optional regex; only matching URLs are treated as recipe pages."""
     politeness_delay: Annotated[float, Field(ge=0)] = 1.0

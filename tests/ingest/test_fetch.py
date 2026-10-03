@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 SITE = SiteConfig(
     name="test",
     base_url="https://test.com",
-    sitemap_url="https://test.com/sitemap.xml",
+    sitemap_urls=("https://test.com/sitemap.xml",),
     politeness_delay=0.0,
 )
 

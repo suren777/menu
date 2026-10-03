@@ -79,6 +79,6 @@ def test_extract_recipe_data_falls_back_to_json_ld() -> None:
 
 
 def test_extract_recipe_data_none_when_absent() -> None:
-    site = SiteConfig(name="x", base_url="u", sitemap_url="s")
+    site = SiteConfig(name="x", base_url="u", sitemap_urls=("s",))
     soup = BeautifulSoup("<html><body>no data</body></html>", "html.parser")
     assert extract_recipe_data(site, soup) is None

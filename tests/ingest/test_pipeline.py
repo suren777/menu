@@ -19,7 +19,7 @@ from menu.ingest.sites.bbc_good_food import BBC_GOOD_FOOD
 SITE = SiteConfig(
     name="test",
     base_url="https://test.com",
-    sitemap_url="https://test.com/sitemap.xml",
+    sitemap_urls=("https://test.com/sitemap.xml",),
 )
 
 
@@ -34,13 +34,38 @@ def test_import_sitemap(
     mock_get_session.return_value.__enter__.return_value = mock_session
 
     with patch("menu.ingest.pipeline.request_xml") as mock_request_xml:
-        mock_request_xml.return_value = ["https://test.com/sitemap1"]
+        mock_request_xml.return_value = (
+            "sitemapindex",
+            ["https://test.com/sitemap1"],
+        )
         import_sitemap(SITE)
 
     mock_url_exists.assert_called_once_with(
         "https://test.com/sitemap1", SITE.name, mock_session
     )
     mock_session.add.assert_called_once()
+
+
+@patch("menu.ingest.pipeline.get_session")
+@patch("menu.ingest.pipeline.url_exists")
+def test_import_sitemap_urlset_stores_the_sitemap_itself(
+    mock_url_exists: MagicMock,
+    mock_get_session: MagicMock,
+) -> None:
+    mock_url_exists.return_value = False
+    mock_session = MagicMock()
+    mock_get_session.return_value.__enter__.return_value = mock_session
+
+    with patch("menu.ingest.pipeline.request_xml") as mock_request_xml:
+        mock_request_xml.return_value = (
+            "urlset",
+            ["https://test.com/recipes/a", "https://test.com/recipes/b"],
+        )
+        import_sitemap(SITE)
+
+    mock_session.add.assert_called_once()
+    added = mock_session.add.call_args.args[0]
+    assert added.url == "https://test.com/sitemap.xml"
 
 
 @patch("menu.ingest.pipeline.store_recipe_ingredients")

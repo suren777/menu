@@ -10,7 +10,7 @@ from menu.ingest.sites.bbc_good_food import BBC_GOOD_FOOD
 SITE = SiteConfig(
     name="test",
     base_url="https://test.com",
-    sitemap_url="https://test.com/sitemap.xml",
+    sitemap_urls=("https://test.com/sitemap.xml",),
 )
 
 
@@ -21,7 +21,10 @@ def test_request_xml_ok(mock_get: MagicMock) -> None:
     mock_response.content = b'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>http://test.com</loc></url></urlset>'
     mock_get.return_value = mock_response
 
-    assert request_xml("https://test.com/sitemap.xml") == ["http://test.com"]
+    assert request_xml("https://test.com/sitemap.xml") == (
+        "urlset",
+        ["http://test.com"],
+    )
 
 
 @patch("menu.ingest.discover.session.get")
@@ -36,10 +39,13 @@ def test_request_xml_sitemap_index(mock_get: MagicMock) -> None:
     )
     mock_get.return_value = mock_response
 
-    assert request_xml("https://test.com/sitemap.xml") == [
-        "https://test.com/recipes-1.xml",
-        "https://test.com/recipes-2.xml",
-    ]
+    assert request_xml("https://test.com/sitemap.xml") == (
+        "sitemapindex",
+        [
+            "https://test.com/recipes-1.xml",
+            "https://test.com/recipes-2.xml",
+        ],
+    )
 
 
 @patch("menu.ingest.discover.session.get")
@@ -85,5 +91,5 @@ def test_discover_urls_without_pattern_yields_all(mock_get: MagicMock) -> None:
 
 
 def test_bbc_site_config() -> None:
-    assert BBC_GOOD_FOOD.sitemap_url == "https://www.bbcgoodfood.com/sitemap.xml"
+    assert BBC_GOOD_FOOD.sitemap_urls == ("https://www.bbcgoodfood.com/sitemap.xml",)
     assert BBC_GOOD_FOOD.json_ld_test_id == "page-schema"

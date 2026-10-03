@@ -7,11 +7,13 @@ menu only stores the raw data.
 """
 
 import json
-from typing import Any
+from collections import deque
+from typing import TYPE_CHECKING, Any
 
-from bs4 import BeautifulSoup
+if TYPE_CHECKING:
+    from bs4 import BeautifulSoup
 
-from menu.ingest.registry import SiteConfig
+    from menu.ingest.registry import SiteConfig
 
 JSON_LD_TYPE = "application/ld+json"
 
@@ -34,9 +36,9 @@ def extract_json_ld(soup: BeautifulSoup) -> list[dict[str, Any]]:
             data = json.loads(script.string or "")
         except json.JSONDecodeError, TypeError:
             continue
-        queue = data if isinstance(data, list) else [data]
+        queue = deque(data if isinstance(data, list) else [data])
         while queue:
-            node = queue.pop(0)
+            node = queue.popleft()
             if not isinstance(node, dict):
                 continue
             if isinstance(node.get("@graph"), list):

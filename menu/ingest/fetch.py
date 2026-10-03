@@ -1,20 +1,26 @@
 """Fetch pages with a disk cache and per-site politeness delays.
 
 Repeat runs read from the cache instead of hitting the sites again;
-the cache lives under .cache/ (gitignored) and is safe to delete.
+the cache lives in .cache/ at the project root (gitignored) and is
+safe to delete.
 """
 
 import hashlib
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import requests
 from bs4 import BeautifulSoup
 
 from menu.ingest.errors import FetchError
-from menu.ingest.registry import SiteConfig
+from menu.ingest.http import session
 
-DEFAULT_CACHE_DIR = Path(".cache")
+if TYPE_CHECKING:
+    from menu.ingest.registry import SiteConfig
+
+# Anchored to the project root so the cache doesn't depend on the
+# directory the crawl is started from.
+DEFAULT_CACHE_DIR = Path(__file__).resolve().parents[2] / ".cache"
 
 
 class _Politeness:
@@ -50,7 +56,7 @@ def fetch_page(
         return path.read_bytes()
 
     _politeness.wait(site.base_url, site.politeness_delay)
-    response = requests.get(url, timeout=10)
+    response = session.get(url, timeout=10)
     if not response.ok:
         raise FetchError(f"Can't fetch {url!r}")
 

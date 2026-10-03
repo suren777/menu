@@ -1,15 +1,17 @@
 """Discovery: find candidate recipe URLs per site via sitemaps."""
 
 import re
-from collections.abc import Iterator
-from xml.etree import ElementTree
+from typing import TYPE_CHECKING
 
-import requests
+from defusedxml.ElementTree import fromstring
 
 from menu.ingest.errors import FetchError
-from menu.ingest.registry import SiteConfig
+from menu.ingest.http import session
 
-SITEMAP_NAMESPACE = {"sitemap": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    from menu.ingest.registry import SiteConfig
 
 
 def request_xml(url: str) -> list[str]:
@@ -18,11 +20,11 @@ def request_xml(url: str) -> list[str]:
     Handles both plain urlsets (<url><loc>) and sitemap indexes
     (<sitemap><loc>), matching food-guru's _urls_from_xml.
     """
-    response = requests.get(url, timeout=10)
+    response = session.get(url, timeout=10)
     if not response.ok:
         raise FetchError(f"Can't fetch {url!r}")
 
-    tree = ElementTree.fromstring(response.content)
+    tree = fromstring(response.content)
     return [
         child.text
         for child in tree.iter()

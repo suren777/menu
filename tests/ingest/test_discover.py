@@ -1,5 +1,7 @@
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from menu.ingest.discover import discover_urls, request_xml
 from menu.ingest.errors import FetchError
 from menu.ingest.registry import SiteConfig
@@ -12,7 +14,7 @@ SITE = SiteConfig(
 )
 
 
-@patch("menu.ingest.discover.requests.get")
+@patch("menu.ingest.discover.session.get")
 def test_request_xml_ok(mock_get: MagicMock) -> None:
     mock_response = MagicMock()
     mock_response.ok = True
@@ -22,7 +24,7 @@ def test_request_xml_ok(mock_get: MagicMock) -> None:
     assert request_xml("https://test.com/sitemap.xml") == ["http://test.com"]
 
 
-@patch("menu.ingest.discover.requests.get")
+@patch("menu.ingest.discover.session.get")
 def test_request_xml_sitemap_index(mock_get: MagicMock) -> None:
     mock_response = MagicMock()
     mock_response.ok = True
@@ -40,21 +42,17 @@ def test_request_xml_sitemap_index(mock_get: MagicMock) -> None:
     ]
 
 
-@patch("menu.ingest.discover.requests.get")
+@patch("menu.ingest.discover.session.get")
 def test_request_xml_fail(mock_get: MagicMock) -> None:
     mock_response = MagicMock()
     mock_response.ok = False
     mock_get.return_value = mock_response
 
-    try:
+    with pytest.raises(FetchError, match="Can't fetch"):
         request_xml("https://test.com/sitemap.xml")
-    except FetchError:
-        pass
-    else:
-        raise AssertionError("expected FetchError")
 
 
-@patch("menu.ingest.discover.requests.get")
+@patch("menu.ingest.discover.session.get")
 def test_discover_urls_filters_by_pattern(mock_get: MagicMock) -> None:
     mock_response = MagicMock()
     mock_response.ok = True
@@ -71,7 +69,7 @@ def test_discover_urls_filters_by_pattern(mock_get: MagicMock) -> None:
     assert list(discover_urls(site)) == ["https://test.com/recipes/cake"]
 
 
-@patch("menu.ingest.discover.requests.get")
+@patch("menu.ingest.discover.session.get")
 def test_discover_urls_without_pattern_yields_all(mock_get: MagicMock) -> None:
     mock_response = MagicMock()
     mock_response.ok = True

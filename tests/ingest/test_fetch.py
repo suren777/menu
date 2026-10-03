@@ -1,8 +1,11 @@
-from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, call, patch
 
 from menu.ingest.fetch import _cache_path, fetch_page, fetch_recipe
 from menu.ingest.registry import SiteConfig
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 SITE = SiteConfig(
     name="test",
@@ -12,7 +15,7 @@ SITE = SiteConfig(
 )
 
 
-@patch("menu.ingest.fetch.requests.get")
+@patch("menu.ingest.fetch.session.get")
 def test_fetch_page_caches_to_disk(mock_get: MagicMock, tmp_path: Path) -> None:
     mock_response = MagicMock()
     mock_response.ok = True
@@ -33,7 +36,7 @@ def test_fetch_page_caches_to_disk(mock_get: MagicMock, tmp_path: Path) -> None:
     mock_get.assert_not_called()
 
 
-@patch("menu.ingest.fetch.requests.get")
+@patch("menu.ingest.fetch.session.get")
 def test_fetch_page_bypasses_cache_when_disabled(
     mock_get: MagicMock, tmp_path: Path
 ) -> None:
@@ -48,7 +51,7 @@ def test_fetch_page_bypasses_cache_when_disabled(
 
 
 @patch("menu.ingest.fetch._politeness.wait")
-@patch("menu.ingest.fetch.requests.get")
+@patch("menu.ingest.fetch.session.get")
 def test_fetch_recipe_parses_html(
     mock_get: MagicMock, mock_wait: MagicMock, tmp_path: Path
 ) -> None:

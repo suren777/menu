@@ -39,14 +39,16 @@ def _page_with_script(
 def test_extract_json_ld_finds_recipe() -> None:
     soup = _page_with_script({"type": "application/ld+json"}, JSON_LD_RECIPE)
     recipe = extract_json_ld_recipe(soup)
-    assert recipe is not None and recipe["name"] == "Test Recipe"
+    assert recipe is not None
+    assert recipe["name"] == "Test Recipe"
 
 
 def test_extract_json_ld_follows_graph() -> None:
     wrapped = {"@context": "https://schema.org", "@graph": [JSON_LD_RECIPE]}
     soup = _page_with_script({"type": "application/ld+json"}, wrapped)
     recipe = extract_json_ld_recipe(soup)
-    assert recipe is not None and recipe["name"] == "Test Recipe"
+    assert recipe is not None
+    assert recipe["name"] == "Test Recipe"
 
 
 def test_extract_json_ld_ignores_non_recipe() -> None:
@@ -72,7 +74,8 @@ def test_extract_recipe_data_ignores_non_recipe_test_id_script() -> None:
 def test_extract_recipe_data_falls_back_to_json_ld() -> None:
     soup = _page_with_script({"type": "application/ld+json"}, JSON_LD_RECIPE)
     data = extract_recipe_data(BBC_GOOD_FOOD, soup)
-    assert data is not None and data["name"] == "Test Recipe"
+    assert data is not None
+    assert data["name"] == "Test Recipe"
 
 
 def test_extract_recipe_data_none_when_absent() -> None:

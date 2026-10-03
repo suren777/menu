@@ -1,7 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 from menu.db.database import RecipeUrls
-from menu.db.recipie_urls.repository import RecipeUrlsRepository
+from menu.db.recipe_urls.repository import RecipeUrlsRepository
 
 
 def test_from_record() -> None:

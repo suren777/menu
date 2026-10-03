@@ -14,7 +14,7 @@ from multiprocessing import Pool
 
 from menu.db.connection import get_session
 from menu.db.database import Sitemap, initialise
-from menu.db.recipie_urls.actions import add_recipe
+from menu.db.recipe_urls.actions import add_recipe
 from menu.db.sitemap.actions import finalise_sitemap
 from menu.db.sitemap.repository import SitemapRepository
 from menu.ingest.discover import discover_urls, request_xml

@@ -29,6 +29,9 @@ class SiteConfig(BaseModel):
     """Unit system the site's recipes are written in: decides how
     ambiguous units (cup, pint) are interpreted when parsing ingredient
     lines."""
+    nutrition_sources: tuple[str, ...] = ("fdc",)
+    """Preferred order of reference sources for nutrition values: the
+    first source with a confirmed food for the ingredient wins."""
 
 
 def get_site(name: str) -> SiteConfig:

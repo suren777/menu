@@ -53,17 +53,39 @@ class Ingredient(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(nullable=False, unique=True)
     """Canonical, singular, lowercase: "milk"."""
-    fdc_id: Mapped[int | None]
-    """USDA FoodData Central id when the parser matched one."""
-    fdc_id_confirmed: Mapped[bool] = mapped_column(default=False)
-    """True only for hand-seeded FDC_IDS mappings (seed.py). The
-    parser's fdc_id is a suggestion — often wrong — so only confirmed
-    mappings feed nutrition."""
     density_g_per_ml: Mapped[float | None]
-    """Enables volume<->mass conversion. Hand-seeded: USDA FoodData
-    Central has no directly usable density."""
+    """Enables volume<->mass conversion. Hand-seeded; derived from the
+    reference data when no seed exists."""
     unit_weight_g: Mapped[float | None]
     """Per-item weight for count->mass conversion (egg ~= 50 g)."""
+
+
+class IngredientFoodRef(Base):
+    """A canonical ingredient mapped to a reference food.
+
+    Hand-seeded mappings (seed.FOOD_REFS) are confirmed, with the role
+    the reference serves: conversion (portion weights) or nutrition
+    (per-100g values). One ingredient can hold one confirmed reference
+    per role. The parser's own suggestion seeds an unconfirmed
+    candidate row (role NULL) — candidates feed the --ref-review
+    report, never conversion or nutrition.
+    """
+
+    __tablename__ = "ingredient_food_ref"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ingredient_id: Mapped[int] = mapped_column(
+        ForeignKey("ingredient.id"), nullable=False
+    )
+    ref_food_id: Mapped[int] = mapped_column(
+        ForeignKey("ref_food.id"), nullable=False
+    )
+    role: Mapped[str | None]
+    """'conversion' | 'nutrition'; NULL for unconfirmed parser
+    candidates, which are suggestions for either use."""
+    confirmed: Mapped[bool] = mapped_column(default=False)
+
+    __table_args__ = (Index("ix_ingredient_food_ref_ingredient", "ingredient_id"),)
 
 
 class IngredientAlias(Base):

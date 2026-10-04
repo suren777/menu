@@ -19,8 +19,8 @@ from menu.db.connection import get_session
 from menu.db.database import RecipeUrls, Sitemap, initialise
 from menu.db.ingredients.actions import (
     fdc_id_conflicts,
-    fdc_review,
     prune_orphan_ingredients,
+    ref_review,
     store_recipe_ingredients,
 )
 from menu.db.ingredients.seed import seed_ingredient_data
@@ -219,14 +219,14 @@ def main() -> None:
     parser.add_argument(
         "--fdc-report",
         action="store_true",
-        help="list canonical ingredients sharing an fdc_id with no "
-        "alias between them (candidates to hand-seed), then exit",
+        help="list canonical ingredients sharing a reference food with "
+        "no alias between them (candidates to hand-seed), then exit",
     )
     parser.add_argument(
-        "--fdc-review",
+        "--ref-review",
         action="store_true",
-        help="list the top unconfirmed fdc_id mappings by ingredient "
-        "line count, then exit",
+        help="list the top ingredients without a confirmed reference "
+        "by ingredient line count, then exit",
     )
     args = parser.parse_args()
 
@@ -234,22 +234,22 @@ def main() -> None:
     initialise()
     # Seed before parsing or reparsing: the aliases decide canonical
     # resolution, so a fresh database must not parse unseeded. The
-    # fdc-review report reads the same state — unconfirmed there means
+    # ref-review report reads the same state — unconfirmed there means
     # unseeded.
     with get_session() as session:
         seed_ingredient_data(session)
     if args.fdc_report:
-        for fdc_id, names in fdc_id_conflicts():
-            print(f"fdc_id {fdc_id}: {', '.join(names)}")
+        for food, names in fdc_id_conflicts():
+            print(f"{food}: {', '.join(names)}")
         return
-    if args.fdc_review:
-        for count, name, candidate_id, description in fdc_review():
-            candidate = (
-                f"parser candidate fdc_id {candidate_id}: {description}"
-                if candidate_id is not None
-                else "no parser candidate"
-            )
-            print(f"{count:5d}  {name}: {candidate}")
+    if args.ref_review:
+        for count, name, candidate, matches in ref_review():
+            head = f"{count:5d}  {name}:"
+            if candidate is not None:
+                head += f" parser candidate: {candidate}"
+            else:
+                head += " no parser candidate"
+            print(" | ".join([head, *matches]))
         return
     if args.reparse:
         reparse_site(site)

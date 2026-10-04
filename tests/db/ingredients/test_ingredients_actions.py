@@ -12,6 +12,7 @@ from menu.db.database import (
     FoodSource,
     Ingredient,
     IngredientAlias,
+    IngredientFoodRef,
     RecipeIngredient,
     RecipeUrls,
     RefFood,
@@ -380,7 +381,7 @@ def test_seeded_alias_rescues_lost_conjunction() -> None:
     """A seeded alias wins over the lost-conjunction heuristic, like it
     does over the mangled-name one."""
     with get_session() as session:
-        ingredient = Ingredient(name="food colouring gel", fdc_id=None)
+        ingredient = Ingredient(name="food colouring gel")
         session.add(ingredient)
         session.flush()
         session.add(
@@ -409,38 +410,72 @@ def test_seeded_alias_rescues_lost_conjunction() -> None:
 
 @pytest.mark.usefixtures("db_engine")
 def test_fdc_id_conflicts_reported_not_merged() -> None:
-    """Canonical ingredients sharing an fdc_id with no alias between
-    them are reported as hand-seeding candidates; a group the seed
-    already linked and single-member groups are not."""
+    """Canonical ingredients sharing an unconfirmed candidate
+    reference food with no alias between them are reported as
+    hand-seeding candidates; a group the seed already linked and
+    single-member groups are not."""
     with get_session() as session:
+        source = FoodSource(
+            name="fdc",
+            version="test",
+            licence="public domain",
+            citation="test",
+        )
+        session.add(source)
+        session.flush()
+        extract = RefFood(
+            source_id=source.id,
+            source_food_id="12756",
+            description="Almond, vanilla and rosewater extract",
+        )
+        butter_food = RefFood(
+            source_id=source.id,
+            source_food_id="173430",
+            description="Butter, without salt",
+        )
+        session.add_all([extract, butter_food])
+        session.flush()
+        almond = Ingredient(name="almond")
+        vanilla = Ingredient(name="vanilla")
+        rosewater = Ingredient(name="rosewater")
+        butter = Ingredient(name="butter")
+        session.add_all([almond, vanilla, rosewater, butter])
+        session.flush()
         session.add_all(
             [
-                Ingredient(name="almond", fdc_id=12756),
-                Ingredient(name="vanilla", fdc_id=12756),
-                Ingredient(name="rosewater", fdc_id=12756),
-                Ingredient(name="butter", fdc_id=173430),
+                IngredientFoodRef(ingredient_id=almond.id, ref_food_id=extract.id),
+                IngredientFoodRef(ingredient_id=vanilla.id, ref_food_id=extract.id),
+                IngredientFoodRef(
+                    ingredient_id=rosewater.id, ref_food_id=extract.id
+                ),
+                IngredientFoodRef(
+                    ingredient_id=butter.id, ref_food_id=butter_food.id
+                ),
             ]
         )
 
     assert actions.fdc_id_conflicts() == [
-        (12756, ["almond", "rosewater", "vanilla"])
+        (
+            "Almond, vanilla and rosewater extract",
+            ["almond", "rosewater", "vanilla"],
+        )
     ]
 
     with get_session() as session:
-        almond = session.scalars(
+        record = session.scalars(
             select(Ingredient).where(Ingredient.name == "almond")
         ).first()
-        assert almond is not None
-        session.add(IngredientAlias(alias="vanilla", ingredient_id=almond.id))
+        assert record is not None
+        session.add(IngredientAlias(alias="vanilla", ingredient_id=record.id))
 
     # The curated alias links the pair, so the group is no longer a conflict.
     assert actions.fdc_id_conflicts() == []
 
 
 @pytest.mark.usefixtures("db_engine")
-def test_fdc_review_lists_unconfirmed() -> None:
-    """The review report lists unconfirmed ingredients by line count
-    with the parser candidate and its FDC description; confirmed
+def test_ref_review_lists_unconfirmed() -> None:
+    """The review report lists ingredients without a confirmed
+    reference by line count, with the parser candidate; confirmed
     seeds are excluded."""
     recipe_id = add_recipe("https://x/cake")
     with get_session() as session:
@@ -452,17 +487,33 @@ def test_fdc_review_lists_unconfirmed() -> None:
         )
         session.add(source)
         session.flush()
-        session.add(
-            RefFood(
-                source_id=source.id,
-                source_food_id="171287",
-                description="Egg, whole, raw, fresh",
-            )
+        egg_food = RefFood(
+            source_id=source.id,
+            source_food_id="171287",
+            description="Egg, whole, raw, fresh",
         )
-        egg = Ingredient(name="egg", fdc_id=171287, fdc_id_confirmed=True)
-        mystery = Ingredient(name="mystery powder", fdc_id=167806)
+        baobab = RefFood(
+            source_id=source.id,
+            source_food_id="167806",
+            description="Baobab powder",
+        )
+        session.add_all([egg_food, baobab])
+        session.flush()
+        egg = Ingredient(name="egg")
+        mystery = Ingredient(name="mystery powder")
         session.add_all([egg, mystery])
         session.flush()
+        session.add(
+            IngredientFoodRef(
+                ingredient_id=egg.id,
+                ref_food_id=egg_food.id,
+                role="nutrition",
+                confirmed=True,
+            )
+        )
+        session.add(
+            IngredientFoodRef(ingredient_id=mystery.id, ref_food_id=baobab.id)
+        )
         session.add_all(
             [
                 RecipeIngredient(
@@ -486,7 +537,7 @@ def test_fdc_review_lists_unconfirmed() -> None:
             ]
         )
 
-    assert actions.fdc_review() == [(2, "mystery powder", 167806, None)]
+    assert actions.ref_review() == [(2, "mystery powder", "Baobab powder", ())]
 
 
 @pytest.mark.usefixtures("db_engine")

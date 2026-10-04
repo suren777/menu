@@ -13,4 +13,5 @@ BBC_GOOD_FOOD = SiteConfig(
     politeness_delay=1.0,
     json_ld_test_id=BBC_JSON_TEST_ID,
     unit_system="imperial",
+    nutrition_sources=("cofid", "fdc"),
 )

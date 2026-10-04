@@ -9,4 +9,5 @@ KING_ARTHUR = SiteConfig(
     url_pattern=r"^https://www\.kingarthurbaking\.com/recipes/[^/]+-recipe$",
     politeness_delay=1.0,
     unit_system="us",
+    nutrition_sources=("fdc", "cnf"),
 )

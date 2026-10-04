@@ -9,4 +9,5 @@ OTTOLENGHI = SiteConfig(
     url_pattern=r"^https://ottolenghi\.co\.uk/pages/recipes/[^/]+$",
     politeness_delay=1.0,
     unit_system="imperial",
+    nutrition_sources=("cofid", "fdc"),
 )

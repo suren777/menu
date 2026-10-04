@@ -2,7 +2,15 @@
 
 from typing import TYPE_CHECKING
 
-from menu.db.database import Ingredient, IngredientAlias
+from sqlalchemy import select
+
+from menu.db.database import (
+    FoodSource,
+    Ingredient,
+    IngredientAlias,
+    IngredientFoodRef,
+    RefFood,
+)
 from menu.db.ingredients import repository
 from menu.db.ingredients.seed import seed_ingredient_data
 
@@ -73,24 +81,54 @@ def test_seed_creates_density_ingredients_up_front(session: Session) -> None:
     assert caster.density_g_per_ml == 0.85
 
 
+def _add_fdc_food(session: Session, source_food_id: str, description: str) -> int:
+    source = session.scalars(select(FoodSource)).first()
+    if source is None:
+        source = FoodSource(
+            name="fdc", version="test", licence="public domain", citation="test"
+        )
+        session.add(source)
+        session.flush()
+    food = RefFood(
+        source_id=source.id,
+        source_food_id=source_food_id,
+        description=description,
+    )
+    session.add(food)
+    session.flush()
+    return food.id
+
+
 def test_seed_confirms_fdc_ids(session: Session) -> None:
+    _add_fdc_food(session, "171287", "Egg, whole, raw, fresh")
     seed_ingredient_data(session)
 
     egg = repository.find_ingredient_by_name("egg", session)
     assert egg is not None
-    assert egg.fdc_id == 171287
-    assert egg.fdc_id_confirmed
+    refs = session.scalars(
+        select(IngredientFoodRef).where(IngredientFoodRef.ingredient_id == egg.id)
+    ).all()
+    assert [(ref.role, ref.confirmed) for ref in refs] == [
+        ("conversion", True),
+        ("nutrition", True),
+    ]
 
 
-def test_seed_overrides_stale_parser_fdc_ids(session: Session) -> None:
+def test_seed_overrides_stale_parser_candidates(session: Session) -> None:
     """The parser's suggestion is often wrong (baking powder once
-    resolved to "Baobab powder"); the seed wins."""
-    session.add(Ingredient(name="baking powder", fdc_id=167806))
+    resolved to "Baobab powder"); the confirmed seed wins and the
+    stale candidate stays unconfirmed."""
+    stale = _add_fdc_food(session, "167806", "Baobab powder")
+    baking = _add_fdc_food(session, "172803", "Leavening agents, baking powder")
+    powder = Ingredient(name="baking powder")
+    session.add(powder)
     session.flush()
+    session.add(IngredientFoodRef(ingredient_id=powder.id, ref_food_id=stale))
 
     seed_ingredient_data(session)
 
-    baking_powder = repository.find_ingredient_by_name("baking powder", session)
-    assert baking_powder is not None
-    assert baking_powder.fdc_id == 172803
-    assert baking_powder.fdc_id_confirmed
+    refs = session.scalars(
+        select(IngredientFoodRef).where(IngredientFoodRef.ingredient_id == powder.id)
+    ).all()
+    assert {ref.ref_food_id for ref in refs if ref.confirmed} == {baking}
+    assert any(ref.ref_food_id == stale and not ref.confirmed for ref in refs)

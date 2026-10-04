@@ -14,14 +14,23 @@ already exists but points elsewhere (typically a parse-time self-alias
 of a variant name) is re-pointed to the canonical ingredient.
 """
 
+import logging
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
-from menu.db.database import Ingredient, IngredientAlias
+from menu.db.database import (
+    FoodSource,
+    Ingredient,
+    IngredientAlias,
+    IngredientFoodRef,
+    RefFood,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 # alias -> (canonical ingredient, variant)
 ALIASES: list[tuple[str, str, str | None]] = [
@@ -174,6 +183,15 @@ FDC_IDS: dict[str, int] = {
 }
 
 
+# FDC foods give both household portion weights (conversion) and
+# per-100g nutrients (nutrition), so every FDC_IDS mapping serves
+# both roles.
+FOOD_REFS: dict[str, list[tuple[str, str, str]]] = {
+    name: [("fdc", str(fdc_id), "conversion"), ("fdc", str(fdc_id), "nutrition")]
+    for name, fdc_id in FDC_IDS.items()
+}
+
+
 def _canonical_ingredient(name: str, session: Session) -> Ingredient:
     ingredient = session.scalar(select(Ingredient).where(Ingredient.name == name))
     if ingredient is None:
@@ -212,9 +230,46 @@ def seed_ingredient_data(session: Session) -> None:
         ingredient = _canonical_ingredient(name, session)
         ingredient.unit_weight_g = weight
 
-    # FDC mappings are hand-reviewed (the --fdc-review report shows
-    # what is left): the seed wins over the parser's suggestion.
-    for name, fdc_id in FDC_IDS.items():
+    # Reference-food mappings are hand-reviewed (the --ref-review
+    # report shows what is left): only confirmed mappings feed
+    # conversion and nutrition. The parser's own suggestions seed
+    # unconfirmed candidate rows instead (actions.py).
+    missed = 0
+    for name, refs in FOOD_REFS.items():
         ingredient = _canonical_ingredient(name, session)
-        ingredient.fdc_id = fdc_id
-        ingredient.fdc_id_confirmed = True
+        for source_name, source_food_id, role in refs:
+            ref_food = session.execute(
+                select(RefFood.id)
+                .join(FoodSource, FoodSource.id == RefFood.source_id)
+                .where(
+                    FoodSource.name == source_name,
+                    RefFood.source_food_id == source_food_id,
+                )
+            ).scalar_one_or_none()
+            if ref_food is None:
+                missed += 1
+                continue
+            ref_row = session.scalar(
+                select(IngredientFoodRef).where(
+                    IngredientFoodRef.ingredient_id == ingredient.id,
+                    IngredientFoodRef.ref_food_id == ref_food,
+                    IngredientFoodRef.role == role,
+                )
+            )
+            if ref_row is None:
+                session.add(
+                    IngredientFoodRef(
+                        ingredient_id=ingredient.id,
+                        ref_food_id=ref_food,
+                        role=role,
+                        confirmed=True,
+                    )
+                )
+            else:
+                ref_row.confirmed = True
+    if missed:
+        logger.warning(
+            "%d seed mappings skipped: their foods are not in the ref"
+            " tables yet; run menu-fdc-import",
+            missed,
+        )

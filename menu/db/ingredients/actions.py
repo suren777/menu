@@ -5,13 +5,14 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import String, and_, cast, delete, func, select
+from sqlalchemy import and_, delete, func, select
 
 from menu.db.connection import get_session
 from menu.db.database import (
     FoodSource,
     Ingredient,
     IngredientAlias,
+    IngredientFoodRef,
     RecipeIngredient,
     RecipeUrls,
     RefFood,
@@ -214,13 +215,32 @@ def _resolve_ingredient(
     by_name = repository.find_ingredient_by_name(name, session)
     if by_name is not None:
         return by_name.id, None
-    session.add(Ingredient(name=name, fdc_id=fdc_id))
+    session.add(Ingredient(name=name))
     session.flush()
     created = repository.find_ingredient_by_name(name, session)
     if created is None:  # pragma: no cover - inserted two lines above
         return None, None
     session.add(IngredientAlias(alias=canonical_name(name), ingredient_id=created.id))
+    if fdc_id is not None:
+        _seed_candidate(created.id, str(fdc_id), session)
     return created.id, None
+
+
+def _seed_candidate(
+    ingredient_id: int, source_food_id: str, session: Session
+) -> None:
+    """The parser's fdc_id as an unconfirmed candidate row (role
+    NULL): a suggestion for the --ref-review report, never used for
+    conversion or nutrition."""
+    ref_food = session.execute(
+        select(RefFood.id)
+        .join(FoodSource, FoodSource.id == RefFood.source_id)
+        .where(FoodSource.name == "fdc", RefFood.source_food_id == source_food_id)
+    ).scalar_one_or_none()
+    if ref_food is not None:
+        session.add(
+            IngredientFoodRef(ingredient_id=ingredient_id, ref_food_id=ref_food)
+        )
 
 
 def _servings_from_yield(value: Any) -> int | None:
@@ -238,76 +258,116 @@ def _servings_from_yield(value: Any) -> int | None:
     return int(matches[-1]) if matches else None
 
 
-def fdc_id_conflicts() -> list[tuple[int, list[str]]]:
-    """Canonical ingredients sharing an fdc_id with no alias between
-    them, as candidates to hand-seed into seed.py — a report, never an
-    auto-merge. Shared USDA ids catch real variants (milk / warm milk)
-    but also lump distinct ingredients (almond / vanilla / rosewater)."""
+def fdc_id_conflicts() -> list[tuple[str, list[str]]]:
+    """Canonical ingredients sharing an unconfirmed candidate
+    reference food with no alias between them, as candidates to
+    hand-seed into seed.FOOD_REFS — a report, never an auto-merge.
+    Shared USDA ids catch real variants (milk / warm milk) but also
+    lump distinct ingredients (almond / vanilla / rosewater)."""
     with get_session() as session:
-        ingredients = [
-            repository.to_model(record)
+        names = {
+            record.id: record.name
             for record in session.scalars(select(Ingredient))
-        ]
+        }
         links = {
             (alias.alias, alias.ingredient_id)
             for alias in session.scalars(select(IngredientAlias))
         }
+        candidates = session.execute(
+            select(
+                IngredientFoodRef.ref_food_id,
+                IngredientFoodRef.ingredient_id,
+            ).where(IngredientFoodRef.confirmed.is_(False))
+        ).all()
+        descriptions = dict(
+            session.execute(select(RefFood.id, RefFood.description)).all()
+        )
 
-    by_fdc: dict[int, list[repository.IngredientModel]] = {}
-    for ingredient in ingredients:
-        if ingredient.fdc_id is not None:
-            by_fdc.setdefault(ingredient.fdc_id, []).append(ingredient)
+    by_food: dict[int, list[int]] = {}
+    for ref_food_id, ingredient_id in candidates:
+        by_food.setdefault(ref_food_id, []).append(ingredient_id)
 
     conflicts = []
-    for fdc_id, group in sorted(by_fdc.items()):
+    for ref_food_id, group in sorted(by_food.items()):
         if len(group) < 2:
             continue
         # An alias row pointing one member's name at another member
         # means the pair is already linked by a curated seed.
         if any(
-            (other.name, ingredient.id) in links
-            for ingredient in group
+            (names[other], member) in links
+            for member in group
             for other in group
-            if ingredient.id != other.id
+            if member != other
         ):
             continue
-        conflicts.append((fdc_id, sorted(ing.name for ing in group)))
+        label = descriptions.get(ref_food_id) or f"ref_food {ref_food_id}"
+        conflicts.append((label, sorted(names[member] for member in group)))
     return conflicts
 
 
-def fdc_review(limit: int = 100) -> list[tuple[int, str, int | None, str | None]]:
-    """Top unconfirmed ingredients by line count, with the parser's
-    fdc_id candidate and the FDC food it points at, for hand-seeding
-    into seed.FDC_IDS. Descriptions need the FDC reference import; a
-    report, never an auto-merge."""
+def ref_review(
+    limit: int = 100,
+) -> list[tuple[int, str, str | None, tuple[str, ...]]]:
+    """Top ingredients without a confirmed reference by line count,
+    with the parser's candidate and the best text matches from each
+    imported source, for hand-seeding into seed.FOOD_REFS. Needs the
+    reference import; a report, never an auto-merge."""
     with get_session() as session:
         rows = session.execute(
-            select(
-                func.count(RecipeIngredient.id),
-                Ingredient.name,
-                Ingredient.fdc_id,
-                RefFood.description,
-            )
+            select(func.count(RecipeIngredient.id), Ingredient.id, Ingredient.name)
             .outerjoin(
                 RecipeIngredient, RecipeIngredient.ingredient_id == Ingredient.id
             )
-            .outerjoin(FoodSource, FoodSource.name == "fdc")
             .outerjoin(
-                RefFood,
+                IngredientFoodRef,
                 and_(
-                    RefFood.source_id == FoodSource.id,
-                    RefFood.source_food_id == cast(Ingredient.fdc_id, String),
+                    IngredientFoodRef.ingredient_id == Ingredient.id,
+                    IngredientFoodRef.confirmed.is_(True),
                 ),
             )
-            .where(Ingredient.fdc_id_confirmed.is_(False))
+            .where(IngredientFoodRef.id.is_(None))
             .group_by(Ingredient.id)
             .order_by(func.count(RecipeIngredient.id).desc())
             .limit(limit)
         ).all()
-    return [
-        (count, name, fdc_id, description)
-        for count, name, fdc_id, description in rows
-    ]
+        sources = list(session.scalars(select(FoodSource)))
+        descriptions = {
+            source.id: session.execute(
+                select(RefFood.source_food_id, RefFood.description).where(
+                    RefFood.source_id == source.id
+                )
+            ).all()
+            for source in sources
+        }
+        results = []
+        for count, ingredient_id, name in rows:
+            candidate_food = session.scalar(
+                select(IngredientFoodRef.ref_food_id).where(
+                    IngredientFoodRef.ingredient_id == ingredient_id,
+                    IngredientFoodRef.confirmed.is_(False),
+                )
+            )
+            candidate = (
+                session.scalar(
+                    select(RefFood.description).where(RefFood.id == candidate_food)
+                )
+                if candidate_food is not None
+                else None
+            )
+            # Text match: descriptions containing every word of the
+            # name, one candidate per source.
+            words = name.lower().split()
+            matches = []
+            for source in sources:
+                for source_food_id, description in descriptions[source.id]:
+                    text = description.lower()
+                    if all(word in text for word in words):
+                        matches.append(
+                            f"{source.name} {source_food_id}: {description}"
+                        )
+                        break
+            results.append((count, name, candidate, tuple(matches)))
+    return results
 
 
 @dataclass

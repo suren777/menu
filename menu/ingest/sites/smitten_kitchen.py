@@ -12,4 +12,5 @@ SMITTEN_KITCHEN = SiteConfig(
     url_pattern=r"^https://smittenkitchen\.com/\d{4}/\d{2}/[^/]+/$",
     politeness_delay=3.0,
     unit_system="us",
+    nutrition_sources=("fdc", "cnf"),
 )

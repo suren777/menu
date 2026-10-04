@@ -15,8 +15,6 @@ if TYPE_CHECKING:
 class IngredientModel:
     id: int
     name: str
-    fdc_id: int | None
-    fdc_id_confirmed: bool
     density_g_per_ml: float | None
     unit_weight_g: float | None
 
@@ -25,8 +23,6 @@ def to_model(record: Ingredient) -> IngredientModel:
     return IngredientModel(
         id=record.id,
         name=record.name,
-        fdc_id=record.fdc_id,
-        fdc_id_confirmed=record.fdc_id_confirmed,
         density_g_per_ml=record.density_g_per_ml,
         unit_weight_g=record.unit_weight_g,
     )

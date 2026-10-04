@@ -2,6 +2,8 @@ from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, call, patch
 
 import pytest
+from requests.exceptions import ConnectionError as RequestsConnectionError
+from requests.exceptions import RetryError
 
 from menu.ingest.errors import BlockedError, DisallowedError
 from menu.ingest.fetch import _cache_path, _robots, fetch_page, fetch_recipe
@@ -153,3 +155,103 @@ def test_fetch_page_429_twice_is_a_block(
     with pytest.raises(BlockedError, match="rate-limited"):
         fetch_page("https://test.com/recipes/cake", SITE, cache_dir=tmp_path)
     mock_sleep.assert_called_once()
+
+
+@patch("menu.ingest.fetch.session.get")
+def test_fetch_page_missing_robots_allows_all(
+    mock_get: MagicMock, tmp_path: Path
+) -> None:
+    """A 404 robots.txt really allows all: can_fetch is False until
+    parse() has run, so the allow-all branch must parse an empty
+    rule set."""
+    robots = MagicMock()
+    robots.status_code = 404
+    page = MagicMock()
+    page.ok = True
+    page.status_code = 200
+    page.content = b"page"
+    mock_get.side_effect = [robots, page]
+
+    result = fetch_page("https://test.com/recipes/cake", SITE, cache_dir=tmp_path)
+    assert result == b"page"
+
+
+@patch("menu.ingest.fetch.session.get")
+def test_fetch_page_unreachable_robots_allows_all(
+    mock_get: MagicMock, tmp_path: Path
+) -> None:
+    page = MagicMock()
+    page.ok = True
+    page.status_code = 200
+    page.content = b"page"
+    mock_get.side_effect = [RequestsConnectionError("unreachable"), page]
+
+    result = fetch_page("https://test.com/recipes/cake", SITE, cache_dir=tmp_path)
+    assert result == b"page"
+
+
+@patch("menu.ingest.fetch.session.get")
+def test_fetch_page_robots_5xx_disallows_all(
+    mock_get: MagicMock, tmp_path: Path
+) -> None:
+    robots = MagicMock()
+    robots.status_code = 503
+    mock_get.return_value = robots
+
+    with pytest.raises(DisallowedError, match=r"robots\.txt"):
+        fetch_page("https://test.com/recipes/cake", SITE, cache_dir=tmp_path)
+
+
+@patch("menu.ingest.fetch.session.get")
+def test_fetch_page_robots_retry_error_disallows_all(
+    mock_get: MagicMock, tmp_path: Path
+) -> None:
+    """The session's 5xx retries end in RetryError — still a 5xx (RFC
+    9309), not the allow-all a connection error gets."""
+    mock_get.side_effect = RetryError("5xx retries exhausted")
+
+    with pytest.raises(DisallowedError, match=r"robots\.txt"):
+        fetch_page("https://test.com/recipes/cake", SITE, cache_dir=tmp_path)
+
+
+@patch("menu.ingest.fetch._politeness.wait")
+@patch("menu.ingest.fetch.session.get")
+def test_fetch_page_uses_our_ua_crawl_delay(
+    mock_get: MagicMock, mock_wait: MagicMock, tmp_path: Path
+) -> None:
+    """The crawl-delay comes from our user-agent's group, not "*" —
+    Python matches UA groups on the product token, so 'menu' stands
+    in for our full UA string."""
+    robots = MagicMock()
+    robots.status_code = 200
+    robots.text = "User-agent: menu\nCrawl-delay: 7\n"
+    page = MagicMock()
+    page.ok = True
+    page.status_code = 200
+    page.content = b"page"
+    mock_get.side_effect = [robots, page]
+
+    fetch_page("https://test.com/recipes/cake", SITE, cache_dir=tmp_path)
+    mock_wait.assert_called_once_with(SITE.base_url, 7.0)
+
+
+@patch("menu.ingest.fetch.time.sleep")
+@patch("menu.ingest.fetch.session.get")
+def test_fetch_page_429_retry_after_is_capped(
+    mock_get: MagicMock, mock_sleep: MagicMock, tmp_path: Path
+) -> None:
+    robots = MagicMock()
+    robots.status_code = 200
+    robots.text = ""
+    limited = MagicMock()
+    limited.status_code = 429
+    limited.headers = {"Retry-After": "86400"}
+    ok = MagicMock()
+    ok.status_code = 200
+    ok.content = b"page"
+    mock_get.side_effect = [robots, limited, ok]
+
+    result = fetch_page("https://test.com/recipes/cake", SITE, cache_dir=tmp_path)
+
+    assert result == b"page"
+    mock_sleep.assert_called_once_with(60.0)

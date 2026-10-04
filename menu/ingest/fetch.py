@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 from urllib.robotparser import RobotFileParser
 
 from bs4 import BeautifulSoup
-from requests.exceptions import RequestException
+from requests.exceptions import RequestException, RetryError
 
 from menu.ingest.errors import BlockedError, DisallowedError, FetchError
 from menu.ingest.http import USER_AGENT, session
@@ -50,8 +50,9 @@ class _Robots:
     session and cached — single process on purpose, like _politeness.
 
     A 4xx (no robots.txt) allows all and a 5xx disallows all (RFC
-    9309); a connection error allows all, since the per-URL fetch
-    surfaces a real block itself."""
+    9309) — the session's RetryError after exhausting 5xx retries
+    counts as a 5xx; a connection error allows all, since the per-URL
+    fetch surfaces a real block itself."""
 
     def __init__(self) -> None:
         self._parsers: dict[str, RobotFileParser] = {}
@@ -66,14 +67,20 @@ class _Robots:
         robots_url = f"{base_url.rstrip('/')}/robots.txt"
         try:
             response = session.get(robots_url, timeout=10)
+        except RetryError:
+            # The session's retries ran out on 5xx: unobtainable
+            # robots.txt (RFC 9309) disallows everything.
+            parser.parse(["User-agent: *", "Disallow: /"])
+            return parser
         except RequestException:
-            return parser  # no rules parsed: allows everything
+            parser.parse([])  # no rules parsed: allows everything
+            return parser
 
         if response.status_code >= 500:
             # Unobtainable robots.txt (RFC 9309): disallow everything.
             parser.parse(["User-agent: *", "Disallow: /"])
         elif response.status_code >= 400:
-            pass  # No robots.txt: an empty parser allows everything.
+            parser.parse([])  # No robots.txt: allows everything.
         else:
             parser.parse(response.text.splitlines())
         return parser
@@ -95,9 +102,10 @@ def _cache_path(url: str, cache_dir: Path) -> Path:
 
 
 def _retry_after(response: Response) -> float:
-    """Seconds to wait after a 429: a numeric Retry-After, else 5."""
+    """Seconds to wait after a 429: a numeric Retry-After capped at a
+    minute (a day-long Retry-After must not stall the crawl), else 5."""
     try:
-        return max(float(response.headers["Retry-After"]), 1.0)
+        return min(max(float(response.headers["Retry-After"]), 1.0), 60.0)
     except (KeyError, TypeError, ValueError):
         return 5.0
 
@@ -118,7 +126,9 @@ def fetch_page(
     # The site's own delay or the robots crawl-delay, whichever is
     # larger.
     try:
-        delay = max(site.politeness_delay, float(parser.crawl_delay("*") or 0.0))
+        delay = max(
+            site.politeness_delay, float(parser.crawl_delay(USER_AGENT) or 0.0)
+        )
     except ValueError:  # a garbage crawl-delay: fall back to our own
         delay = site.politeness_delay
     _politeness.wait(site.base_url, delay)

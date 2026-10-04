@@ -32,6 +32,11 @@ from menu.ingest.errors import BlockedError, CrawlBlockedError
 from menu.ingest.extract import extract_recipe_data
 from menu.ingest.fetch import fetch_recipe
 from menu.ingest.registry import SiteConfig, get_site
+from menu.nutrition.reports import (
+    coverage_report,
+    derive_all_nutrition,
+    validation_report,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +215,12 @@ def reparse_site(site: SiteConfig) -> None:
 def main() -> None:
     logging.basicConfig()
     parser = ArgumentParser(description="Ingest recipes for a registered site.")
-    parser.add_argument("site", help="site name from the registry")
+    parser.add_argument(
+        "site",
+        nargs="?",
+        help="site name from the registry (not needed for the "
+        "nutrition reports)",
+    )
     parser.add_argument(
         "--reparse",
         action="store_true",
@@ -228,9 +238,26 @@ def main() -> None:
         help="list the top ingredients without a confirmed reference "
         "by ingredient line count, then exit",
     )
+    parser.add_argument(
+        "--derive-nutrition",
+        action="store_true",
+        help="derive nutrition for every stored recipe and backfill "
+        "published rows, then exit",
+    )
+    parser.add_argument(
+        "--validate-nutrition",
+        action="store_true",
+        help="compare derived vs published nutrition per serving, "
+        "then exit",
+    )
+    parser.add_argument(
+        "--coverage-report",
+        action="store_true",
+        help="list high-frequency ingredients with no confirmed "
+        "nutrition reference, then exit",
+    )
     args = parser.parse_args()
 
-    site = get_site(args.site)
     initialise()
     # Seed before parsing or reparsing: the aliases decide canonical
     # resolution, so a fresh database must not parse unseeded. The
@@ -251,6 +278,18 @@ def main() -> None:
                 head += " no parser candidate"
             print(" | ".join([head, *matches]))
         return
+    if args.derive_nutrition:
+        print(f"Derived nutrition for {derive_all_nutrition()} recipes")
+        return
+    if args.validate_nutrition:
+        validation_report()
+        return
+    if args.coverage_report:
+        coverage_report()
+        return
+    if args.site is None:
+        parser.error("a site is required unless a report flag is given")
+    site = get_site(args.site)
     if args.reparse:
         reparse_site(site)
         return

@@ -176,3 +176,33 @@ def derive_nutrition(recipe_id: int) -> RecipeNutrition:
         row.sources = ",".join(sorted(sources)) or None
         row.definitions_mixed = any(len(d) > 1 for d in definitions.values())
         return row
+
+
+def store_published_nutrition(recipe_id: int) -> None:
+    """Store the recipe's published nutrition totals (parsed from its
+    JSON-LD block) as its "published" row. A recipe that publishes
+    nothing gets no row."""
+    with get_session() as session:
+        recipe = session.get(RecipeUrls, recipe_id)
+        if recipe is None:
+            return
+        values = parse_published_nutrition(recipe.data)
+        if not values:
+            return
+        row = session.scalar(
+            select(RecipeNutrition).where(
+                RecipeNutrition.recipe_id == recipe_id,
+                RecipeNutrition.source == "published",
+            )
+        )
+        if row is None:
+            row = RecipeNutrition(recipe_id=recipe_id, source="published")
+            session.add(row)
+        row.energy_kcal = values.get("energy_kcal")
+        row.protein_g = values.get("protein_g")
+        row.fat_g = values.get("fat_g")
+        row.saturated_fat_g = values.get("saturated_fat_g")
+        row.carbohydrate_g = values.get("carbohydrate_g")
+        row.sugars_g = values.get("sugars_g")
+        row.fibre_g = values.get("fibre_g")
+        row.sodium_mg = values.get("sodium_mg")

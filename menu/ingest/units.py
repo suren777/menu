@@ -13,9 +13,11 @@ Quantities are stored in base units. Converting to metric or imperial
 for display is a caller concern and never happens here.
 """
 
+from contextlib import suppress
 from typing import TYPE_CHECKING
 
 from ingredient_parser import UREG
+from pint.errors import UndefinedUnitError
 
 if TYPE_CHECKING:
     from fractions import Fraction
@@ -25,6 +27,21 @@ if TYPE_CHECKING:
 MASS = "mass"
 VOLUME = "volume"
 COUNT = "count"
+
+# Qualifier words that loosen a household measure ("heaping tbsp"):
+# modifiers on the real unit, not units themselves. The quantity is
+# kept as-is — a heaping spoonful is more, but how much more is the
+# recipe's guess, not a factor to invent.
+_QUALIFIERS = frozenset({"heaping", "scant"})
+
+# Fuzzy count units that are really fixed amounts, whatever the
+# ingredient (a pinch is a pinch). Checked before the pint lookup:
+# pint parses "pinch" as picoinch.
+_FIXED_AMOUNTS: dict[str, tuple[str, float, str]] = {
+    "pinch": (VOLUME, 0.36, "ml"),  # ~1/16 tsp
+    "dash": (VOLUME, 0.6, "ml"),  # ~1/8 tsp
+    "knob": (MASS, 15.0, "g"),  # knob of butter ~= 15 g
+}
 
 
 def dimension_of(unit: Unit | str) -> str | None:
@@ -64,6 +81,20 @@ def to_base(
     """
     if isinstance(quantity, str):
         return None, None, None
+    if isinstance(unit, str):
+        # "heaping tbsp" is a tbsp with a qualifier, not a unit.
+        qualifier, _, rest = unit.partition(" ")
+        if rest and qualifier in _QUALIFIERS:
+            unit = rest
+        fixed = _FIXED_AMOUNTS.get(unit)
+        if fixed is not None:
+            return fixed
+        # A string unit is usually a named count unit ("clove"), but
+        # after a qualifier is stripped it can be a pint unit the
+        # parser passed through as text ("tbsp").
+        if unit:
+            with suppress(UndefinedUnitError):
+                unit = UREG.parse_units(unit)
     dimension = dimension_of(unit)
     if dimension is None:
         return None, None, None

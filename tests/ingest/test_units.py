@@ -119,3 +119,25 @@ def test_volume_to_mass() -> None:
 def test_count_to_mass() -> None:
     """An egg weighs about 50 g."""
     assert count_to_mass(2, 50.0) == 100.0
+
+
+def test_heaping_qualifier() -> None:
+    """A qualifier loosens the measure but is not a unit: "heaping
+    tbsp" converts as a tbsp, not as a junk count unit."""
+    dimension, quantity, base = _to_base(Fraction(1), "heaping tbsp")
+    assert (dimension, base) == (VOLUME, "ml")
+    assert quantity == pytest.approx(14.78676478125)
+
+
+def test_scant_qualifier() -> None:
+    dimension, quantity, base = _to_base(Fraction(2), "scant tbsp")
+    assert (dimension, base) == (VOLUME, "ml")
+    assert quantity == pytest.approx(2 * 14.78676478125)
+
+
+def test_fuzzy_units_are_fixed_amounts() -> None:
+    """pinch and dash are small volumes, a knob a small mass —
+    whatever the ingredient (a pinch is a pinch)."""
+    assert _to_base(Fraction(1), "pinch") == (VOLUME, 0.36, "ml")
+    assert _to_base(Fraction(1), "dash") == (VOLUME, 0.6, "ml")
+    assert _to_base(Fraction(1), "knob") == (MASS, 15.0, "g")

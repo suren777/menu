@@ -5,15 +5,16 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import String, and_, cast, delete, func, select
 
 from menu.db.connection import get_session
 from menu.db.database import (
-    FdcFood,
+    FoodSource,
     Ingredient,
     IngredientAlias,
     RecipeIngredient,
     RecipeUrls,
+    RefFood,
 )
 from menu.db.ingredients import repository
 from menu.db.ingredients.seed import LINE_OVERRIDES
@@ -285,12 +286,19 @@ def fdc_review(limit: int = 100) -> list[tuple[int, str, int | None, str | None]
                 func.count(RecipeIngredient.id),
                 Ingredient.name,
                 Ingredient.fdc_id,
-                FdcFood.description,
+                RefFood.description,
             )
             .outerjoin(
                 RecipeIngredient, RecipeIngredient.ingredient_id == Ingredient.id
             )
-            .outerjoin(FdcFood, FdcFood.fdc_id == Ingredient.fdc_id)
+            .outerjoin(FoodSource, FoodSource.name == "fdc")
+            .outerjoin(
+                RefFood,
+                and_(
+                    RefFood.source_id == FoodSource.id,
+                    RefFood.source_food_id == cast(Ingredient.fdc_id, String),
+                ),
+            )
             .where(Ingredient.fdc_id_confirmed.is_(False))
             .group_by(Ingredient.id)
             .order_by(func.count(RecipeIngredient.id).desc())

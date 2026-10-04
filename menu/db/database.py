@@ -130,34 +130,55 @@ class RecipeIngredient(Base):
     )
 
 
-class FdcFood(Base):
-    """USDA FoodData Central food (SR Legacy + FNDDS slice).
+class FoodSource(Base):
+    """A reference data source (FDC, CoFID, CNF, ...) with the licence
+    provenance food-guru must carry. Import a source only when coverage
+    needs it, and only when its licence allows commercial use without
+    share-alike."""
 
-    Imported once from the public-domain bulk CSV releases by
-    `menu-fdc-import` (menu.nutrition.fdc); never written at ingest
-    time. The parser's fdc_id column on Ingredient points here.
-    """
+    __tablename__ = "food_source"
 
-    __tablename__ = "fdc_food"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(nullable=False, unique=True)
+    version: Mapped[str] = mapped_column(nullable=False)
+    licence: Mapped[str] = mapped_column(nullable=False)
+    citation: Mapped[str] = mapped_column(nullable=False)
+    """Attribution is data: print this wherever source values show."""
 
-    fdc_id: Mapped[int] = mapped_column(primary_key=True)
-    data_type: Mapped[str] = mapped_column(nullable=False)
+
+class RefFood(Base):
+    """One food of a reference source, keyed by the source's own id.
+    `source_food_id` is the id as the source spells it (an FDC number,
+    a CoFID code), so the rest of the code never cares which."""
+
+    __tablename__ = "ref_food"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_id: Mapped[int] = mapped_column(
+        ForeignKey("food_source.id"), nullable=False
+    )
+    source_food_id: Mapped[str] = mapped_column(nullable=False)
     description: Mapped[str] = mapped_column(nullable=False)
     category: Mapped[str | None]
-    """Category description (SR food_category / FNDDS WWEIA)."""
+    refuse_pct: Mapped[float | None]
+    """Share that is peel/stone/shell, where the source gives one."""
+
+    __table_args__ = (Index("ix_ref_food_source", "source_id", "source_food_id"),)
 
 
-class FdcPortion(Base):
-    """Gram weight of one household portion of an FDC food.
+class RefPortion(Base):
+    """Gram weight of one household portion of a reference food.
 
-    `unit` is the lookup text: the SR `modifier` ("large", "cup (4.86
-    large eggs)") or the FNDDS portion description's unit ("1 cup" ->
-    "cup"). gram_weight is per `amount` of that unit.
+    `unit` is the lookup text: the FDC SR `modifier` ("large", "cup
+    (4.86 large eggs)") or the FNDDS portion description's unit ("1
+    cup" -> "cup"). gram_weight is per `amount` of that unit.
     """
 
-    __tablename__ = "fdc_portion"
+    __tablename__ = "ref_portion"
 
-    fdc_id: Mapped[int] = mapped_column(primary_key=True)
+    ref_food_id: Mapped[int] = mapped_column(
+        ForeignKey("ref_food.id"), primary_key=True
+    )
     seq_num: Mapped[int] = mapped_column(primary_key=True)
     amount: Mapped[float | None]
     unit: Mapped[str | None]
@@ -165,18 +186,38 @@ class FdcPortion(Base):
     gram_weight: Mapped[float] = mapped_column(nullable=False)
 
 
-class FdcNutrient(Base):
-    """One nutrient of an FDC food, per 100 g.
+class RefNutrient(Base):
+    """One nutrient of a reference food, per 100 g.
 
-    `nutrient` is our fixed key (fdc.NUTRIENTS), not FDC's id, so the
-    two releases' differing names collapse onto one vocabulary.
+    `nutrient` is our fixed key (fdc's map), not the source's code, so
+    the releases' differing vocabularies collapse onto one. definition
+    records which definition the value uses (carbohydrate by difference
+    vs available, fibre method) — never mix across definitions silently.
     """
 
-    __tablename__ = "fdc_nutrient"
+    __tablename__ = "ref_nutrient"
 
-    fdc_id: Mapped[int] = mapped_column(primary_key=True)
+    ref_food_id: Mapped[int] = mapped_column(
+        ForeignKey("ref_food.id"), primary_key=True
+    )
     nutrient: Mapped[str] = mapped_column(primary_key=True)
     amount_per_100g: Mapped[float] = mapped_column(nullable=False)
+    definition: Mapped[str] = mapped_column(nullable=False)
+
+
+class NutrientMap(Base):
+    """Maps a source's nutrient code onto the fixed vocabulary, with
+    the definition the code means. Per source, explicit — never
+    compared or mixed across definitions silently."""
+
+    __tablename__ = "nutrient_map"
+
+    source_id: Mapped[int] = mapped_column(
+        ForeignKey("food_source.id"), primary_key=True
+    )
+    source_nutrient_code: Mapped[str] = mapped_column(primary_key=True)
+    nutrient: Mapped[str] = mapped_column(nullable=False)
+    definition: Mapped[str] = mapped_column(nullable=False)
 
 
 def initialise(db_engine: Engine | None = None) -> None:

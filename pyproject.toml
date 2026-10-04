@@ -17,7 +17,7 @@ dependencies = [
 
 [project.scripts]
 menu-ingest = "menu.ingest.pipeline:main"
-menu-fdc-import = "menu.nutrition.fdc:main"
+menu-fdc-import = "menu.nutrition.sources.fdc:main"
 
 [dependency-groups]
 dev = [

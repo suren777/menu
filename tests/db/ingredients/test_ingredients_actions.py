@@ -9,11 +9,12 @@ from sqlalchemy import select
 
 from menu.db.connection import get_session
 from menu.db.database import (
-    FdcFood,
+    FoodSource,
     Ingredient,
     IngredientAlias,
     RecipeIngredient,
     RecipeUrls,
+    RefFood,
 )
 from menu.db.ingredients import actions
 from menu.db.ingredients.seed import seed_ingredient_data
@@ -443,10 +444,18 @@ def test_fdc_review_lists_unconfirmed() -> None:
     seeds are excluded."""
     recipe_id = add_recipe("https://x/cake")
     with get_session() as session:
+        source = FoodSource(
+            name="fdc",
+            version="test",
+            licence="public domain",
+            citation="test",
+        )
+        session.add(source)
+        session.flush()
         session.add(
-            FdcFood(
-                fdc_id=171287,
-                data_type="sr_legacy_food",
+            RefFood(
+                source_id=source.id,
+                source_food_id="171287",
                 description="Egg, whole, raw, fresh",
             )
         )

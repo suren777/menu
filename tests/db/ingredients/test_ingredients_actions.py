@@ -663,7 +663,9 @@ def test_aggregate_real_cached_cordon_bleu() -> None:
         (6, 6),
         ("Serves 12", 12),
         ("Makes 1 loaf", 1),
-        # King Arthur yields are lists: the first integer wins.
+        # Ranges buy the upper end, like ingredient lines.
+        ("Servings: 3 to 4", 4),
+        # King Arthur yields are lists: the first entry wins.
         (["12", "1 loaf"], 12),
         (["60", "60 bites"], 60),
     ],

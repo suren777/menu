@@ -222,11 +222,18 @@ def _resolve_ingredient(
 
 
 def _servings_from_yield(value: Any) -> int | None:
-    """First integer in a recipeYield: 6, "Serves 12", "Makes 1 loaf"."""
+    """Upper-end integer in a recipeYield: 6, "Serves 12", "Makes 1
+    loaf", "Servings: 3 to 4" -> 4 — range quantities buy the upper
+    end, like ingredient lines. King Arthur yields are lists; the
+    first entry wins."""
     if value is None:
         return None
-    match = _YIELD_NUMBER.search(str(value))
-    return int(match.group()) if match else None
+    if isinstance(value, list):
+        value = value[0] if value else None
+    if value is None:
+        return None
+    matches = _YIELD_NUMBER.findall(str(value))
+    return int(matches[-1]) if matches else None
 
 
 def fdc_id_conflicts() -> list[tuple[int, list[str]]]:

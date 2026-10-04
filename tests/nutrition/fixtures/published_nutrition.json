@@ -1,0 +1,27 @@
+{
+    "bbc_good_food": {
+        "@type": "NutritionInformation",
+        "calories": "681 calories",
+        "fatContent": "22 grams fat",
+        "saturatedFatContent": "11 grams saturated fat",
+        "carbohydrateContent": "98 grams carbohydrates",
+        "sugarContent": "37 grams sugar",
+        "fiberContent": "4 grams fiber",
+        "proteinContent": "16 grams protein",
+        "sodiumContent": "0.61 milligram of sodium"
+    },
+    "king_arthur": {
+        "@type": "NutritionInformation",
+        "servingSize": "1 slice (52g)",
+        "calories": "150 calories",
+        "carbohydrateContent": "20g",
+        "cholesterolContent": "5mg",
+        "fiberContent": "2g",
+        "proteinContent": "4g",
+        "sodiumContent": "200mg",
+        "sugarContent": "3g",
+        "fatContent": "6g",
+        "saturatedFatContent": "1.5g",
+        "transFatContent": "0g"
+    }
+}

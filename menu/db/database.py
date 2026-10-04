@@ -45,6 +45,48 @@ class RecipeUrls(Base):
     """Parsed from recipeYield ("Serves 12", "Makes 16")."""
 
 
+class RecipeNutrition(Base):
+    """Nutrition totals for one recipe, derived or as published.
+
+    Published rows are parsed from the JSON-LD nutrition block;
+    derived rows are summed from ingredient lines and carry coverage
+    metadata. A NULL nutrient means not reported, never zero.
+    """
+
+    __tablename__ = "recipe_nutrition"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    recipe_id: Mapped[int] = mapped_column(ForeignKey("recipe_urls.id"))
+    source: Mapped[str]
+    """\"derived\" | \"published\" — never mixed in one row."""
+    energy_kcal: Mapped[float | None]
+    protein_g: Mapped[float | None]
+    fat_g: Mapped[float | None]
+    saturated_fat_g: Mapped[float | None]
+    carbohydrate_g: Mapped[float | None]
+    sugars_g: Mapped[float | None]
+    fibre_g: Mapped[float | None]
+    sodium_mg: Mapped[float | None]
+    coverage: Mapped[float | None]
+    """Share of the recipe's grams that came from mapped lines
+    (derived rows). Low coverage is marked, not trusted."""
+    unconverted_lines: Mapped[int | None]
+    """Lines with no quantity or no conversion (derived rows)."""
+    sources: Mapped[str | None]
+    """Reference sources used, comma-separated (derived rows)."""
+    definitions_mixed: Mapped[bool | None]
+    """True when the summed values mix nutrient definitions."""
+
+    __table_args__ = (
+        Index(
+            "ix_recipe_nutrition_recipe_source",
+            "recipe_id",
+            "source",
+            unique=True,
+        ),
+    )
+
+
 class Ingredient(Base):
     """Canonical ingredient, shared by aliases and recipe lines."""
 

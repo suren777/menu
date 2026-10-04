@@ -71,7 +71,7 @@ def validation_report(min_coverage: float = 0.9) -> None:
                 or pub is None
                 or row.coverage is None
                 or row.coverage < min_coverage
-                or recipe.servings is None
+                or not recipe.servings
             ):
                 continue
             # Published values are per serving; derived totals are per

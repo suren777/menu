@@ -88,6 +88,40 @@ def test_validation_report_skips_low_coverage(
 
 
 @pytest.mark.usefixtures("db_engine")
+def test_validation_report_skips_zero_servings(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Some BBC recipes publish a yield of 0; there is no per-serving
+    value to compare, so they are skipped rather than divided by."""
+    with get_session() as session:
+        recipe = RecipeUrls(
+            url="https://x/stock",
+            name="Stock",
+            data={},
+            site="bbc_good_food",
+            servings=0,
+        )
+        session.add(recipe)
+        session.flush()
+        session.add(
+            RecipeNutrition(
+                recipe_id=recipe.id, source="published", energy_kcal=100.0
+            )
+        )
+        session.add(
+            RecipeNutrition(
+                recipe_id=recipe.id,
+                source="derived",
+                energy_kcal=250.0,
+                coverage=0.95,
+            )
+        )
+
+    validation_report()
+    assert "bbc_good_food" not in capsys.readouterr().out
+
+
+@pytest.mark.usefixtures("db_engine")
 def test_coverage_report_lists_unreferenced_ingredients(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

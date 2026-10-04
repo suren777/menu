@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from typing import Any
 
 from bs4 import BeautifulSoup
@@ -11,6 +12,12 @@ from menu.ingest.extract import (
 )
 from menu.ingest.registry import SiteConfig
 from menu.ingest.sites.bbc_good_food import BBC_GOOD_FOOD
+
+FIXTURES = Path(__file__).parent / "fixtures"
+# Trimmed saved pages: the Smitten Kitchen Recipe itemscope div, and
+# an Ottolenghi JSON-LD script whose strings hold raw newlines.
+SMITTEN_PAGE = (FIXTURES / "smitten_microdata.html").read_text()
+OTTOLENGHI_CONTROL_CHARS = (FIXTURES / "ottolenghi_control_chars.html").read_text()
 
 JSON_LD_RECIPE = {
     "@context": "https://schema.org",
@@ -85,46 +92,88 @@ def test_extract_recipe_data_none_when_absent() -> None:
     assert extract_recipe_data(site, soup) is None
 
 
-MICRODATA_PAGE = """
-<html><body>
-  <div itemscope itemtype="https://schema.org/Recipe">
-    <span itemprop="name">Smitten Cake</span>
-    <p itemprop="recipeYield">Serves 8</p>
-    <time itemprop="totalTime" datetime="PT1H30M">1.5 hours</time>
-    <span itemprop="recipeIngredient">200g butter</span>
-    <span itemprop="recipeIngredient">100g caster sugar</span>
-    <div class="e-instructions"><p>Step one.</p></div>
-    <div itemscope itemtype="https://schema.org/AggregateRating">
-      <span itemprop="ratingValue">5</span>
-    </div>
+# The saved Smitten Kitchen page has no nested itemscope, so this
+# minimal snippet covers the one the fallback must skip.
+NESTED_PAGE = """
+<div itemscope itemtype="https://schema.org/Recipe">
+  <span itemprop="name">Cake</span>
+  <span itemprop="recipeIngredient">1 egg</span>
+  <div itemscope itemtype="https://schema.org/AggregateRating">
+    <span itemprop="ratingValue">5</span>
   </div>
-</body></html>
+</div>
 """
 
 
 def test_extract_microdata_recipe_shapes_like_json_ld() -> None:
-    soup = BeautifulSoup(MICRODATA_PAGE, "html.parser")
+    soup = BeautifulSoup(SMITTEN_PAGE, "html.parser")
     recipe = extract_microdata_recipe(soup)
     assert recipe is not None
     assert recipe["@type"] == "Recipe"
-    assert recipe["name"] == "Smitten Cake"
-    assert recipe["recipeYield"] == "Serves 8"
-    assert recipe["totalTime"] == "PT1H30M"  # datetime attr beats the text
-    assert recipe["recipeIngredient"] == ["200g butter", "100g caster sugar"]
+    assert recipe["name"] == "Double Chocolate Banana Bread"
+    assert recipe["recipeYield"] == "Servings: 8"
+    assert recipe["totalTime"] == "P0DT1H30M0S"  # datetime attr beats the text
+    assert recipe["recipeIngredient"][0] == "3 medium-to-large very ripe bananas"
+    assert len(recipe["recipeIngredient"]) == 11
 
 
 def test_extract_microdata_recipe_fills_instructions_from_e_instructions() -> None:
-    soup = BeautifulSoup(MICRODATA_PAGE, "html.parser")
+    soup = BeautifulSoup(SMITTEN_PAGE, "html.parser")
     recipe = extract_microdata_recipe(soup)
     assert recipe is not None
-    assert recipe["recipeInstructions"] == "Step one."
+    assert recipe["recipeInstructions"].startswith("Heat your oven to 350°F.")
 
 
 def test_extract_microdata_recipe_skips_nested_itemscope() -> None:
-    soup = BeautifulSoup(MICRODATA_PAGE, "html.parser")
+    soup = BeautifulSoup(NESTED_PAGE, "html.parser")
     recipe = extract_microdata_recipe(soup)
     assert recipe is not None
     assert "ratingValue" not in recipe
+
+
+def test_extract_microdata_recipe_ignores_outer_itemscope() -> None:
+    soup = BeautifulSoup(
+        """
+        <div itemscope itemtype="https://schema.org/BlogPosting">
+          <div itemscope itemtype="https://schema.org/Recipe">
+            <span itemprop="name">Wrapped Cake</span>
+            <span itemprop="recipeIngredient">1 egg</span>
+          </div>
+        </div>
+        """,
+        "html.parser",
+    )
+    recipe = extract_microdata_recipe(soup)
+    assert recipe is not None
+    assert recipe["name"] == "Wrapped Cake"
+
+
+def test_extract_microdata_recipe_skips_itemprop_itemscope_blobs() -> None:
+    soup = BeautifulSoup(
+        """
+        <div itemscope itemtype="https://schema.org/Recipe">
+          <span itemprop="name">Cake</span>
+          <span itemprop="recipeIngredient">1 egg</span>
+          <div itemprop="nutrition" itemscope
+               itemtype="https://schema.org/NutritionInformation">
+            <span itemprop="calories">100 calories</span>
+          </div>
+        </div>
+        """,
+        "html.parser",
+    )
+    recipe = extract_microdata_recipe(soup)
+    assert recipe is not None
+    assert "nutrition" not in recipe
+
+
+def test_extract_microdata_recipe_none_without_name_or_ingredients() -> None:
+    soup = BeautifulSoup(
+        '<div itemscope itemtype="https://schema.org/Recipe">'
+        '<span itemprop="recipeYield">Serves 8</span></div>',
+        "html.parser",
+    )
+    assert extract_microdata_recipe(soup) is None
 
 
 def test_extract_microdata_recipe_wraps_single_ingredient_in_a_list() -> None:
@@ -144,16 +193,16 @@ def test_extract_microdata_recipe_wraps_single_ingredient_in_a_list() -> None:
 
 def test_extract_recipe_data_falls_back_to_microdata() -> None:
     site = SiteConfig(name="x", base_url="u", sitemap_urls=("s",))
-    soup = BeautifulSoup(MICRODATA_PAGE, "html.parser")
+    soup = BeautifulSoup(SMITTEN_PAGE, "html.parser")
     data = extract_recipe_data(site, soup)
     assert data is not None
-    assert data["name"] == "Smitten Cake"
+    assert data["name"] == "Double Chocolate Banana Bread"
 
 
 def test_extract_recipe_data_prefers_json_ld_over_microdata() -> None:
     site = SiteConfig(name="x", base_url="u", sitemap_urls=("s",))
     soup = BeautifulSoup(
-        MICRODATA_PAGE
+        SMITTEN_PAGE
         + '<script type="application/ld+json">'
         + json.dumps(JSON_LD_RECIPE)
         + "</script>",
@@ -165,11 +214,9 @@ def test_extract_recipe_data_prefers_json_ld_over_microdata() -> None:
 
 
 def test_extract_json_ld_allows_control_characters() -> None:
-    soup = BeautifulSoup("<html><body></body></html>", "html.parser")
-    script = soup.new_tag("script", attrs={"type": "application/ld+json"})
-    # A raw newline inside a JSON string is invalid strict JSON.
-    script.string = '{"@type": "Recipe", "name": "Cake\nwith a newline"}'
-    soup.body.append(script)  # type: ignore[union-attr]
+    # A saved Ottolenghi page: raw newlines inside JSON strings are
+    # invalid strict JSON, but the real payload must still parse.
+    soup = BeautifulSoup(OTTOLENGHI_CONTROL_CHARS, "html.parser")
     recipe = extract_json_ld_recipe(soup)
     assert recipe is not None
-    assert recipe["name"] == "Cake\nwith a newline"
+    assert recipe["name"] == "Pea and artichoke dip with pickled onions"

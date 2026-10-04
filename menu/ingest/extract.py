@@ -10,6 +10,7 @@ data.
 
 import json
 from collections import deque
+from itertools import takewhile
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -62,10 +63,15 @@ def extract_microdata_recipe(soup: BeautifulSoup) -> dict[str, Any] | None:
     Kitchen's Jetpack markup), shaped like JSON-LD so the scratch
     store and ingredient pipeline don't change.
 
-    Flat items only: anything inside a nested itemscope is skipped,
-    not recursed into — Smitten Kitchen has none. Jetpack publishes
-    no recipeInstructions itemprop; the steps sit in the h-recipe's
-    .e-instructions block, so those are filled in when missing.
+    Flat items only: an itemprop that is itself a nested itemscope
+    (nutrition, rating) is skipped, and so is anything inside one —
+    but the walk stops at the Recipe element, so an outer itemscope
+    (a WordPress BlogPosting wrapper is common) doesn't blank the
+    recipe. Returns None unless the markup yields a name and an
+    ingredient list: an empty recipe is not a recipe. Jetpack
+    publishes no recipeInstructions itemprop; the steps sit in the
+    h-recipe's .e-instructions block, so those are filled in when
+    missing.
     """
     scope = soup.select_one('[itemtype*="schema.org/Recipe"]')
     if scope is None:
@@ -73,10 +79,11 @@ def extract_microdata_recipe(soup: BeautifulSoup) -> dict[str, Any] | None:
 
     recipe: dict[str, Any] = {"@type": "Recipe"}
     for prop in scope.find_all(itemprop=True):
-        # Flat items only: skip anything inside a nested itemscope.
+        if prop.has_attr("itemscope"):  # a nested scope, not a value
+            continue
         if any(
-            parent is not scope and parent.has_attr("itemscope")
-            for parent in prop.parents
+            parent.has_attr("itemscope")
+            for parent in takewhile(lambda p: p is not scope, prop.parents)
         ):
             continue
         value = (
@@ -102,6 +109,8 @@ def extract_microdata_recipe(soup: BeautifulSoup) -> dict[str, Any] | None:
         steps = scope.select_one(".e-instructions")
         if steps is not None:
             recipe["recipeInstructions"] = steps.get_text(" ", strip=True)
+    if "name" not in recipe or "recipeIngredient" not in recipe:
+        return None
     return recipe
 
 

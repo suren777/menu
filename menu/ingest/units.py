@@ -131,7 +131,11 @@ def unit_ml(unit_name: str) -> float | None:
     Used to read a density out of a portion that weighs a household
     measure ("1 tsp salt = 6 g" -> 1.22 g/ml).
     """
-    with suppress(UndefinedUnitError):
+    # Portion unit text is SR prose ("bag (7 oz)", "serving (1 NLEA
+    # serving - about 4 crackers)"): whatever pint cannot read as a
+    # unit — undefined, scaling factor, tokeniser garbage — is a
+    # non-volume portion, not a bug.
+    with suppress(Exception):
         quantity = UREG.Quantity(1, UREG.parse_units(unit_name))
         if quantity.dimensionality == UREG.milliliter.dimensionality:
             return float(quantity.to(UREG.milliliter).magnitude)

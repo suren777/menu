@@ -14,6 +14,7 @@ from menu.ingest.units import (
     dimension_of,
     singular,
     to_base,
+    unit_ml,
     volume_to_mass,
 )
 
@@ -141,3 +142,13 @@ def test_fuzzy_units_are_fixed_amounts() -> None:
     assert _to_base(Fraction(1), "pinch") == (VOLUME, 0.36, "ml")
     assert _to_base(Fraction(1), "dash") == (VOLUME, 0.6, "ml")
     assert _to_base(Fraction(1), "knob") == (MASS, 15.0, "g")
+
+
+def test_unit_ml_free_text_portions() -> None:
+    """Ref-portion unit text is SR prose, not a clean unit: "bag
+    (7 oz)" reads to pint as a scaling factor and must give None,
+    not crash the seeding pass."""
+    assert unit_ml("tbsp") == pytest.approx(14.78676478125)
+    assert unit_ml("bag (7 oz)") is None
+    assert unit_ml("serving (1 NLEA serving - about 4 crackers)") is None
+    assert unit_ml("stick") is None

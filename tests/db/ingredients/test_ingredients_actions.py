@@ -8,7 +8,13 @@ import pytest
 from sqlalchemy import select
 
 from menu.db.connection import get_session
-from menu.db.database import Ingredient, IngredientAlias, RecipeIngredient, RecipeUrls
+from menu.db.database import (
+    FdcFood,
+    Ingredient,
+    IngredientAlias,
+    RecipeIngredient,
+    RecipeUrls,
+)
 from menu.db.ingredients import actions
 from menu.db.ingredients.seed import seed_ingredient_data
 from menu.ingest.ingredients import parse_line
@@ -428,6 +434,50 @@ def test_fdc_id_conflicts_reported_not_merged() -> None:
 
     # The curated alias links the pair, so the group is no longer a conflict.
     assert actions.fdc_id_conflicts() == []
+
+
+@pytest.mark.usefixtures("db_engine")
+def test_fdc_review_lists_unconfirmed() -> None:
+    """The review report lists unconfirmed ingredients by line count
+    with the parser candidate and its FDC description; confirmed
+    seeds are excluded."""
+    recipe_id = add_recipe("https://x/cake")
+    with get_session() as session:
+        session.add(
+            FdcFood(
+                fdc_id=171287,
+                data_type="sr_legacy_food",
+                description="Egg, whole, raw, fresh",
+            )
+        )
+        egg = Ingredient(name="egg", fdc_id=171287, fdc_id_confirmed=True)
+        mystery = Ingredient(name="mystery powder", fdc_id=167806)
+        session.add_all([egg, mystery])
+        session.flush()
+        session.add_all(
+            [
+                RecipeIngredient(
+                    recipe_id=recipe_id,
+                    position=0,
+                    raw_text="2 eggs",
+                    ingredient_id=egg.id,
+                ),
+                RecipeIngredient(
+                    recipe_id=recipe_id,
+                    position=1,
+                    raw_text="1 tsp mystery powder",
+                    ingredient_id=mystery.id,
+                ),
+                RecipeIngredient(
+                    recipe_id=recipe_id,
+                    position=2,
+                    raw_text="more mystery",
+                    ingredient_id=mystery.id,
+                ),
+            ]
+        )
+
+    assert actions.fdc_review() == [(2, "mystery powder", 167806, None)]
 
 
 @pytest.mark.usefixtures("db_engine")

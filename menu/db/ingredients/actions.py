@@ -9,6 +9,7 @@ from sqlalchemy import delete, func, select
 
 from menu.db.connection import get_session
 from menu.db.database import (
+    FdcFood,
     Ingredient,
     IngredientAlias,
     RecipeIngredient,
@@ -271,6 +272,34 @@ def fdc_id_conflicts() -> list[tuple[int, list[str]]]:
             continue
         conflicts.append((fdc_id, sorted(ing.name for ing in group)))
     return conflicts
+
+
+def fdc_review(limit: int = 100) -> list[tuple[int, str, int | None, str | None]]:
+    """Top unconfirmed ingredients by line count, with the parser's
+    fdc_id candidate and the FDC food it points at, for hand-seeding
+    into seed.FDC_IDS. Descriptions need the FDC reference import; a
+    report, never an auto-merge."""
+    with get_session() as session:
+        rows = session.execute(
+            select(
+                func.count(RecipeIngredient.id),
+                Ingredient.name,
+                Ingredient.fdc_id,
+                FdcFood.description,
+            )
+            .outerjoin(
+                RecipeIngredient, RecipeIngredient.ingredient_id == Ingredient.id
+            )
+            .outerjoin(FdcFood, FdcFood.fdc_id == Ingredient.fdc_id)
+            .where(Ingredient.fdc_id_confirmed.is_(False))
+            .group_by(Ingredient.id)
+            .order_by(func.count(RecipeIngredient.id).desc())
+            .limit(limit)
+        ).all()
+    return [
+        (count, name, fdc_id, description)
+        for count, name, fdc_id, description in rows
+    ]
 
 
 @dataclass

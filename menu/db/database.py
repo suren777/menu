@@ -55,6 +55,10 @@ class Ingredient(Base):
     """Canonical, singular, lowercase: "milk"."""
     fdc_id: Mapped[int | None]
     """USDA FoodData Central id when the parser matched one."""
+    fdc_id_confirmed: Mapped[bool] = mapped_column(default=False)
+    """True only for hand-seeded FDC_IDS mappings (seed.py). The
+    parser's fdc_id is a suggestion — often wrong — so only confirmed
+    mappings feed nutrition."""
     density_g_per_ml: Mapped[float | None]
     """Enables volume<->mass conversion. Hand-seeded: USDA FoodData
     Central has no directly usable density."""

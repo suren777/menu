@@ -19,6 +19,7 @@ from menu.db.connection import get_session
 from menu.db.database import RecipeUrls, Sitemap, initialise
 from menu.db.ingredients.actions import (
     fdc_id_conflicts,
+    fdc_review,
     prune_orphan_ingredients,
     store_recipe_ingredients,
 )
@@ -221,18 +222,35 @@ def main() -> None:
         help="list canonical ingredients sharing an fdc_id with no "
         "alias between them (candidates to hand-seed), then exit",
     )
+    parser.add_argument(
+        "--fdc-review",
+        action="store_true",
+        help="list the top unconfirmed fdc_id mappings by ingredient "
+        "line count, then exit",
+    )
     args = parser.parse_args()
 
     site = get_site(args.site)
     initialise()
+    # Seed before parsing or reparsing: the aliases decide canonical
+    # resolution, so a fresh database must not parse unseeded. The
+    # fdc-review report reads the same state — unconfirmed there means
+    # unseeded.
+    with get_session() as session:
+        seed_ingredient_data(session)
     if args.fdc_report:
         for fdc_id, names in fdc_id_conflicts():
             print(f"fdc_id {fdc_id}: {', '.join(names)}")
         return
-    # Seed before parsing or reparsing: the aliases decide canonical
-    # resolution, so a fresh database must not parse unseeded.
-    with get_session() as session:
-        seed_ingredient_data(session)
+    if args.fdc_review:
+        for count, name, candidate_id, description in fdc_review():
+            candidate = (
+                f"parser candidate fdc_id {candidate_id}: {description}"
+                if candidate_id is not None
+                else "no parser candidate"
+            )
+            print(f"{count:5d}  {name}: {candidate}")
+        return
     if args.reparse:
         reparse_site(site)
         return

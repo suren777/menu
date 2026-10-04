@@ -925,17 +925,15 @@ def test_variant_recorded_and_keep_variants_splits() -> None:
 
     lines = actions.aggregate([basbousa_id, shokupan_id])
     assert len(lines) == 1
-    assert (lines[0].label, lines[0].total, lines[0].variant) == (
-        "milk",
-        740.0,
-        None,
-    )
+    assert (lines[0].label, lines[0].variant) == ("milk", None)
+    # Every line converted (seeded milk density): one gram line
+    # replaces the old 740 ml volume sum.
+    assert lines[0].total == pytest.approx((240 + 500) * 1.03)
 
     split = actions.aggregate([basbousa_id, shokupan_id], keep_variants=True)
-    assert sorted((line.label, line.total) for line in split) == [
-        ("milk (warm)", 240.0),
-        ("milk (whole)", 500.0),
-    ]
+    assert sorted((line.label, line.total) for line in split) == pytest.approx(
+        [("milk (warm)", 240 * 1.03), ("milk (whole)", 500 * 1.03)]
+    )
 
 
 @pytest.mark.usefixtures("db_engine")
@@ -954,6 +952,54 @@ def test_aggregate_uses_range_upper_end() -> None:
 
     onion = next(line for line in lines if line.label == "onion")
     assert (onion.dimension, onion.total, onion.base_unit) == ("count", 3.0, "piece")
+
+
+@pytest.mark.usefixtures("db_engine")
+def test_aggregate_uses_grams_when_every_line_has_them() -> None:
+    """Every line converted: the group becomes one gram line instead
+    of per-dimension sums ("1 egg" + "50 ml egg" -> ~101 g)."""
+    with get_session() as session:
+        egg = Ingredient(name="egg")
+        recipe = RecipeUrls(url="https://x/omelette", name="Omelette", data={})
+        session.add_all([egg, recipe])
+        session.flush()
+        recipe_id = recipe.id
+        session.add(
+            RecipeIngredient(
+                recipe_id=recipe_id,
+                position=0,
+                raw_text="1 egg",
+                ingredient_id=egg.id,
+                quantity=1.0,
+                dimension="count",
+                base_unit="piece",
+                grams=50.0,
+                grams_source="seed",
+            )
+        )
+        session.add(
+            RecipeIngredient(
+                recipe_id=recipe_id,
+                position=1,
+                raw_text="50 ml egg",
+                ingredient_id=egg.id,
+                quantity=50.0,
+                dimension="volume",
+                base_unit="ml",
+                grams=51.4,
+                grams_source="fdc",
+            )
+        )
+
+    lines = actions.aggregate([recipe_id])
+
+    assert len(lines) == 1
+    assert (lines[0].label, lines[0].dimension, lines[0].base_unit) == (
+        "egg",
+        "mass",
+        "g",
+    )
+    assert lines[0].total == pytest.approx(50.0 + 51.4)
 
 
 @pytest.mark.usefixtures("db_engine")

@@ -621,13 +621,16 @@ def aggregate(
     """Aggregate recipes into shopping-list lines.
 
     Lines group by ingredient — never by text — and sum in base units.
-    Ranges use the upper end ("2-3 onions" buys 3: under-buying a
-    shopping list is worse than over-buying). Alternative rows are
-    always skipped; optional rows are skipped unless include_optional.
-    Volume folds into mass only when the ingredient has a known
-    density, and bare counts into mass only with a unit weight;
-    otherwise the lines stay separate ("250 ml + 100 g"). Named count
-    units (slice, clove) never fold.
+    When every quantified line of an ingredient converted to grams,
+    the group is one gram line; the per-dimension fold below is the
+    fallback for ingredients with unconverted lines. Ranges use the
+    upper end ("2-3 onions" buys 3: under-buying a shopping list is
+    worse than over-buying). Alternative rows are always skipped;
+    optional rows are skipped unless include_optional. Volume folds
+    into mass only when the ingredient has a known density, and bare
+    counts into mass only with a unit weight; otherwise the lines
+    stay separate ("250 ml + 100 g"). Named count units (slice,
+    clove) never fold.
 
     By default variant aliases roll up to their canonical ingredient;
     keep_variants splits them back out, labelled "milk (whole)".
@@ -685,6 +688,29 @@ def aggregate(
             continue
         variant = group_key[1]
         label = f"{ingredient.name} ({variant})" if variant else ingredient.name
+        quantified = [
+            row for row in grouped[group_key] if row.quantity is not None
+        ]
+        if quantified and all(row.grams is not None for row in quantified):
+            # Every line converted: one gram line replaces the
+            # per-dimension fold.
+            total = 0.0
+            for row in quantified:
+                # Ranges buy the upper end, like the fold below.
+                if row.grams_max is not None:
+                    total += row.grams_max * servings_scale
+                elif row.grams is not None:
+                    total += row.grams * servings_scale
+            shopping.append(
+                ShoppingLine(
+                    label=label,
+                    dimension=MASS,
+                    total=total,
+                    base_unit="g",
+                    variant=variant,
+                )
+            )
+            continue
         sums: dict[tuple[str, str], float] = {}
         has_quantity = False
         has_unquantified = False

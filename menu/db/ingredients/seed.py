@@ -194,6 +194,18 @@ FOOD_REFS: dict[str, list[tuple[str, str, str]]] = {
 }
 
 
+# Portion weights come from the first of these sources the ingredient
+# has a confirmed conversion reference in (seed overrides beat all).
+CONVERSION_SOURCES: tuple[str, ...] = ("fdc", "cnf")
+
+
+def conversion_rank(source_name: str) -> int:
+    """Position in CONVERSION_SOURCES; unlisted sources come last."""
+    if source_name in CONVERSION_SOURCES:
+        return CONVERSION_SOURCES.index(source_name)
+    return len(CONVERSION_SOURCES)
+
+
 # A preparation that changes the food itself: "2 egg yolks" is not
 # egg, "juice of 1 lemon" is not lemon, cooked rice is not raw.
 # (canonical ingredient, keyword in the line's preparation, parsed
@@ -313,21 +325,24 @@ def seed_ingredient_data(session: Session) -> None:
     # volumetric portions (tsp, tbsp, cup) a density — a "pat" of
     # butter implies nothing general.
     rows = session.execute(
-        select(Ingredient, RefPortion)
+        select(Ingredient, FoodSource.name, RefPortion)
         .join(IngredientFoodRef, IngredientFoodRef.ingredient_id == Ingredient.id)
         .join(RefFood, RefFood.id == IngredientFoodRef.ref_food_id)
+        .join(FoodSource, FoodSource.id == RefFood.source_id)
         .join(RefPortion, RefPortion.ref_food_id == RefFood.id)
         .where(
             IngredientFoodRef.role == "conversion",
             IngredientFoodRef.confirmed.is_(True),
         )
     ).all()
-    by_ingredient: dict[int, tuple[Ingredient, list[RefPortion]]] = {}
-    for ingredient, portion in rows:
-        _, portions = by_ingredient.setdefault(ingredient.id, (ingredient, []))
-        portions.append(portion)
+    by_ingredient: dict[int, tuple[Ingredient, dict[str, list[RefPortion]]]] = {}
+    for ingredient, source_name, portion in rows:
+        _, by_source = by_ingredient.setdefault(ingredient.id, (ingredient, {}))
+        by_source.setdefault(source_name, []).append(portion)
     derived = 0
-    for ingredient, portions in by_ingredient.values():
+    for ingredient, by_source in by_ingredient.values():
+        # One source's portions only, so weights never mix sources.
+        portions = by_source[min(by_source, key=conversion_rank)]
         if ingredient.unit_weight_g is None:
             medium = next(
                 (p for p in portions if p.unit == "medium" and p.amount), None

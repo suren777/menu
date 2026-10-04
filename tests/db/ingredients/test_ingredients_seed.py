@@ -168,3 +168,56 @@ def test_seed_overrides_stale_parser_candidates(session: Session) -> None:
     ).all()
     assert {ref.ref_food_id for ref in refs if ref.confirmed} == {baking}
     assert any(ref.ref_food_id == stale and not ref.confirmed for ref in refs)
+
+
+def test_seed_derives_from_fdc_before_cnf(session: Session) -> None:
+    """With confirmed conversion references in two sources, the
+    weights come from the higher-precedence source's portions only,
+    whatever the portions' seq_num."""
+    fdc_food = _add_fdc_food(session, "169230", "Garlic, raw")
+    session.add(
+        RefPortion(
+            ref_food_id=fdc_food,
+            seq_num=5,
+            amount=1.0,
+            unit="tsp",
+            modifier="tsp",
+            gram_weight=9.0,
+        )
+    )
+    session.flush()
+    seed_ingredient_data(session)
+    garlic = session.scalars(
+        select(Ingredient).where(Ingredient.name == "garlic")
+    ).one()
+
+    cnf = FoodSource(name="cnf", version="test", licence="test", citation="test")
+    session.add(cnf)
+    session.flush()
+    cnf_food = RefFood(source_id=cnf.id, source_food_id="1", description="Garlic")
+    session.add(cnf_food)
+    session.flush()
+    session.add_all(
+        [
+            RefPortion(
+                ref_food_id=cnf_food.id,
+                seq_num=1,
+                amount=1.0,
+                unit="tsp",
+                modifier=None,
+                gram_weight=5.0,
+            ),
+            IngredientFoodRef(
+                ingredient_id=garlic.id,
+                ref_food_id=cnf_food.id,
+                role="conversion",
+                confirmed=True,
+            ),
+        ]
+    )
+    garlic.density_g_per_ml = None
+    session.flush()
+
+    seed_ingredient_data(session)
+
+    assert garlic.density_g_per_ml == pytest.approx(9.0 / 4.928921593749998)

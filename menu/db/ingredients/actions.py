@@ -19,7 +19,7 @@ from menu.db.database import (
     RefPortion,
 )
 from menu.db.ingredients import repository
-from menu.db.ingredients.seed import LINE_OVERRIDES
+from menu.db.ingredients.seed import LINE_OVERRIDES, conversion_rank
 from menu.ingest.ingredients import (
     canonical_name,
     line_needs_review,
@@ -413,8 +413,8 @@ def _conversion_portions(
     by_source: dict[str, list[RefPortion]] = {}
     for source_name, portion in rows:
         by_source.setdefault(source_name, []).append(portion)
-    for source_name, portions in sorted(by_source.items()):
-        return source_name, portions
+    for source_name in sorted(by_source, key=conversion_rank):
+        return source_name, by_source[source_name]
     return "", []
 
 

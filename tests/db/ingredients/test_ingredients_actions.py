@@ -26,6 +26,8 @@ from menu.ingest.sites.bbc_good_food import BBC_GOOD_FOOD
 FIXTURE = Path(__file__).parents[2] / "ingest" / "fixtures" / "bbc_lines.json"
 
 if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
     from menu.ingest.ingredients import ParsedLine
     from menu.ingest.registry import SiteConfig
 
@@ -1080,3 +1082,42 @@ def test_aggregate_real_cached_cordon_bleu() -> None:
 )
 def test_servings_from_yield(value: object, expected: int) -> None:
     assert actions._servings_from_yield(value) == expected
+
+
+def test_conversion_portions_prefer_fdc_over_cnf(session: Session) -> None:
+    """seed > FDC > CNF: with confirmed conversion references in both,
+    lines convert through FDC's portions (not alphabetical order)."""
+    egg = Ingredient(name="egg")
+    session.add(egg)
+    session.flush()
+    for name, weight in (("cnf", 60.0), ("fdc", 50.0)):
+        source = FoodSource(name=name, version="test", licence="test", citation="test")
+        session.add(source)
+        session.flush()
+        food = RefFood(source_id=source.id, source_food_id="1", description="Egg")
+        session.add(food)
+        session.flush()
+        session.add_all(
+            [
+                RefPortion(
+                    ref_food_id=food.id,
+                    seq_num=1,
+                    amount=1.0,
+                    unit="large",
+                    modifier=None,
+                    gram_weight=weight,
+                ),
+                IngredientFoodRef(
+                    ingredient_id=egg.id,
+                    ref_food_id=food.id,
+                    role="conversion",
+                    confirmed=True,
+                ),
+            ]
+        )
+    session.flush()
+
+    source_name, portions = actions._conversion_portions(egg.id, session)
+
+    assert source_name == "fdc"
+    assert [portion.gram_weight for portion in portions] == [50.0]

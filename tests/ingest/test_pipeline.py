@@ -15,6 +15,7 @@ from menu.ingest.pipeline import (
 )
 from menu.ingest.registry import SiteConfig, get_site
 from menu.ingest.sites.bbc_good_food import BBC_GOOD_FOOD
+from menu.ingest.sites.king_arthur import KING_ARTHUR
 
 SITE = SiteConfig(
     name="test",
@@ -361,3 +362,26 @@ def test_reparse_site_only_touches_its_recipes(
     reparse_site(BBC_GOOD_FOOD)
 
     assert sorted(called) == ["https://x/bbc", "https://x/unstamped"]
+
+
+@pytest.mark.usefixtures("db_engine")
+def test_reparse_site_ignores_other_sites_unstamped_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The NULL backfill is the BBC's alone: a later site's reparse
+    must not adopt another site's unstamped rows."""
+    with get_session() as session:
+        session.add(RecipeUrls(url="https://x/unstamped", name="X", data={}))
+
+    called: list[str] = []
+
+    def fake_store(
+        url: str, _recipe_data: dict[str, object], _site: SiteConfig
+    ) -> None:
+        called.append(url)
+
+    monkeypatch.setattr("menu.ingest.pipeline.store_recipe_ingredients", fake_store)
+
+    reparse_site(KING_ARTHUR)
+
+    assert called == []

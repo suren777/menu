@@ -169,24 +169,25 @@ def crawl_sitemap(site: SiteConfig) -> CrawlReport:
 def reparse_site(site: SiteConfig) -> None:
     """Backfill: re-parse stored ingredient lines without re-fetching.
 
-    Only the site's recipes are reparsed — plus rows stamped before
-    sites existed (site IS NULL), which get stamped here. Reads each
-    stored recipe's raw JSON-LD again and runs it through the parser.
-    Per-recipe failures are counted and logged, like a crawl's bad
-    URLs; store_recipe_ingredients replaces a recipe's previous rows,
-    so reparsing is idempotent. Afterwards ingredients no line and no
-    alias points at are pruned: the reparse re-resolves lines through
-    the seeded aliases, stranding the junk canonical ingredients the
-    first pass created.
+    Only the site's recipes are reparsed — plus, for the BBC alone,
+    rows stamped before sites existed (site IS NULL), which get
+    stamped here. Reads each stored recipe's raw JSON-LD again and
+    runs it through the parser. Per-recipe failures are counted and
+    logged, like a crawl's bad URLs; store_recipe_ingredients replaces
+    a recipe's previous rows, so reparsing is idempotent. Afterwards
+    ingredients no line and no alias points at are pruned: the reparse
+    re-resolves lines through the seeded aliases, stranding the junk
+    canonical ingredients the first pass created.
     """
+    conditions = [RecipeUrls.site == site.name]
+    if site.name == "bbc_good_food":
+        # Only the BBC predates the site column. Another site's
+        # reparse must not adopt someone else's unstamped rows.
+        conditions.append(RecipeUrls.site.is_(None))
     with get_session() as session:
         recipes = [
             (record.url, dict(record.data))
-            for record in session.scalars(
-                select(RecipeUrls).where(
-                    or_(RecipeUrls.site == site.name, RecipeUrls.site.is_(None))
-                )
-            )
+            for record in session.scalars(select(RecipeUrls).where(or_(*conditions)))
         ]
 
     stored = 0

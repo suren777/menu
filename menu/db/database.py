@@ -126,6 +126,55 @@ class RecipeIngredient(Base):
     )
 
 
+class FdcFood(Base):
+    """USDA FoodData Central food (SR Legacy + FNDDS slice).
+
+    Imported once from the public-domain bulk CSV releases by
+    `menu-fdc-import` (menu.nutrition.fdc); never written at ingest
+    time. The parser's fdc_id column on Ingredient points here.
+    """
+
+    __tablename__ = "fdc_food"
+
+    fdc_id: Mapped[int] = mapped_column(primary_key=True)
+    data_type: Mapped[str] = mapped_column(nullable=False)
+    description: Mapped[str] = mapped_column(nullable=False)
+    category: Mapped[str | None]
+    """Category description (SR food_category / FNDDS WWEIA)."""
+
+
+class FdcPortion(Base):
+    """Gram weight of one household portion of an FDC food.
+
+    `unit` is the lookup text: the SR `modifier` ("large", "cup (4.86
+    large eggs)") or the FNDDS portion description's unit ("1 cup" ->
+    "cup"). gram_weight is per `amount` of that unit.
+    """
+
+    __tablename__ = "fdc_portion"
+
+    fdc_id: Mapped[int] = mapped_column(primary_key=True)
+    seq_num: Mapped[int] = mapped_column(primary_key=True)
+    amount: Mapped[float | None]
+    unit: Mapped[str | None]
+    modifier: Mapped[str | None]
+    gram_weight: Mapped[float] = mapped_column(nullable=False)
+
+
+class FdcNutrient(Base):
+    """One nutrient of an FDC food, per 100 g.
+
+    `nutrient` is our fixed key (fdc.NUTRIENTS), not FDC's id, so the
+    two releases' differing names collapse onto one vocabulary.
+    """
+
+    __tablename__ = "fdc_nutrient"
+
+    fdc_id: Mapped[int] = mapped_column(primary_key=True)
+    nutrient: Mapped[str] = mapped_column(primary_key=True)
+    amount_per_100g: Mapped[float] = mapped_column(nullable=False)
+
+
 def initialise(db_engine: Engine | None = None) -> None:
     """Create the tables. The default engine is resolved at call time so
     tests can patch it."""

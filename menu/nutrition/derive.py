@@ -15,6 +15,7 @@ from sqlalchemy import select
 from menu.db.connection import get_session
 from menu.db.database import (
     FoodSource,
+    Ingredient,
     IngredientFoodRef,
     RecipeIngredient,
     RecipeNutrition,
@@ -22,6 +23,7 @@ from menu.db.database import (
     RefFood,
     RefNutrient,
 )
+from menu.db.ingredients.seed import prepared_form
 from menu.ingest.registry import get_site
 
 if TYPE_CHECKING:
@@ -90,6 +92,33 @@ def _nutrition_ref(
     return None
 
 
+def _prepared_nutrition(
+    form: tuple[str, str], session: Session
+) -> tuple[str, list[RefNutrient]] | None:
+    """Nutrient rows of a hand-seeded prepared form ("egg", "yolk" ->
+    fdc 172184). The seed is the confirmation; a form whose food or
+    nutrients are missing falls back to the confirmed reference."""
+    source_name, source_food_id = form
+    food = session.scalar(
+        select(RefFood)
+        .join(FoodSource, FoodSource.id == RefFood.source_id)
+        .where(
+            FoodSource.name == source_name,
+            RefFood.source_food_id == source_food_id,
+        )
+    )
+    if food is None:
+        return None
+    nutrients = list(
+        session.scalars(
+            select(RefNutrient).where(RefNutrient.ref_food_id == food.id)
+        )
+    )
+    if not nutrients:
+        return None
+    return source_name, nutrients
+
+
 def derive_nutrition(recipe_id: int) -> RecipeNutrition:
     """Derive the recipe's nutrition from its ingredient lines and
     store it as the recipe's "derived" row.
@@ -117,6 +146,19 @@ def derive_nutrition(recipe_id: int) -> RecipeNutrition:
                 RecipeIngredient.optional.is_(False),
             )
         ).all()
+        ingredient_names: dict[int, str] = dict(
+            session.execute(
+                select(Ingredient.id, Ingredient.name).where(
+                    Ingredient.id.in_(
+                        [
+                            line.ingredient_id
+                            for line in lines
+                            if line.ingredient_id is not None
+                        ]
+                    )
+                )
+            ).all()
+        )
         totals: dict[str, float] = {}
         definitions: dict[str, set[str]] = {}
         sources: set[str] = set()
@@ -138,7 +180,16 @@ def derive_nutrition(recipe_id: int) -> RecipeNutrition:
                 else line.grams
             )
             total_grams += grams
-            reference = _nutrition_ref(line.ingredient_id, preference, session)
+            form = prepared_form(
+                ingredient_names[line.ingredient_id],
+                line.preparation,
+                line.variant,
+            )
+            reference = None
+            if form is not None:
+                reference = _prepared_nutrition(form, session)
+            if reference is None:
+                reference = _nutrition_ref(line.ingredient_id, preference, session)
             if reference is None:
                 unconverted += 1
                 continue

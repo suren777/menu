@@ -194,6 +194,36 @@ FOOD_REFS: dict[str, list[tuple[str, str, str]]] = {
 }
 
 
+# A preparation that changes the food itself: "2 egg yolks" is not
+# egg, "juice of 1 lemon" is not lemon, cooked rice is not raw.
+# (canonical ingredient, keyword in the line's preparation, parsed
+# name or alias variant) -> (source, source_food_id). Hand-seeded,
+# so hand-seeded is the confirmation.
+PREPARED_FORMS: dict[tuple[str, str], tuple[str, str]] = {
+    ("egg", "yolk"): ("fdc", "172184"),
+    ("egg", "white"): ("fdc", "172183"),
+    ("lemon", "juice"): ("fdc", "167747"),
+    ("lime", "juice"): ("fdc", "168156"),
+    ("rice", "cooked"): ("fdc", "168878"),
+}
+
+
+def prepared_form(
+    ingredient_name: str, *texts: str | None
+) -> tuple[str, str] | None:
+    """The prepared form whose keyword appears in one of the line's
+    texts (parsed name, preparation, stored variant).
+
+    Notes are deliberately excluded — "freeze the whites for another
+    recipe" must not turn an egg into egg white.
+    """
+    haystack = " ".join(text.lower() for text in texts if text)
+    for (canonical, keyword), form in PREPARED_FORMS.items():
+        if canonical == ingredient_name and keyword in haystack:
+            return form
+    return None
+
+
 def _canonical_ingredient(name: str, session: Session) -> Ingredient:
     ingredient = session.scalar(select(Ingredient).where(Ingredient.name == name))
     if ingredient is None:

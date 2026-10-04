@@ -316,3 +316,76 @@ def test_derive_nutrition_coverage_and_definitions() -> None:
         assert row.unconverted_lines == 1
         assert row.definitions_mixed is True
         assert row.sources == "fdc"
+
+
+@pytest.mark.usefixtures("db_engine")
+def test_derive_nutrition_uses_prepared_form() -> None:
+    """A line that resolved through the "yolk" alias variant takes
+    the yolk food's nutrients; a plain egg line keeps the whole
+    egg's."""
+    with get_session() as session:
+        whole = _add_nutrition_food(
+            session,
+            "171287",
+            "Egg, whole, raw, fresh",
+            [("protein_g", 12.56, "by_weight")],
+        )
+        _add_nutrition_food(
+            session,
+            "172184",
+            "Egg, yolk, raw, fresh",
+            [("protein_g", 15.86, "by_weight")],
+        )
+        egg = Ingredient(name="egg")
+        recipe = RecipeUrls(
+            url="https://x/custard", name="Custard", data={}, site="bbc_good_food"
+        )
+        session.add_all([egg, recipe])
+        session.flush()
+        session.add(
+            IngredientFoodRef(
+                ingredient_id=egg.id,
+                ref_food_id=whole,
+                role="nutrition",
+                confirmed=True,
+            )
+        )
+        session.add(
+            RecipeIngredient(
+                recipe_id=recipe.id,
+                position=0,
+                raw_text="2 large egg yolks",
+                ingredient_id=egg.id,
+                quantity=2.0,
+                dimension="count",
+                base_unit="piece",
+                size="large",
+                grams=34.0,
+                grams_source="seed",
+                variant="yolk",
+            )
+        )
+        session.add(
+            RecipeIngredient(
+                recipe_id=recipe.id,
+                position=1,
+                raw_text="1 egg",
+                ingredient_id=egg.id,
+                quantity=1.0,
+                dimension="count",
+                base_unit="piece",
+                grams=50.0,
+                grams_source="seed",
+            )
+        )
+        recipe_id = recipe.id
+
+    derive_nutrition(recipe_id)
+    with get_session() as session:
+        row = session.scalars(
+            select(RecipeNutrition).where(RecipeNutrition.recipe_id == recipe_id)
+        ).one()
+        assert row.protein_g == pytest.approx(
+            34.0 / 100 * 15.86 + 50.0 / 100 * 12.56
+        )
+        assert row.sources == "fdc"

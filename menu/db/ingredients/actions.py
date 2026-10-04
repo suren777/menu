@@ -16,6 +16,7 @@ from menu.db.database import (
     RecipeIngredient,
     RecipeUrls,
     RefFood,
+    RefPortion,
 )
 from menu.db.ingredients import repository
 from menu.db.ingredients.seed import LINE_OVERRIDES
@@ -25,7 +26,15 @@ from menu.ingest.ingredients import (
     name_needs_review,
     parse_line,
 )
-from menu.ingest.units import count_to_mass, volume_to_mass
+from menu.ingest.units import (
+    COUNT,
+    MASS,
+    VOLUME,
+    count_to_mass,
+    singular,
+    unit_ml,
+    volume_to_mass,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -96,6 +105,12 @@ def store_recipe_ingredients(
                 needs_review=override is None
                 and line_needs_review(raw, parsed, alt_parsed),
             )
+            grams = grams_max = None
+            grams_source = None
+            if ingredient_id is not None:
+                grams, grams_max, grams_source = _line_grams(
+                    parsed, ingredient_id, session
+                )
             line = RecipeIngredient(
                 recipe_id=record.id,
                 position=position,
@@ -113,6 +128,9 @@ def store_recipe_ingredients(
                 note=parsed.note,
                 optional=parsed.optional,
                 parse_confidence=parsed.parse_confidence,
+                grams=grams,
+                grams_max=grams_max,
+                grams_source=grams_source,
             )
             session.add(line)
             session.flush()  # the row's id is needed by the alternative rows
@@ -241,6 +259,184 @@ def _seed_candidate(
         session.add(
             IngredientFoodRef(ingredient_id=ingredient_id, ref_food_id=ref_food)
         )
+
+
+# Household-unit spellings the parser emits that FDC portion rows
+# spell differently.
+_UNIT_ALIASES = {
+    "tablespoon": "tbsp",
+    "tablespoons": "tbsp",
+    "teaspoon": "tsp",
+    "teaspoons": "tsp",
+}
+
+
+def _portion_for(
+    portions: list[RefPortion], unit: str | None, prefer: str | None = None
+) -> RefPortion | None:
+    """The portion spoken as `unit` ("tbsp", "medium", "stick").
+
+    Egg's cup row is "cup (4.86 large eggs)", so a unit followed by a
+    parenthetical counts as the unit too. When `prefer` is given (the
+    line's preparation or size), portions whose modifier says so come
+    first.
+    """
+    if unit is None:
+        return None
+    matches = [
+        p
+        for p in portions
+        if p.unit is not None
+        and (p.unit == unit or p.unit.startswith(f"{unit} ("))
+    ]
+    if prefer is not None:
+        for candidate in matches:
+            if candidate.modifier == prefer:
+                return candidate
+    return matches[0] if matches else None
+
+
+def _portion_density(
+    portions: list[RefPortion], prefer: str | None
+) -> float | None:
+    """g/ml implied by a volumetric portion: salt's "tsp = 6 g" row
+    is 1.22 g/ml, so "a pinch" converts. Preparation-matched portions
+    come first."""
+    for portion in sorted(portions, key=lambda p: p.modifier != prefer):
+        if portion.unit is None or not portion.amount:
+            continue
+        ml = unit_ml(singular(portion.unit))
+        if ml is None:
+            continue
+        return portion.gram_weight / (portion.amount * ml)
+    return None
+
+
+def to_grams(
+    quantity: float | None,
+    quantity_max: float | None,
+    dimension: str | None,
+    base_unit: str | None,
+    original_unit: str | None,
+    preparation: str | None,
+    size: str | None,
+    ingredient: repository.IngredientModel,
+    portions: list[RefPortion],
+    source: str,
+) -> tuple[float | None, float | None, str | None]:
+    """(grams, grams_max, provenance) for one stored line.
+
+    Precedence is seed > reference portion > NULL — a conversion is
+    never guessed:
+
+    - mass is already grams (provenance NULL: no lookup happened).
+    - volume converts through the portion for the line's unit ("1
+      cup egg" -> its 243 g row), preferring a modifier that matches
+      the line's preparation; else the seeded density; else the
+      density a volumetric portion implies (salt's "tsp = 6 g").
+    - count converts through the portion matching the line's size
+      ("medium" egg -> 44 g); else the seeded unit weight; else the
+      medium portion. Named count units ("2 sticks butter") convert
+      through a portion with that name, or the seeded weight.
+    """
+    if quantity is None:
+        return None, None, None
+    if dimension == MASS:
+        return quantity, quantity_max, None
+    if dimension == VOLUME:
+        name = singular(_UNIT_ALIASES.get(original_unit or "", original_unit or ""))
+        portion = _portion_for(portions, name, preparation)
+        if portion is not None and portion.amount:
+            factor = portion.gram_weight / portion.amount
+            grams_source = source
+        elif ingredient.density_g_per_ml is not None:
+            factor = ingredient.density_g_per_ml
+            grams_source = "seed"
+        else:
+            implied = _portion_density(portions, preparation)
+            if implied is None:
+                return None, None, None
+            factor = implied
+            grams_source = source
+        grams_max = quantity_max * factor if quantity_max is not None else None
+        return quantity * factor, grams_max, grams_source
+    if dimension == COUNT:
+        if base_unit != "piece":
+            # Named count units convert through a portion with that
+            # name ("stick", "slice") or the seeded weight.
+            portion = _portion_for(portions, base_unit)
+            source_name = source
+            weight = (
+                portion.gram_weight / portion.amount
+                if portion is not None and portion.amount
+                else None
+            )
+        else:
+            portion = _portion_for(portions, size) if size is not None else None
+            source_name = source
+            weight = (
+                portion.gram_weight / portion.amount
+                if portion is not None and portion.amount
+                else None
+            )
+        if weight is None and ingredient.unit_weight_g is not None:
+            weight = ingredient.unit_weight_g
+            source_name = "seed"
+        if weight is None and base_unit == "piece":
+            medium = _portion_for(portions, "medium")
+            if medium is not None and medium.amount:
+                weight = medium.gram_weight / medium.amount
+        if weight is None:
+            return None, None, None
+        grams_max = quantity_max * weight if quantity_max is not None else None
+        return quantity * weight, grams_max, source_name
+    return None, None, None
+
+
+def _conversion_portions(
+    ingredient_id: int, session: Session
+) -> tuple[str, list[RefPortion]]:
+    """Portions of the ingredient's confirmed conversion reference,
+    with the source's name for grams provenance. Only confirmed
+    references feed conversion — the parser's candidates never do."""
+    rows = session.execute(
+        select(FoodSource.name, RefPortion)
+        .join(RefFood, RefFood.source_id == FoodSource.id)
+        .join(IngredientFoodRef, IngredientFoodRef.ref_food_id == RefFood.id)
+        .join(RefPortion, RefPortion.ref_food_id == RefFood.id)
+        .where(
+            IngredientFoodRef.ingredient_id == ingredient_id,
+            IngredientFoodRef.role == "conversion",
+            IngredientFoodRef.confirmed.is_(True),
+        )
+    ).all()
+    by_source: dict[str, list[RefPortion]] = {}
+    for source_name, portion in rows:
+        by_source.setdefault(source_name, []).append(portion)
+    for source_name, portions in sorted(by_source.items()):
+        return source_name, portions
+    return "", []
+
+
+def _line_grams(
+    parsed: ParsedLine, ingredient_id: int, session: Session
+) -> tuple[float | None, float | None, str | None]:
+    record = session.get(Ingredient, ingredient_id)
+    if record is None:  # pragma: no cover - resolved just above
+        return None, None, None
+    source, portions = _conversion_portions(ingredient_id, session)
+    return to_grams(
+        parsed.quantity,
+        parsed.quantity_max,
+        parsed.dimension,
+        parsed.base_unit,
+        parsed.original_unit,
+        parsed.preparation,
+        parsed.size,
+        repository.to_model(record),
+        portions,
+        source,
+    )
 
 
 def _servings_from_yield(value: Any) -> int | None:

@@ -16,8 +16,9 @@ from menu.db.database import (
     RecipeIngredient,
     RecipeUrls,
     RefFood,
+    RefPortion,
 )
-from menu.db.ingredients import actions
+from menu.db.ingredients import actions, repository
 from menu.db.ingredients.seed import seed_ingredient_data
 from menu.ingest.ingredients import parse_line
 from menu.ingest.sites.bbc_good_food import BBC_GOOD_FOOD
@@ -37,6 +38,257 @@ def add_recipe(url: str) -> int:
         session.add(recipe)
         session.flush()
         return recipe.id
+
+
+def _egg() -> repository.IngredientModel:
+    return repository.IngredientModel(
+        id=1, name="egg", density_g_per_ml=None, unit_weight_g=50.0
+    )
+
+
+def _egg_portions() -> list[RefPortion]:
+    """The egg portion rows the FDC import stores: sizes plus the cup."""
+    return [
+        RefPortion(
+            ref_food_id=1,
+            seq_num=1,
+            amount=1.0,
+            unit="small",
+            modifier="small",
+            gram_weight=38.0,
+        ),
+        RefPortion(
+            ref_food_id=1,
+            seq_num=2,
+            amount=1.0,
+            unit="medium",
+            modifier="medium",
+            gram_weight=44.0,
+        ),
+        RefPortion(
+            ref_food_id=1,
+            seq_num=3,
+            amount=1.0,
+            unit="large",
+            modifier="large",
+            gram_weight=50.0,
+        ),
+        RefPortion(
+            ref_food_id=1,
+            seq_num=4,
+            amount=1.0,
+            unit="cup (4.86 large eggs)",
+            modifier="cup (4.86 large eggs)",
+            gram_weight=243.0,
+        ),
+    ]
+
+
+def test_to_grams_count_uses_size_matched_portion() -> None:
+    """1 large egg -> 50 g, 2 medium eggs -> 88 g: the portion
+    matching the line's size beats the seeded default."""
+    egg = _egg()
+    assert (
+        actions.to_grams(
+            1.0, None, "count", "piece", None, None, "large", egg,
+            _egg_portions(), "fdc",
+        )
+        == (50.0, None, "fdc")
+    )
+    assert (
+        actions.to_grams(
+            2.0, None, "count", "piece", None, None, "medium", egg,
+            _egg_portions(), "fdc",
+        )
+        == (88.0, None, "fdc")
+    )
+
+
+def test_to_grams_count_falls_back_to_seed_weight() -> None:
+    """No size: the seeded unit weight converts ("2 eggs" -> 100 g)."""
+    assert (
+        actions.to_grams(
+            2.0, None, "count", "piece", None, None, None, _egg(),
+            _egg_portions(), "fdc",
+        )
+        == (100.0, None, "seed")
+    )
+
+
+def test_to_grams_volume_uses_unit_portion() -> None:
+    """1 cup egg -> 243 g through the "cup (4.86 large eggs)" row."""
+    assert (
+        actions.to_grams(
+            1.0, None, "volume", "ml", "cup", None, None, _egg(),
+            _egg_portions(), "fdc",
+        )
+        == (243.0, None, "fdc")
+    )
+
+
+def test_to_grams_volume_seed_density_beats_implied() -> None:
+    """A seed beats the reference: 100 ml of a 2.0 g/ml seed is
+    200 g even though the cup portion implies less."""
+    cup = RefPortion(
+        ref_food_id=2,
+        seq_num=1,
+        amount=1.0,
+        unit="cup",
+        modifier="cup",
+        gram_weight=200.0,
+    )
+    watery = repository.IngredientModel(
+        id=2, name="watery", density_g_per_ml=2.0, unit_weight_g=None
+    )
+    assert (
+        actions.to_grams(
+            100.0, None, "volume", "ml", "ml", None, None, watery, [cup], "fdc"
+        )
+        == (200.0, None, "seed")
+    )
+
+
+def test_to_grams_volume_implied_density() -> None:
+    """A pinch of salt converts through the density its teaspoon
+    portion implies."""
+    tsp = RefPortion(
+        ref_food_id=3,
+        seq_num=1,
+        amount=1.0,
+        unit="tsp",
+        modifier="tsp",
+        gram_weight=6.0,
+    )
+    salt = repository.IngredientModel(
+        id=3, name="salt", density_g_per_ml=None, unit_weight_g=None
+    )
+    # "a pinch of salt" stores quantity 0.36 ml (the fixed amount
+    # units._FIXED_AMOUNTS assigns a pinch), then converts via the
+    # density the tsp portion implies.
+    grams, grams_max, source = actions.to_grams(
+        0.36, None, "volume", "ml", "pinch", None, None, salt, [tsp], "fdc"
+    )
+    assert grams == pytest.approx(0.36 * 6.0 / 4.928921610938, rel=1e-3)
+    assert grams_max is None
+    assert source == "fdc"
+
+
+def test_to_grams_named_count_unit() -> None:
+    """2 sticks of butter convert through the stick portion."""
+    stick = RefPortion(
+        ref_food_id=4,
+        seq_num=1,
+        amount=1.0,
+        unit="stick",
+        modifier="stick",
+        gram_weight=113.0,
+    )
+    butter = repository.IngredientModel(
+        id=4, name="butter", density_g_per_ml=0.96, unit_weight_g=None
+    )
+    assert (
+        actions.to_grams(
+            2.0, None, "count", "stick", "sticks", None, None, butter,
+            [stick], "fdc",
+        )
+        == (226.0, None, "fdc")
+    )
+
+
+def test_to_grams_never_guesses() -> None:
+    """No portion, no seed: grams stays NULL."""
+    garlic = repository.IngredientModel(
+        id=5, name="garlic", density_g_per_ml=None, unit_weight_g=None
+    )
+    assert (
+        actions.to_grams(
+            2.0, None, "count", "piece", None, None, None, garlic, [], "fdc"
+        )
+        == (None, None, None)
+    )
+
+
+def test_to_grams_ranges_and_mass() -> None:
+    """Ranges convert the upper end too; mass lines need no lookup."""
+    flour = repository.IngredientModel(
+        id=6, name="flour", density_g_per_ml=0.55, unit_weight_g=None
+    )
+    cup = RefPortion(
+        ref_food_id=7,
+        seq_num=1,
+        amount=1.0,
+        unit="cup",
+        modifier="cup",
+        gram_weight=125.0,
+    )
+    assert (
+        actions.to_grams(
+            2.0, 3.0, "volume", "ml", "cups", None, None, flour, [cup], "fdc"
+        )
+        == (250.0, 375.0, "fdc")
+    )
+    assert (
+        actions.to_grams(
+            100.0, 120.0, "mass", "g", "g", None, None, flour, [], "fdc"
+        )
+        == (100.0, 120.0, None)
+    )
+
+
+@pytest.mark.usefixtures("db_engine")
+def test_store_writes_grams_from_confirmed_ref() -> None:
+    """Storing a line converts it to grams through the ingredient's
+    confirmed conversion reference."""
+    recipe_id = add_recipe("https://x/cake")
+    with get_session() as session:
+        source = FoodSource(
+            name="fdc",
+            version="test",
+            licence="public domain",
+            citation="test",
+        )
+        session.add(source)
+        session.flush()
+        food = RefFood(
+            source_id=source.id,
+            source_food_id="171287",
+            description="Egg, whole, raw, fresh",
+        )
+        session.add(food)
+        session.flush()
+        session.add(
+            RefPortion(
+                ref_food_id=food.id,
+                seq_num=1,
+                amount=1.0,
+                unit="medium",
+                modifier="medium",
+                gram_weight=44.0,
+            )
+        )
+        egg = Ingredient(name="egg")
+        session.add(egg)
+        session.flush()
+        session.add(
+            IngredientFoodRef(
+                ingredient_id=egg.id,
+                ref_food_id=food.id,
+                role="conversion",
+                confirmed=True,
+            )
+        )
+
+    actions.store_recipe_ingredients(
+        "https://x/cake", {"recipeIngredient": ["2 medium eggs"]}, BBC_GOOD_FOOD
+    )
+    with get_session() as session:
+        line = session.scalars(
+            select(RecipeIngredient).where(RecipeIngredient.recipe_id == recipe_id)
+        ).first()
+        assert line is not None
+        assert line.grams == 88.0
+        assert line.grams_max is None
+        assert line.grams_source == "fdc"
 
 
 @pytest.mark.usefixtures("db_engine")

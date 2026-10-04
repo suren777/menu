@@ -70,6 +70,9 @@ class RecipeIngredientModel:
     variant: str | None
     alternative_of: int | None
     parse_confidence: float | None
+    grams: float | None
+    grams_max: float | None
+    grams_source: str | None
 
 
 def to_recipe_ingredient_model(record: RecipeIngredient) -> RecipeIngredientModel:
@@ -93,6 +96,9 @@ def to_recipe_ingredient_model(record: RecipeIngredient) -> RecipeIngredientMode
         optional=record.optional,
         alternative_of=record.alternative_of,
         parse_confidence=record.parse_confidence,
+        grams=record.grams,
+        grams_max=record.grams_max,
+        grams_source=record.grams_source,
     )
 
 

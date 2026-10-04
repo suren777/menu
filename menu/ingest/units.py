@@ -122,3 +122,17 @@ def count_to_mass(count: float, unit_weight_g: float) -> float:
     The unit weight is ingredient data, not a conversion factor.
     """
     return count * unit_weight_g
+
+
+def unit_ml(unit_name: str) -> float | None:
+    """Millilitres of one household unit ("tbsp" -> ~14.8), or None
+    when the name is not a volume unit ("large", "stick").
+
+    Used to read a density out of a portion that weighs a household
+    measure ("1 tsp salt = 6 g" -> 1.22 g/ml).
+    """
+    with suppress(UndefinedUnitError):
+        quantity = UREG.Quantity(1, UREG.parse_units(unit_name))
+        if quantity.dimensionality == UREG.milliliter.dimensionality:
+            return float(quantity.to(UREG.milliliter).magnitude)
+    return None

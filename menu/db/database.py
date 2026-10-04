@@ -145,6 +145,16 @@ class RecipeIngredient(Base):
     )
     """Set on the non-counted options of "rosewater or vanilla"."""
     parse_confidence: Mapped[float | None]
+    grams: Mapped[float | None]
+    """The line on the common gram scale, derived from quantity and
+    the reference data. NULL when no honest conversion exists —
+    never guessed."""
+    grams_max: Mapped[float | None]
+    """Upper end of a range ("2-3"), in grams."""
+    grams_source: Mapped[str | None]
+    """Provenance of the conversion: "seed", the reference source's
+    name ("fdc"), NULL for mass lines (no lookup happened) and for
+    unconverted lines."""
 
     __table_args__ = (
         Index("ix_recipe_ingredient_ingredient_id", "ingredient_id"),

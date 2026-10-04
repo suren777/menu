@@ -1,0 +1,4 @@
+FoodID,FoodCode,FoodGroupID,FoodSourceID,FoodDescription,FoodDescriptionF,FoodDateOfEntry,FoodDateOfPublication,CountryCode,ScientificName
+2,2,22,20,Cheese souffle,Soufflé au fromage,1981-01-01,,,
+125,125,1,24,"Egg, chicken, whole, fresh or frozen, raw","Oeuf, poule, entier, frais ou congelé, cru",1989-01-01,1999-02-01,01123,
+600,600,5,0,"Chicken, broiler, back, meat, fried","Poulet à griller, dos, viande, frit",1981-01-01,,05054,

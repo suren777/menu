@@ -5,8 +5,8 @@ from typing import TYPE_CHECKING
 
 from defusedxml.ElementTree import fromstring
 
-from menu.ingest.errors import FetchError
-from menu.ingest.fetch import check_robots
+from menu.ingest.errors import BlockedError, FetchError
+from menu.ingest.fetch import _politeness, check_robots
 from menu.ingest.http import session
 
 if TYPE_CHECKING:
@@ -22,7 +22,12 @@ def request_xml(url: str, site: SiteConfig | None = None) -> tuple[str, list[str
     site is given."""
     if site is not None:
         check_robots(url, site)
+        # Sitemaps wait their turn like page fetches: a discovery run
+        # hitting one host is the same crawl for politeness purposes.
+        _politeness.wait(site.base_url, site.politeness_delay)
     response = session.get(url, timeout=10)
+    if response.status_code in (401, 402, 403, 429):
+        raise BlockedError(f"Blocked with HTTP {response.status_code}: {url!r}")
     if not response.ok:
         raise FetchError(f"Can't fetch {url!r}")
 

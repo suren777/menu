@@ -279,6 +279,52 @@ def test_crawl_sitemap_stops_when_blocked(
     assert report == CrawlReport(fetched=2, stored=2)
 
 
+@patch("menu.ingest.pipeline.finalise_sitemap")
+@patch("menu.ingest.pipeline.discover_urls")
+def test_process_sitemap_blocked_discovery_stops_the_crawl(
+    mock_discover: MagicMock,
+    mock_finalise: MagicMock,
+) -> None:
+    """A 402 on the sitemap fetch itself is a site-wide block, not a
+    dead link: the sitemap stays unfinalised and the error escapes."""
+    mock_discover.side_effect = BlockedError("Blocked with HTTP 402")
+
+    with pytest.raises(BlockedError):
+        process_sitemap("https://test.com/sitemap1", SITE)
+
+    mock_finalise.assert_not_called()
+
+
+@patch("menu.ingest.pipeline.finalise_sitemap")
+@patch("menu.ingest.pipeline.process_sitemap")
+@patch("menu.ingest.pipeline.get_session")
+@patch("menu.ingest.pipeline.get_unfinished")
+def test_crawl_sitemap_stops_when_sitemap_blocked(
+    mock_get_unfinished: MagicMock,
+    mock_get_session: MagicMock,
+    mock_process_sitemap: MagicMock,
+    mock_finalise: MagicMock,
+) -> None:
+    mock_session = MagicMock()
+    mock_get_session.return_value.__enter__.return_value = mock_session
+    mock_get_unfinished.return_value = [
+        MagicMock(url="https://test.com/sitemap1"),
+        MagicMock(url="https://test.com/sitemap2"),
+        MagicMock(url="https://test.com/sitemap3"),
+    ]
+    mock_process_sitemap.side_effect = [
+        CrawlReport(fetched=2, stored=2),
+        BlockedError("Blocked with HTTP 402"),
+    ]
+
+    report = crawl_sitemap(SITE)
+
+    assert mock_process_sitemap.call_count == 2
+    # A blocked sitemap is a site-wide block: nothing is finalised.
+    mock_finalise.assert_not_called()
+    assert report == CrawlReport(fetched=2, stored=2)
+
+
 def test_bbc_site_registered() -> None:
     assert get_site("bbc_good_food").name == BBC_GOOD_FOOD.name
 

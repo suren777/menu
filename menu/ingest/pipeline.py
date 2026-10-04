@@ -136,9 +136,10 @@ def crawl_sitemap(site: SiteConfig) -> CrawlReport:
     reason).
 
     A sitemap whose discovery fails (unreachable, broken XML) is logged
-    and finalised so the crawl moves on to the next one. A site-wide
-    block is the opposite: the run stops and everything unfinalised
-    stays queued for a later run.
+    and finalised so the crawl moves on to the next one. A block is the
+    opposite — a blocked sitemap fetch (402/403/429 from the sitemap
+    itself) is a site-wide block: the run stops and everything
+    unfinalised stays queued for a later run.
     """
     with get_session() as session:
         urls = [s.url for s in get_unfinished(session, site.name)]
@@ -149,6 +150,9 @@ def crawl_sitemap(site: SiteConfig) -> CrawlReport:
             report.merge(process_sitemap(url, site))
         except CrawlBlockedError as exc:
             logger.error("Stopping %s: %s", site.name, exc)
+            break
+        except BlockedError as exc:
+            logger.error("Stopping %s: sitemap %s blocked: %s", site.name, url, exc)
             break
         except Exception as exc:  # noqa: BLE001
             report.failed += 1
@@ -231,8 +235,13 @@ def main() -> None:
     if args.reparse:
         reparse_site(site)
         return
-    import_sitemap(site)
-    crawl_sitemap(site)
+    try:
+        import_sitemap(site)
+        crawl_sitemap(site)
+    except BlockedError as exc:
+        # A blocked sitemap or crawl is a site-wide block: stop cleanly
+        # instead of a traceback. Unfinished sitemaps stay queued.
+        raise SystemExit(f"{site.name}: blocked: {exc}") from exc
 
 
 if __name__ == "__main__":

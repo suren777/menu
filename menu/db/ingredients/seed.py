@@ -25,7 +25,9 @@ from menu.db.database import (
     IngredientAlias,
     IngredientFoodRef,
     RefFood,
+    RefPortion,
 )
+from menu.ingest.units import singular, unit_ml
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -272,4 +274,50 @@ def seed_ingredient_data(session: Session) -> None:
             "%d seed mappings skipped: their foods are not in the ref"
             " tables yet; run menu-fdc-import",
             missed,
+        )
+
+    # Derive density and unit weight from the confirmed conversion
+    # reference's portions when no seed override exists: the seeded
+    # values above are the curated layer, the reference fills the
+    # rest. Only size portions ("medium") imply a unit weight and
+    # volumetric portions (tsp, tbsp, cup) a density — a "pat" of
+    # butter implies nothing general.
+    rows = session.execute(
+        select(Ingredient, RefPortion)
+        .join(IngredientFoodRef, IngredientFoodRef.ingredient_id == Ingredient.id)
+        .join(RefFood, RefFood.id == IngredientFoodRef.ref_food_id)
+        .join(RefPortion, RefPortion.ref_food_id == RefFood.id)
+        .where(
+            IngredientFoodRef.role == "conversion",
+            IngredientFoodRef.confirmed.is_(True),
+        )
+    ).all()
+    by_ingredient: dict[int, tuple[Ingredient, list[RefPortion]]] = {}
+    for ingredient, portion in rows:
+        _, portions = by_ingredient.setdefault(ingredient.id, (ingredient, []))
+        portions.append(portion)
+    derived = 0
+    for ingredient, portions in by_ingredient.values():
+        if ingredient.unit_weight_g is None:
+            medium = next(
+                (p for p in portions if p.unit == "medium" and p.amount), None
+            )
+            if medium is not None and medium.amount:
+                ingredient.unit_weight_g = medium.gram_weight / medium.amount
+                derived += 1
+        if ingredient.density_g_per_ml is None:
+            for portion in sorted(portions, key=lambda p: p.seq_num):
+                if portion.unit is None or not portion.amount:
+                    continue
+                ml = unit_ml(singular(portion.unit))
+                if ml is None:
+                    continue
+                ingredient.density_g_per_ml = portion.gram_weight / (
+                    portion.amount * ml
+                )
+                derived += 1
+                break
+    if derived:
+        logger.info(
+            "Derived %d weights/densities from reference portions", derived
         )

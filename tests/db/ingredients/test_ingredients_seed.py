@@ -2,6 +2,7 @@
 
 from typing import TYPE_CHECKING
 
+import pytest
 from sqlalchemy import select
 
 from menu.db.database import (
@@ -10,6 +11,7 @@ from menu.db.database import (
     IngredientAlias,
     IngredientFoodRef,
     RefFood,
+    RefPortion,
 )
 from menu.db.ingredients import repository
 from menu.db.ingredients.seed import seed_ingredient_data
@@ -97,6 +99,40 @@ def _add_fdc_food(session: Session, source_food_id: str, description: str) -> in
     session.add(food)
     session.flush()
     return food.id
+
+
+def test_seed_derives_weights_from_reference_portions(session: Session) -> None:
+    """No seed override: the confirmed conversion reference's
+    portions fill the ingredient's density and unit weight."""
+    food_id = _add_fdc_food(session, "169230", "Garlic, raw")
+    session.add(
+        RefPortion(
+            ref_food_id=food_id,
+            seq_num=1,
+            amount=1.0,
+            unit="tsp",
+            modifier="tsp",
+            gram_weight=9.0,
+        )
+    )
+    session.add(
+        RefPortion(
+            ref_food_id=food_id,
+            seq_num=2,
+            amount=1.0,
+            unit="medium",
+            modifier="medium",
+            gram_weight=3.0,
+        )
+    )
+    session.flush()
+
+    seed_ingredient_data(session)
+
+    garlic = repository.find_ingredient_by_name("garlic", session)
+    assert garlic is not None
+    assert garlic.unit_weight_g == 3.0
+    assert garlic.density_g_per_ml == pytest.approx(9.0 / 4.928921593749998)
 
 
 def test_seed_confirms_fdc_ids(session: Session) -> None:

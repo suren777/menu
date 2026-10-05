@@ -23,7 +23,7 @@ from menu.nutrition.derive import derive_nutrition, store_published_nutrition
 
 # The nutrients validation compares: the per-serving numbers sites
 # publish and people check.
-_COMPARED = ("energy_kcal", "protein_g", "fat_g", "carbohydrate_g")
+COMPARED = ("energy_kcal", "protein_g", "fat_g", "carbohydrate_g")
 
 HIGH_ERROR = 0.25
 """Kcal relative error above which a recipe is a high-error one."""
@@ -41,12 +41,17 @@ def derive_all_nutrition() -> int:
     return len(recipe_ids)
 
 
-def validation_report(min_coverage: float = 0.9) -> None:
+def validation_comparisons(
+    min_coverage: float = 0.9,
+) -> list[tuple[int, str | None, str | None, str, dict[str, float]]]:
     """Derived vs published per serving, for recipes that publish
     nutrition, have servings, and whose derivation covered at least
-    min_coverage of their grams. Prints the error distribution per
-    site and source, the worst recipes by kcal error, and the
-    ingredients most often present in high-error recipes."""
+    min_coverage of their grams: (recipe_id, site, sources, name,
+    {nutrient: relative error}). Shared by the printed report and the
+    metrics snapshot."""
+    comparisons: list[
+        tuple[int, str | None, str | None, str, dict[str, float]]
+    ] = []
     with get_session() as session:
         recipes = {
             recipe.id: recipe for recipe in session.scalars(select(RecipeUrls))
@@ -57,10 +62,6 @@ def validation_report(min_coverage: float = 0.9) -> None:
                 select(RecipeNutrition).where(RecipeNutrition.source == "published")
             )
         }
-        comparisons: list[
-            tuple[str | None, str | None, str, dict[str, float]]
-        ] = []
-        high_ids: list[int] = []
         for row in session.scalars(
             select(RecipeNutrition).where(RecipeNutrition.source == "derived")
         ):
@@ -78,7 +79,7 @@ def validation_report(min_coverage: float = 0.9) -> None:
             # recipe, so they are divided by servings first.
             servings = recipe.servings
             errors: dict[str, float] = {}
-            for nutrient in _COMPARED:
+            for nutrient in COMPARED:
                 derived_value = getattr(row, nutrient)
                 published_value = getattr(pub, nutrient)
                 if derived_value is None or published_value in (None, 0):
@@ -89,9 +90,25 @@ def validation_report(min_coverage: float = 0.9) -> None:
                 )
             if not errors:
                 continue
-            comparisons.append((recipe.site, row.sources, recipe.name, errors))
-            if errors.get("energy_kcal", 0) > HIGH_ERROR:
-                high_ids.append(row.recipe_id)
+            comparisons.append(
+                (row.recipe_id, recipe.site, row.sources, recipe.name, errors)
+            )
+    return comparisons
+
+
+def validation_report(min_coverage: float = 0.9) -> None:
+    """Derived vs published per serving, for recipes that publish
+    nutrition, have servings, and whose derivation covered at least
+    min_coverage of their grams. Prints the error distribution per
+    site and source, the worst recipes by kcal error, and the
+    ingredients most often present in high-error recipes."""
+    comparisons = validation_comparisons(min_coverage)
+    high_ids = [
+        recipe_id
+        for recipe_id, _, _, _, errors in comparisons
+        if errors.get("energy_kcal", 0) > HIGH_ERROR
+    ]
+    with get_session() as session:
         high_ingredients = (
             session.execute(
                 select(Ingredient.name, func.count())
@@ -109,11 +126,11 @@ def validation_report(min_coverage: float = 0.9) -> None:
         )
 
     by_group: dict[tuple[str, str], list[dict[str, float]]] = defaultdict(list)
-    for site, sources, _, errors in comparisons:
+    for _recipe_id, site, sources, _, errors in comparisons:
         by_group[(site or "?", sources or "?")].append(errors)
     for (site, sources), group in sorted(by_group.items()):
         print(f"{site} via {sources}: {len(group)} recipes")
-        for nutrient in _COMPARED:
+        for nutrient in COMPARED:
             values = [e[nutrient] for e in group if nutrient in e]
             if values:
                 print(
@@ -121,13 +138,13 @@ def validation_report(min_coverage: float = 0.9) -> None:
                     f"{statistics.median(values):.0%}"
                 )
     worst = sorted(
-        (c for c in comparisons if "energy_kcal" in c[3]),
-        key=lambda c: c[3]["energy_kcal"],
+        (c for c in comparisons if "energy_kcal" in c[4]),
+        key=lambda c: c[4]["energy_kcal"],
         reverse=True,
     )[:10]
     if worst:
         print("Worst recipes by kcal error:")
-        for site, _, name, errors in worst:
+        for _, site, _, name, errors in worst:
             print(f"  {errors['energy_kcal']:.0%}  {name} ({site})")
     if high_ingredients:
         print(

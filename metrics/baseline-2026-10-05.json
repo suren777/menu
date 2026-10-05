@@ -1,0 +1,39 @@
+{
+  "distinct_ingredients": 8228,
+  "lines_with_grams_by_source": {
+    "fdc": 11445,
+    "none": 35435,
+    "seed": 10009
+  },
+  "lines_with_ingredient_id_null": 4141,
+  "mean_coverage": 0.5710282036471037,
+  "median_validation_error": {
+    "bbc_good_food via fdc": {
+      "carbohydrate_g": 0.4599708570510175,
+      "energy_kcal": 0.5279574840787319,
+      "fat_g": 0.4765952872275679,
+      "protein_g": 0.6603424026356068
+    },
+    "king_arthur via fdc": {
+      "carbohydrate_g": 0.14340175045372017,
+      "energy_kcal": 0.14038880643737786,
+      "fat_g": 0.10560454150335041,
+      "protein_g": 0.24161458333333327
+    }
+  },
+  "recipes_with_coverage_at_least_0_9": 1677,
+  "row_counts": {
+    "food_source": 3,
+    "ingredient": 8228,
+    "ingredient_alias": 8236,
+    "ingredient_food_ref": 4509,
+    "nutrient_map": 32,
+    "recipe_ingredient": 96494,
+    "recipe_nutrition": 13898,
+    "recipe_urls": 7689,
+    "ref_food": 21801,
+    "ref_nutrient": 168251,
+    "ref_portion": 55834,
+    "sitemap": 274
+  }
+}

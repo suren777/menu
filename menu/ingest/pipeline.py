@@ -9,9 +9,11 @@ never the source of truth. Code here graduates to food-guru's
 backend/app/ingest/ with minimal rework.
 """
 
+import json
 import logging
 from argparse import ArgumentParser
 from dataclasses import dataclass
+from pathlib import Path
 
 from sqlalchemy import or_, select
 
@@ -24,6 +26,7 @@ from menu.db.ingredients.actions import (
     store_recipe_ingredients,
 )
 from menu.db.ingredients.seed import seed_ingredient_data
+from menu.db.metrics import collect_metrics
 from menu.db.recipe_urls.actions import add_recipe
 from menu.db.sitemap.actions import finalise_sitemap
 from menu.db.sitemap.repository import get_unfinished, url_exists
@@ -256,6 +259,11 @@ def main() -> None:
         help="list high-frequency ingredients with no confirmed "
         "nutrition reference, then exit",
     )
+    parser.add_argument(
+        "--metrics",
+        metavar="PATH",
+        help="write a JSON metrics snapshot to PATH, then exit",
+    )
     args = parser.parse_args()
 
     initialise()
@@ -286,6 +294,14 @@ def main() -> None:
         return
     if args.coverage_report:
         coverage_report()
+        return
+    if args.metrics:
+        path = Path(args.metrics)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(collect_metrics(), indent=2, sort_keys=True) + "\n"
+        )
+        print(f"Metrics snapshot written to {path}")
         return
     if args.site is None:
         parser.error("a site is required unless a report flag is given")

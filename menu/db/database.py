@@ -6,7 +6,7 @@ types and call sites need no casts.
 
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import JSON, ForeignKey, Index
+from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from menu.db.engine import engine as default_engine
@@ -84,6 +84,10 @@ class RecipeNutrition(Base):
             "source",
             unique=True,
         ),
+        CheckConstraint(
+            "source IN ('derived', 'published')",
+            "ck_recipe_nutrition_source",
+        ),
     )
 
 
@@ -127,7 +131,13 @@ class IngredientFoodRef(Base):
     candidates, which are suggestions for either use."""
     confirmed: Mapped[bool] = mapped_column(default=False)
 
-    __table_args__ = (Index("ix_ingredient_food_ref_ingredient", "ingredient_id"),)
+    __table_args__ = (
+        Index("ix_ingredient_food_ref_ingredient", "ingredient_id"),
+        CheckConstraint(
+            "role IS NULL OR role IN ('conversion', 'nutrition')",
+            "ck_ingredient_food_ref_role",
+        ),
+    )
 
 
 class IngredientAlias(Base):
@@ -201,6 +211,10 @@ class RecipeIngredient(Base):
     __table_args__ = (
         Index("ix_recipe_ingredient_ingredient_id", "ingredient_id"),
         Index("ix_recipe_ingredient_recipe_id_position", "recipe_id", "position"),
+        CheckConstraint(
+            "dimension IS NULL OR dimension IN ('mass', 'volume', 'count')",
+            "ck_recipe_ingredient_dimension",
+        ),
     )
 
 
@@ -237,7 +251,9 @@ class RefFood(Base):
     refuse_pct: Mapped[float | None]
     """Share that is peel/stone/shell, where the source gives one."""
 
-    __table_args__ = (Index("ix_ref_food_source", "source_id", "source_food_id"),)
+    __table_args__ = (
+        Index("ix_ref_food_source", "source_id", "source_food_id", unique=True),
+    )
 
 
 class RefPortion(Base):

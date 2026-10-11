@@ -398,7 +398,7 @@ def seed_ingredient_data(session: Session) -> None:
     # Reference-food mappings are hand-reviewed (the --ref-review
     # report shows what is left): only confirmed mappings feed
     # conversion and nutrition. The parser's own suggestions seed
-    # candidate rows instead (actions.py); reviewed-and-rejected
+    # candidate rows instead (lines.py); reviewed-and-rejected
     # suggestions are curated below and marked 'rejected'.
     missed = 0
     for name, refs in FOOD_REFS.items():

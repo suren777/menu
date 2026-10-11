@@ -27,13 +27,9 @@ from sqlalchemy import select
 
 from menu.db.connection import get_session
 from menu.db.database import Page, Sitemap, initialise
-from menu.db.ingredients.actions import (
-    fdc_id_conflicts,
-    prune_orphan_ingredients,
-    re_resolve,
-    ref_review,
-    store_recipe_ingredients,
-)
+from menu.db.ingredients.lines import store_recipe_ingredients
+from menu.db.ingredients.reports import fdc_id_conflicts, ref_review
+from menu.db.ingredients.resolve import prune_orphan_ingredients, re_resolve
 from menu.db.ingredients.seed import seed_ingredient_data
 from menu.db.metrics import collect_metrics
 from menu.db.pages import actions as page_actions

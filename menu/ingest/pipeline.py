@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from bs4 import BeautifulSoup
+from sqlalchemy import select
 
 from menu.db.connection import get_session
 from menu.db.database import Page, Sitemap, initialise
@@ -89,36 +90,31 @@ def import_sitemap(site: SiteConfig, sitemap_url: str | None = None) -> None:
     A sitemap index stores itself (kind "index", status "done") and
     its children as pending rows with parent_id — the crawl walks
     those. A plain urlset stores itself as one pending row, so the
-    crawl reads its page URLs as normal. Existing rows are left
-    alone: re-running records nothing twice.
+    crawl reads its page URLs as normal. The top-level documents are
+    re-read on every run, so an index's new children are picked up;
+    rows that already exist are left alone.
     """
     urls = [sitemap_url] if sitemap_url else list(site.sitemap_urls)
 
     for url in urls:
-        with get_session() as session:
-            if sitemaps.find_by_url(url, session) is not None:
-                continue
         kind, entries = request_xml(url, site)
         with get_session() as session:
-            record = Sitemap(url=url, site=site.name)
-            if kind == "sitemapindex":
-                record.kind = "index"
-                record.status = "done"
-                record.fetched_at = _utcnow()
+            record = session.scalars(select(Sitemap).where(Sitemap.url == url)).first()
+            if record is None:
+                record = Sitemap(url=url, site=site.name)
                 session.add(record)
-                session.flush()
-                for entry in entries:
-                    if sitemaps.find_by_url(entry.loc, session) is None:
-                        session.add(
-                            Sitemap(
-                                url=entry.loc,
-                                site=site.name,
-                                parent_id=record.id,
-                            )
-                        )
-            else:
+            if kind != "sitemapindex":
                 record.kind = "urlset"
-                session.add(record)
+                continue
+            record.kind = "index"
+            record.status = "done"
+            record.fetched_at = _utcnow()
+            session.flush()
+            for entry in entries:
+                if sitemaps.find_by_url(entry.loc, session) is None:
+                    session.add(
+                        Sitemap(url=entry.loc, site=site.name, parent_id=record.id)
+                    )
 
 
 def _walk_sitemap(sitemap: SitemapModel, site: SiteConfig) -> None:

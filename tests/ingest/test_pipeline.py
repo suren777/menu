@@ -10,6 +10,7 @@ from sqlalchemy import select
 from menu.db.connection import get_session
 from menu.db.database import Page, Recipe, Sitemap
 from menu.db.pages import repository as pages_repository
+from menu.db.sitemaps import actions as sitemap_actions
 from menu.ingest.discover import SitemapEntry
 from menu.ingest.errors import (
     BlockedError,
@@ -123,18 +124,34 @@ def test_import_sitemap_urlset_stores_itself_pending(
 
 @pytest.mark.usefixtures("db_engine")
 @patch("menu.ingest.pipeline.request_xml")
-def test_import_sitemap_leaves_existing_rows(mock_request_xml: MagicMock) -> None:
-    """Re-running the import must not duplicate rows or reset a
-    recorded outcome — it must not even re-fetch the sitemap."""
-    add_sitemap("https://test.com/sitemap.xml", status="done")
+def test_import_sitemap_rerun_adds_new_children(mock_request_xml: MagicMock) -> None:
+    """A re-run re-reads the index: new children are queued, existing
+    rows keep their recorded outcome."""
+    mock_request_xml.return_value = (
+        "sitemapindex",
+        [SitemapEntry(loc="https://test.com/old.xml")],
+    )
+    import_sitemap(SITE)
+    sitemap_actions.set_status("https://test.com/old.xml", SITE.name, "done")
+    mock_request_xml.return_value = (
+        "sitemapindex",
+        [
+            SitemapEntry(loc="https://test.com/old.xml"),
+            SitemapEntry(loc="https://test.com/new.xml"),
+        ],
+    )
 
     import_sitemap(SITE)
 
-    mock_request_xml.assert_not_called()
     with get_session() as session:
-        rows = session.scalars(select(Sitemap)).all()
-        assert len(rows) == 1
-        assert rows[0].status == "done"
+        status = {
+            row.url: row.status for row in session.scalars(select(Sitemap)).all()
+        }
+    assert status == {
+        "https://test.com/sitemap.xml": "done",
+        "https://test.com/old.xml": "done",
+        "https://test.com/new.xml": "pending",
+    }
 
 
 # --- crawl_sitemap: walking sitemaps queues pages --------------------------

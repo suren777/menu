@@ -141,7 +141,7 @@ def fetch_page(
         time.sleep(_retry_after(response))
         response = session.get(url, timeout=10)
         if response.status_code == 429:
-            raise BlockedError("Still rate-limited: {url!r}", status_code=429)
+            raise BlockedError(f"Still rate-limited: {url!r}", status_code=429)
     if response.status_code in (401, 402, 403):
         raise BlockedError(
             f"Blocked with HTTP {response.status_code}: {url!r}",

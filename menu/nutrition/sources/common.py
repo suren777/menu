@@ -12,32 +12,22 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import delete, select
-from sqlalchemy.dialects import postgresql, sqlite
+from sqlalchemy.dialects import postgresql
 
 from menu.db.database import IngredientFoodRef, RefFood
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
 CHUNK = 10_000
 
-# Both dialects' insert() share the ON CONFLICT ... DO UPDATE shape; pick
-# by the session's bind so one upsert serves SQLite today and Postgres
-# later.
-_insert_by_dialect: dict[str, Callable[..., Any]] = {
-    "sqlite": sqlite.insert,
-    "postgresql": postgresql.insert,
-}
 
-
-def food_upsert(dialect_name: str) -> Any:
-    """The RefFood upsert statement for `dialect_name`: keep the
-    existing id, refresh description/category/refuse_pct."""
-    stmt = _insert_by_dialect[dialect_name](RefFood)
+def food_upsert() -> Any:
+    """The RefFood upsert statement: keep the existing id, refresh
+    description/category/refuse_pct."""
+    stmt = postgresql.insert(RefFood)
     return stmt.on_conflict_do_update(
         index_elements=[RefFood.source_id, RefFood.source_food_id],
         set_={
@@ -57,9 +47,9 @@ def upsert_foods(
     those an ingredient_food_ref row references: those are kept and
     warned about. Returns the source's ref_food ids by source_food_id
     (after the upsert) and the count of kept stale foods."""
-    upsert = food_upsert(session.get_bind().dialect.name)
+    upsert = food_upsert()
     # executemany, not one multi-row VALUES: a release's foods x columns
-    # would overflow SQLite's bound-parameter limit.
+    # would overflow the server's bound-parameter limit.
     for start in range(0, len(foods), CHUNK):
         session.execute(upsert, foods[start : start + CHUNK])
     ref_ids = dict(

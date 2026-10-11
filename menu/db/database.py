@@ -1,4 +1,4 @@
-"""Models for the scratch SQLite database.
+"""Models for the scratch database.
 
 Typed 2.0-style columns (Mapped/mapped_column) so mypy sees the column
 types and call sites need no casts.
@@ -243,7 +243,7 @@ class IngredientFoodRef(Base):
 
     __table_args__ = (
         # The composite FK's parent key: (id, source_id) must be
-        # unique for SQLite to accept the reference to it.
+        # unique.
         UniqueConstraint("id", "source_id"),
         ForeignKeyConstraint(
             ["ref_food_id", "source_id"],
@@ -266,7 +266,6 @@ class IngredientFoodRef(Base):
             "role",
             "source_id",
             unique=True,
-            sqlite_where=text("status = 'confirmed'"),
             postgresql_where=text("status = 'confirmed'"),
         ),
         Index("ix_ingredient_food_refs_ingredient", "ingredient_id"),

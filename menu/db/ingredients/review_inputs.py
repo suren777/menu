@@ -112,7 +112,9 @@ def _concepts(session: Session) -> list[tuple[int, str, str, str]]:
                 record.name, _top_text([raw for _, raw in lines.get(record.id, [])])
             ),
         )
-        for record in session.scalars(select(Ingredient).order_by(Ingredient.name))
+        for record in session.scalars(
+            select(Ingredient).order_by(Ingredient.name.collate("C"))
+        )
     ]
 
 

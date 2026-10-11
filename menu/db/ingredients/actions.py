@@ -622,13 +622,24 @@ class ShoppingLine:
 def prune_orphan_ingredients(session: Session) -> int:
     """Delete ingredients no line and no inbound alias points at.
 
-    A parse-time self-alias does not keep an ingredient alive: it is
-    removed with the orphan. Used after a reparse, which re-resolves
-    lines through the seeded aliases and strands the junk canonical
+    A parse-time self-alias does not keep an ingredient alive, nor
+    does a parser candidate reference: both are removed with the
+    orphan. A curated reference (confirmed or rejected) does — it is a
+    decision in seed.py. Used after a reparse, which re-resolves lines
+    through the seeded aliases and strands the junk canonical
     ingredients the first pass created. Returns the number pruned.
     """
+    curated = set(
+        session.scalars(
+            select(IngredientFoodRef.ingredient_id).where(
+                IngredientFoodRef.status != "candidate"
+            )
+        )
+    )
     orphans = []
     for ingredient in session.scalars(select(Ingredient)):
+        if ingredient.id in curated:
+            continue
         lines = session.scalar(
             select(func.count()).select_from(RecipeIngredient).where(
                 RecipeIngredient.ingredient_id == ingredient.id
@@ -645,6 +656,11 @@ def prune_orphan_ingredients(session: Session) -> int:
     for ingredient in orphans:
         session.execute(
             delete(IngredientAlias).where(IngredientAlias.alias == ingredient.name)
+        )
+        session.execute(
+            delete(IngredientFoodRef).where(
+                IngredientFoodRef.ingredient_id == ingredient.id
+            )
         )
         session.delete(ingredient)
     return len(orphans)

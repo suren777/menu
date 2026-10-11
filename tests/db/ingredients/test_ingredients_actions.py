@@ -1198,3 +1198,46 @@ def test_conversion_portions_prefer_fdc_over_cnf(session: Session) -> None:
 
     assert source_name == "fdc"
     assert [portion.gram_weight for portion in portions] == [50.0]
+
+
+@pytest.mark.usefixtures("db_engine")
+def test_prune_drops_parser_candidates_but_keeps_curated_refs() -> None:
+    """With foreign keys enforced, an orphan's parser candidate goes
+    with it; an ingredient with a curated reference is a decision in
+    seed.py and is never pruned."""
+    with get_session() as session:
+        source = FoodSource(name="fdc", version="1", licence="CC0", citation="x")
+        session.add(source)
+        session.flush()
+        food = RefFood(source_id=source.id, source_food_id="1", description="Milk")
+        orphan = Ingredient(name="warm milk")
+        curated = Ingredient(name="milk")
+        session.add_all([food, orphan, curated])
+        session.flush()
+        session.add_all(
+            [
+                IngredientFoodRef(
+                    ingredient_id=orphan.id,
+                    ref_food_id=food.id,
+                    source_id=source.id,
+                    status="candidate",
+                    origin="parser",
+                ),
+                IngredientFoodRef(
+                    ingredient_id=curated.id,
+                    ref_food_id=food.id,
+                    source_id=source.id,
+                    role="nutrition",
+                    status="confirmed",
+                    origin="seed",
+                ),
+            ]
+        )
+        orphan_id, curated_id = orphan.id, curated.id
+
+    with get_session() as session:
+        assert actions.prune_orphan_ingredients(session) == 1
+
+    with get_session() as session:
+        assert session.get(Ingredient, orphan_id) is None
+        assert session.get(Ingredient, curated_id) is not None

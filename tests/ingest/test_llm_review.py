@@ -31,11 +31,13 @@ class FakeClient:
     def __init__(self, payloads: list[str | Exception]) -> None:
         self.payloads = list(payloads)
         self.calls: list[tuple[str, str, dict[str, Any]]] = []
+        self.max_tokens: list[int] = []
 
     def complete(
-        self, system: str, user: str, schema: dict[str, Any]
+        self, system: str, user: str, schema: dict[str, Any], *, max_tokens: int
     ) -> tuple[str, Usage]:
         self.calls.append((system, user, schema))
+        self.max_tokens.append(max_tokens)
         payload = self.payloads.pop(0)
         if isinstance(payload, Exception):
             raise payload
@@ -271,9 +273,9 @@ def test_food_ref_proposal_must_pick_a_listed_candidate() -> None:
         "source_food_id": "175079",
     }
 
-    none = {"index": 0, "kind": "ok", "reason": "none fits"}
+    none = {"index": 0, "kind": "none", "reason": "none fits"}
     result = _run(item, [none])
-    assert result.suggestions[0].proposal == {}
+    assert (result.suggestions[0].kind, result.suggestions[0].proposal) == ("ok", {})
 
 
 def test_override_line_must_be_verbatim() -> None:
@@ -351,7 +353,7 @@ def test_schemas_restrict_kinds_per_input_set() -> None:
         "queue": ["alias", "line_override", "not_food", "ok", "variant"],
         "audit": ["alias", "line_override", "not_food", "ok", "variant"],
         "pair": ["alias", "ok", "variant"],
-        "food_ref": ["food_ref", "ok"],
+        "food_ref": ["food_ref", "none"],
     }
     for input_set, kinds in expected.items():
         schema = llm_review._SCHEMAS[input_set]
@@ -394,7 +396,7 @@ def test_fireworks_client_builds_the_request(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(requests, "post", fake_post)
 
     content, usage = FireworksClient().complete(
-        "system text", "user text", {"type": "object"}
+        "system text", "user text", {"type": "object"}, max_tokens=4000
     )
 
     assert content == '{"items": []}'
@@ -407,7 +409,7 @@ def test_fireworks_client_builds_the_request(monkeypatch: pytest.MonkeyPatch) ->
             {"role": "system", "content": "system text"},
             {"role": "user", "content": "user text"},
         ],
-        "max_tokens": 16000,
+        "max_tokens": 4000,
         "reasoning_effort": "low",
         "temperature": 0,
         "response_format": {
@@ -435,7 +437,7 @@ def test_fireworks_client_honours_env_overrides(
     monkeypatch.setenv("FIREWORKS_API_KEY", "key")
     monkeypatch.setattr(requests, "post", fake_post)
 
-    FireworksClient().complete("s", "u", {})
+    FireworksClient().complete("s", "u", {}, max_tokens=4000)
     assert captured["url"] == "http://127.0.0.1:8000/v1/chat/completions"
     assert captured["body"]["model"] == "local/model"
 
@@ -445,7 +447,7 @@ def test_fireworks_client_without_api_key_raises_clearly(
 ) -> None:
     monkeypatch.delenv("FIREWORKS_API_KEY", raising=False)
     with pytest.raises(LLMError, match="FIREWORKS_API_KEY"):
-        FireworksClient().complete("s", "u", {})
+        FireworksClient().complete("s", "u", {}, max_tokens=4000)
 
 
 def test_fireworks_client_reports_http_failures(
@@ -457,7 +459,7 @@ def test_fireworks_client_reports_http_failures(
 
     monkeypatch.setattr(requests, "post", refusing_post)
     with pytest.raises(LLMError, match="503"):
-        FireworksClient().complete("s", "u", {})
+        FireworksClient().complete("s", "u", {}, max_tokens=4000)
 
 
 def test_fireworks_client_maps_missing_content_to_empty(
@@ -469,6 +471,48 @@ def test_fireworks_client_maps_missing_content_to_empty(
         return FakeResponse(payload)
 
     monkeypatch.setattr(requests, "post", length_post)
-    content, usage = FireworksClient().complete("s", "u", {})
+    content, usage = FireworksClient().complete("s", "u", {}, max_tokens=4000)
     assert content == ""
     assert usage == Usage(0, 0)
+
+
+def test_max_tokens_scale_with_the_chunk() -> None:
+    payload = _payload([])
+    fake = FakeClient([payload, payload])
+    items = [ReviewItem(input="queue", subject=f"term {n}") for n in range(60)]
+    suggest(items, client=fake, chunk_size=50)
+    assert fake.max_tokens == [1_000 + 150 * 50, 1_000 + 150 * 10]
+
+
+def test_food_ref_ok_that_names_a_candidate_is_dropped() -> None:
+    item = ReviewItem(
+        input="food_ref",
+        subject="icing sugar",
+        candidates=(FoodCandidate("fdc", "169656", "Sugars, powdered"),),
+    )
+    result = _run(
+        item,
+        [
+            {
+                "index": 0,
+                "kind": "none",
+                "source": "fdc",
+                "source_food_id": "169656",
+                "reason": "same as powdered sugar",
+            }
+        ],
+    )
+    assert result.suggestions == []
+    assert result.dropped == {"kind": 1}
+
+
+def test_only_the_first_verdict_per_item_counts() -> None:
+    result = _run(
+        _queue_item(),
+        [
+            {"index": 0, "kind": "ok", "reason": "right"},
+            {"index": 0, "kind": "not_food", "reason": "changed its mind"},
+        ],
+    )
+    assert [s.kind for s in result.suggestions] == ["ok"]
+    assert result.dropped == {"kind": 1}

@@ -32,7 +32,11 @@ DEFAULT_BASE_URL = "https://api.fireworks.ai/inference/v1"
 DEFAULT_MODEL = "accounts/revolut-non-coding/deployments/revolut-non-coding-flash"
 
 _TIMEOUT_SECONDS = 120
-_MAX_TOKENS = 16_000
+# Sized to the chunk: under a strict grammar the model can pad its
+# reply with whitespace up to the ceiling, and a flat 16k ceiling
+# turned one 1-item request into an 8-minute hang (2026-10-11).
+_BASE_TOKENS = 1_000
+_TOKENS_PER_ITEM = 150
 _SCHEMA_NAME = "menu_review"
 
 InputSet = Literal["queue", "audit", "pair", "food_ref"]
@@ -77,7 +81,7 @@ class LLMClient(Protocol):
     model_id: str
 
     def complete(
-        self, system: str, user: str, schema: dict[str, Any]
+        self, system: str, user: str, schema: dict[str, Any], *, max_tokens: int
     ) -> tuple[str, Usage]: ...
 
 
@@ -101,7 +105,7 @@ class FireworksClient:
         self.model_id = model_id or os.environ.get("MENU_LLM_MODEL") or DEFAULT_MODEL
 
     def complete(
-        self, system: str, user: str, schema: dict[str, Any]
+        self, system: str, user: str, schema: dict[str, Any], *, max_tokens: int
     ) -> tuple[str, Usage]:
         api_key = os.environ.get("FIREWORKS_API_KEY")
         if not api_key:
@@ -114,7 +118,7 @@ class FireworksClient:
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            "max_tokens": _MAX_TOKENS,
+            "max_tokens": max_tokens,
             "reasoning_effort": "low",
             "temperature": 0,
             "response_format": {
@@ -144,8 +148,8 @@ class FireworksClient:
             raise LLMError("LLM API response is not a JSON object")
         usage = data.get("usage") or {}
         choices = data.get("choices") or [{}]
-        message = choices[0].get("message") or {}
-        content = message.get("content") or ""
+        message = choices[0].get("message") if isinstance(choices[0], dict) else None
+        content = (message or {}).get("content") or ""
         return content, Usage(
             prompt_tokens=int(usage.get("prompt_tokens") or 0),
             completion_tokens=int(usage.get("completion_tokens") or 0),
@@ -205,8 +209,8 @@ different foods.
 _FOOD_REF_SYSTEM = f"""\
 Each item is an ingredient name with candidate rows from reference \
 nutrient datasets. "food_ref": one candidate is the same food as the \
-ingredient — give "source" and "source_food_id" exactly as listed. "ok": \
-no candidate fits.
+ingredient — give "source" and "source_food_id" exactly as listed. "none": \
+no candidate fits, and "source" and "source_food_id" are null.
 
 {_RULES}"""
 
@@ -223,6 +227,22 @@ _KINDS_BY_INPUT: dict[InputSet, frozenset[str]] = {
     "pair": frozenset({"alias", "variant", "ok"}),
     "food_ref": frozenset({"food_ref", "ok"}),
 }
+
+# The model reads "ok" on a food_ref item as "this candidate is fine"
+# and names it anyway, so the wire word for "no match" is "none".
+_WIRE_KINDS: dict[InputSet, dict[str, str]] = {"food_ref": {"ok": "none"}}
+
+
+def _wire_kinds(input_set: InputSet) -> list[str]:
+    renames = _WIRE_KINDS.get(input_set, {})
+    return sorted(renames.get(kind, kind) for kind in _KINDS_BY_INPUT[input_set])
+
+
+def _from_wire(input_set: InputSet, kind: str) -> str:
+    for ours, wire in _WIRE_KINDS.get(input_set, {}).items():
+        if kind == wire:
+            return ours
+    return kind
 
 # Strict schema mode wants every property required, so fields a kind
 # doesn't use are nullable instead of absent.
@@ -248,7 +268,7 @@ _VERDICT_FIELDS: dict[InputSet, dict[str, dict[str, Any]]] = {
 def _response_schema(input_set: InputSet) -> dict[str, Any]:
     verdict: dict[str, Any] = {
         "index": {"type": "integer"},
-        "kind": {"enum": sorted(_KINDS_BY_INPUT[input_set])},
+        "kind": {"enum": _wire_kinds(input_set)},
         **_VERDICT_FIELDS[input_set],
         "reason": {"type": "string"},
     }
@@ -378,6 +398,10 @@ def _proposal(
 ) -> dict[str, Any] | str:
     """The proposal dict, or the mechanical-check reason it is dropped."""
     if kind == "ok":
+        # "None fits" that still names a candidate contradicts itself;
+        # recording it as reviewed would hide the item for good.
+        if item.input == "food_ref" and verdict.get("source_food_id") is not None:
+            return "kind"
         return {}
     if kind == "not_food":
         return {"term": item.subject}
@@ -422,6 +446,8 @@ def _verdict_suggestion(
         return "kind"
     item = chunk[index]
     kind = verdict.get("kind")
+    if isinstance(kind, str):
+        kind = _from_wire(item.input, kind)
     if not isinstance(kind, str) or kind not in _KINDS_BY_INPUT[item.input]:
         return "kind"
     proposal = _proposal(item, kind, verdict)
@@ -489,7 +515,12 @@ def suggest(
         for chunk in _chunks(group, chunk_size):
             user = _user_message(input_set, chunk)
             try:
-                content, usage = worker.complete(system, user, schema)
+                content, usage = worker.complete(
+                    system,
+                    user,
+                    schema,
+                    max_tokens=_BASE_TOKENS + _TOKENS_PER_ITEM * len(chunk),
+                )
             except (LLMError, ValueError) as exc:
                 failed_chunks += 1
                 logger.warning("LLM chunk for %s failed: %.200s", input_set, exc)
@@ -504,10 +535,12 @@ def suggest(
                     "LLM verdict for %s chunk unusable: %.200s", input_set, exc
                 )
                 continue
+            seen: set[Any] = set()
             for entry in verdicts:
-                if not isinstance(entry, dict):
+                if not isinstance(entry, dict) or entry.get("index") in seen:
                     dropped["kind"] += 1
                     continue
+                seen.add(entry.get("index"))
                 outcome = _verdict_suggestion(chunk, entry, worker.model_id)
                 if isinstance(outcome, str):
                     dropped[outcome] += 1

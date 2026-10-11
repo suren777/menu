@@ -15,7 +15,7 @@ a variant name) is re-pointed to the canonical ingredient.
 """
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 
@@ -28,10 +28,13 @@ from menu.db.database import (
     RefFood,
     RefPortion,
 )
+from menu.db.ingredients import suggestions
 from menu.ingest.units import singular, unit_ml
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
+
+    from menu.db.ingredients.suggestions import Suggestion
 
 logger = logging.getLogger(__name__)
 
@@ -200,15 +203,16 @@ FOOD_REFS: dict[str, list[tuple[str, str, str]]] = {
 }
 
 
-# Reviewed-and-rejected parser suggestions, curated in git like
-# FOOD_REFS: (canonical ingredient, source name, source_food_id). When
-# --ref-review shows a candidate that is wrong but no honest reference
-# exists to seed instead, add it here and seeding marks the matching
-# candidate 'rejected' (inserting a rejected row if the ingredient
-# exists but no row does) — it then stays out of --ref-review for good,
-# and a re-crawl cannot resurrect it. A confirmed mapping is never
-# rejected: seeding logs a warning instead.
-REJECTED_REFS: list[tuple[str, str, str]] = []
+# Human rejections of parser suggestions used to be curated here, as
+# the REJECTED_REFS list; suggestions.json replaces it. A rejection is
+# a food_ref entry with status "rejected" in that ledger (input
+# "food_ref", evidence {"reason": ...}, model {"llm": "human"}), so it
+# is reviewed in git like everything else, and rejected_refs() reads
+# it: seeding marks the matching candidate 'rejected' (inserting a
+# rejected row if the ingredient exists but no row does) — it then
+# stays out of --ref-review for good, and a re-crawl cannot resurrect
+# it. A confirmed mapping is never rejected: seeding logs a warning
+# instead.
 
 
 # Portion weights come from the first of these sources the ingredient
@@ -221,6 +225,123 @@ def conversion_rank(source_name: str) -> int:
     if source_name in CONVERSION_SOURCES:
         return CONVERSION_SOURCES.index(source_name)
     return len(CONVERSION_SOURCES)
+
+
+def _proposal(entry: Suggestion, *keys: str) -> dict[str, Any] | None:
+    """The suggestion's proposal, or None (logged) when a required key
+    is missing: a malformed accepted entry is drift in a git-reviewed
+    file, never a seeding crash."""
+    missing = [key for key in keys if key not in entry.proposal]
+    if missing:
+        logger.warning(
+            "Skipping malformed %s suggestion for %r: no %s in the proposal",
+            entry.kind,
+            entry.subject,
+            " or ".join(repr(key) for key in missing),
+        )
+        return None
+    return entry.proposal
+
+
+def aliases(
+    entries: list[Suggestion] | None = None,
+) -> list[tuple[str, str, str | None]]:
+    """The hand ALIASES plus accepted alias and variant suggestions as
+    (term, canonical, variant) tuples; a hand entry wins when both name
+    the same term. An accepted alias with new: true creates its target
+    as a seed concept exactly like an ALIASES target."""
+    if entries is None:
+        entries = suggestions.load()
+    merged = {term: (term, target, variant) for term, target, variant in ALIASES}
+    for entry in suggestions.accepted(entries, "alias"):
+        proposal = _proposal(entry, "term", "target")
+        if proposal is None:
+            continue
+        term = proposal["term"]
+        merged.setdefault(term, (term, proposal["target"], proposal.get("variant")))
+    for entry in suggestions.accepted(entries, "variant"):
+        proposal = _proposal(entry, "term", "target", "variant")
+        if proposal is None:
+            continue
+        term = proposal["term"]
+        merged.setdefault(term, (term, proposal["target"], proposal["variant"]))
+    return list(merged.values())
+
+
+def line_overrides(entries: list[Suggestion] | None = None) -> dict[str, str]:
+    """The hand LINE_OVERRIDES plus accepted line_override suggestions,
+    keyed the way the lookup reads them (squashed lowercase line); a
+    hand entry wins when both name the same line."""
+    if entries is None:
+        entries = suggestions.load()
+    merged: dict[str, str] = {}
+    for entry in suggestions.accepted(entries, "line_override"):
+        proposal = _proposal(entry, "line", "name")
+        if proposal is None:
+            continue
+        # The key is normalised the same way as the lookup.
+        merged[" ".join(proposal["line"].lower().split())] = proposal["name"]
+    merged.update(LINE_OVERRIDES)
+    return merged
+
+
+def not_food(entries: list[Suggestion] | None = None) -> list[str]:
+    """The hand NOT_FOOD list plus accepted not_food terms."""
+    if entries is None:
+        entries = suggestions.load()
+    merged = list(NOT_FOOD)
+    for entry in suggestions.accepted(entries, "not_food"):
+        proposal = _proposal(entry, "term")
+        if proposal is not None and proposal["term"] not in merged:
+            merged.append(proposal["term"])
+    return merged
+
+
+def food_refs(
+    entries: list[Suggestion] | None = None,
+) -> dict[str, list[tuple[str, str, str]]]:
+    """The hand FOOD_REFS plus accepted food_ref suggestions at role
+    nutrition (plus conversion when the source is a conversion source);
+    a hand entry wins when both name the same ingredient and source."""
+    if entries is None:
+        entries = suggestions.load()
+    merged = {name: list(refs) for name, refs in FOOD_REFS.items()}
+    hand = {(name, source) for name, refs in FOOD_REFS.items() for source, _, _ in refs}
+    for entry in suggestions.accepted(entries, "food_ref"):
+        proposal = _proposal(entry, "ingredient", "source", "source_food_id")
+        if proposal is None:
+            continue
+        name, source = proposal["ingredient"], proposal["source"]
+        if (name, source) in hand:
+            continue
+        hand.add((name, source))
+        roles = ["nutrition"]
+        if source in CONVERSION_SOURCES:
+            roles.insert(0, "conversion")
+        merged.setdefault(name, []).extend(
+            (source, proposal["source_food_id"], role) for role in roles
+        )
+    return merged
+
+
+def rejected_refs(
+    entries: list[Suggestion] | None = None,
+) -> list[tuple[str, str, str]]:
+    """The rejected food_ref suggestions — the human rejections the old
+    REJECTED_REFS list curated: (canonical ingredient, source name,
+    source_food_id)."""
+    if entries is None:
+        entries = suggestions.load()
+    rejected = []
+    for entry in entries:
+        if entry.status != "rejected" or entry.kind != "food_ref":
+            continue
+        proposal = _proposal(entry, "ingredient", "source", "source_food_id")
+        if proposal is not None:
+            rejected.append(
+                (proposal["ingredient"], proposal["source"], proposal["source_food_id"])
+            )
+    return rejected
 
 
 # A preparation that changes the food itself: "2 egg yolks" is not
@@ -345,14 +466,16 @@ def _upsert_conversion(
 
 
 def seed_ingredient_data(session: Session) -> None:
-    """Create the seed rows; safe to rerun."""
-    for alias, canonical, variant in ALIASES:
+    """Create the seed rows; safe to rerun. Hand seeds merge the
+    accepted suggestions (hand entries win conflicts)."""
+    entries = suggestions.load()
+    for alias, canonical, variant in aliases(entries):
         target = _canonical_ingredient(canonical, session)
         _seed_term(alias, target.id, variant, session)
 
     # Equipment and other non-ingredients: terms with no concept,
     # excluded from aggregation and nutrition.
-    for name in NOT_FOOD:
+    for name in not_food(entries):
         existing = session.scalar(
             select(IngredientTerm).where(IngredientTerm.term == name)
         )
@@ -398,10 +521,10 @@ def seed_ingredient_data(session: Session) -> None:
     # Reference-food mappings are hand-reviewed (the --ref-review
     # report shows what is left): only confirmed mappings feed
     # conversion and nutrition. The parser's own suggestions seed
-    # candidate rows instead (lines.py); reviewed-and-rejected
-    # suggestions are curated below and marked 'rejected'.
+    # candidate rows instead (lines.py); rejected ones are recorded in
+    # suggestions.json and applied below.
     missed = 0
-    for name, refs in FOOD_REFS.items():
+    for name, refs in food_refs(entries).items():
         ingredient = _canonical_ingredient(name, session)
         for source_name, source_food_id, role in refs:
             ref_food = session.execute(
@@ -457,12 +580,12 @@ def seed_ingredient_data(session: Session) -> None:
             missed,
         )
 
-    # Reviewed-and-rejected candidates (REJECTED_REFS above): mark the
+    # Rejected food_ref suggestions (suggestions.json): mark the
     # matching candidate 'rejected' so --ref-review stops showing it,
     # never a confirmed mapping. An ingredient the parser has not
     # created yet is skipped — there is nothing to reject — and the
     # next startup applies the rejection once a line resolves to it.
-    for name, source_name, source_food_id in REJECTED_REFS:
+    for name, source_name, source_food_id in rejected_refs(entries):
         named = session.scalar(select(Ingredient).where(Ingredient.name == name))
         if named is None:
             continue
@@ -496,8 +619,8 @@ def seed_ingredient_data(session: Session) -> None:
             )
         elif ref_row.status == "confirmed":
             logger.warning(
-                "REJECTED_REFS lists %s / %s %s, but a confirmed"
-                " mapping exists; not rejecting it",
+                "A rejected suggestion lists %s / %s %s, but a"
+                " confirmed mapping exists; not rejecting it",
                 name,
                 source_name,
                 source_food_id,

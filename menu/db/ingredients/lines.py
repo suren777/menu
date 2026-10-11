@@ -16,9 +16,8 @@ from menu.db.database import (
     RecipeIngredient,
     RefFood,
 )
-from menu.db.ingredients import repository
+from menu.db.ingredients import repository, seed
 from menu.db.ingredients.grams import _line_grams
-from menu.db.ingredients.seed import LINE_OVERRIDES
 from menu.ingest.ingredients import (
     canonical_name,
     line_needs_review,
@@ -72,6 +71,10 @@ def store_recipe_ingredients(
         delete(RecipeIngredient).where(RecipeIngredient.recipe_id == recipe_id)
     )
 
+    # Line overrides read the seeds and accepted suggestions once per
+    # call, not once per line.
+    overrides = seed.line_overrides()
+
     for position, raw in enumerate(lines):
         if not isinstance(raw, str):
             logger.warning(
@@ -97,7 +100,7 @@ def store_recipe_ingredients(
                 )
             )
             continue
-        override = LINE_OVERRIDES.get(" ".join(raw.lower().split()))
+        override = overrides.get(" ".join(raw.lower().split()))
         alt_parsed = None if parsed.alternatives else _split_or_alternative(raw, site)
         line_review = override is None and line_needs_review(raw, parsed, alt_parsed)
         term = _resolve_term(

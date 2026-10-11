@@ -1,7 +1,8 @@
 """Tests for the hand-seeded ingredient data."""
 
+import json
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from sqlalchemy import select
@@ -16,10 +17,12 @@ from menu.db.database import (
     RefPortion,
 )
 from menu.db.ingredients import repository
-from menu.db.ingredients import seed as seed_module
+from menu.db.ingredients import suggestions as suggestions_module
 from menu.db.ingredients.seed import ALIASES, NOT_FOOD, seed_ingredient_data
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from sqlalchemy.orm import Session
 
 
@@ -29,6 +32,38 @@ def term_row(term: str, session: Session) -> IngredientTerm:
     ).one()
     assert isinstance(row, IngredientTerm)
     return row
+
+
+def _entry(
+    kind: str,
+    subject: str,
+    proposal: dict[str, Any],
+    *,
+    status: str = "accepted",
+) -> dict[str, Any]:
+    """One suggestions.json entry. Rejections use the documented human
+    shape: input "food_ref", model {"llm": "human"}."""
+    human = status == "rejected"
+    return {
+        "input": kind if human else "queue",
+        "kind": kind,
+        "subject": subject,
+        "proposal": proposal,
+        "evidence": {"reason": "test"},
+        "model": {"llm": "human" if human else "fake/model"},
+        "status": status,
+    }
+
+
+def _write_suggestions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *entries: dict[str, Any],
+) -> None:
+    """Point the suggestions ledger at a temp file holding entries."""
+    path = tmp_path / "suggestions.json"
+    path.write_text(json.dumps(list(entries)), encoding="utf-8")
+    monkeypatch.setattr(suggestions_module, "SUGGESTIONS_PATH", path)
 
 
 def conversion_row(
@@ -279,11 +314,12 @@ def test_seed_overrides_stale_parser_candidates(session: Session) -> None:
 
 
 def test_seed_rejects_candidate_from_rejected_refs(
-    session: Session, monkeypatch: pytest.MonkeyPatch
+    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A REJECTED_REFS entry marks the matching candidate 'rejected'
-    (inserting one when no row exists) — and a confirmed mapping for
-    a different food stays confirmed."""
+    """A rejected food_ref suggestion marks the matching candidate
+    'rejected' (inserting one when no row exists) — and a confirmed
+    mapping for a different food stays confirmed. suggestions.json
+    replaced the old seed.REJECTED_REFS list."""
     stale = _add_fdc_food(session, "167806", "Baobab powder")
     baking = _add_fdc_food(session, "172803", "Leavening agents, baking powder")
     powder = Ingredient(name="baking powder")
@@ -302,8 +338,19 @@ def test_seed_rejects_candidate_from_rejected_refs(
     )
     session.flush()
 
-    monkeypatch.setattr(
-        seed_module, "REJECTED_REFS", [("baking powder", "fdc", "167806")]
+    _write_suggestions(
+        tmp_path,
+        monkeypatch,
+        _entry(
+            "food_ref",
+            "baking powder",
+            {
+                "ingredient": "baking powder",
+                "source": "fdc",
+                "source_food_id": "167806",
+            },
+            status="rejected",
+        ),
     )
     seed_ingredient_data(session)
 
@@ -319,7 +366,7 @@ def test_seed_rejects_candidate_from_rejected_refs(
 
 
 def test_seed_rejects_without_a_candidate(
-    session: Session, monkeypatch: pytest.MonkeyPatch
+    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """No candidate row: the rejection inserts a rejected row, so a
     re-crawl cannot resurrect the suggestion either."""
@@ -328,8 +375,19 @@ def test_seed_rejects_without_a_candidate(
     session.add(powder)
     session.flush()
 
-    monkeypatch.setattr(
-        seed_module, "REJECTED_REFS", [("baking powder", "fdc", "167806")]
+    _write_suggestions(
+        tmp_path,
+        monkeypatch,
+        _entry(
+            "food_ref",
+            "baking powder",
+            {
+                "ingredient": "baking powder",
+                "source": "fdc",
+                "source_food_id": "167806",
+            },
+            status="rejected",
+        ),
     )
     seed_ingredient_data(session)
 
@@ -340,14 +398,26 @@ def test_seed_rejects_without_a_candidate(
 
 
 def test_seed_never_rejects_a_confirmed_mapping(
-    session: Session, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """REJECTED_REFS contradicting a FOOD_REFS seed is a curation
+    """A rejection contradicting a FOOD_REFS seed is a curation
     mistake: the confirmed mapping stands and seeding warns."""
     _add_fdc_food(session, "171287", "Egg, whole, raw, fresh")
     seed_ingredient_data(session)
-    monkeypatch.setattr(seed_module, "REJECTED_REFS", [("egg", "fdc", "171287")])
 
+    _write_suggestions(
+        tmp_path,
+        monkeypatch,
+        _entry(
+            "food_ref",
+            "egg",
+            {"ingredient": "egg", "source": "fdc", "source_food_id": "171287"},
+            status="rejected",
+        ),
+    )
     with caplog.at_level(logging.WARNING):
         seed_ingredient_data(session)
 
@@ -358,6 +428,214 @@ def test_seed_never_rejects_a_confirmed_mapping(
     ).all()
     assert all(ref.status == "confirmed" for ref in refs)
     assert "not rejecting it" in caplog.text
+
+
+def test_accepted_alias_with_new_creates_the_seed_concept(
+    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """new: true: the accepted alias's target is created as a seed
+    concept with its self-term, exactly like an ALIASES target."""
+    _write_suggestions(
+        tmp_path,
+        monkeypatch,
+        _entry(
+            "alias",
+            "aubergine",
+            {"term": "aubergine", "target": "eggplant", "variant": None, "new": True},
+        ),
+    )
+
+    seed_ingredient_data(session)
+
+    eggplant = session.scalars(
+        select(Ingredient).where(Ingredient.name == "eggplant")
+    ).one()
+    assert eggplant.origin == "seed"
+    term = term_row("aubergine", session)
+    assert (term.ingredient_id, term.variant, term.resolution) == (
+        eggplant.id,
+        None,
+        "seed",
+    )
+    self_term = term_row("eggplant", session)
+    assert (self_term.ingredient_id, self_term.resolution) == (eggplant.id, "seed")
+
+
+def test_pending_or_rejected_alias_does_nothing(
+    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only accepted entries seed: pending proposals wait for review
+    and rejected ones stay out."""
+    _write_suggestions(
+        tmp_path,
+        monkeypatch,
+        _entry(
+            "alias",
+            "aubergine",
+            {"term": "aubergine", "target": "eggplant", "variant": None},
+            status="pending",
+        ),
+        _entry(
+            "alias",
+            "rocket",
+            {"term": "rocket", "target": "arugula", "variant": None},
+            status="rejected",
+        ),
+    )
+
+    seed_ingredient_data(session)
+
+    assert (
+        session.scalars(
+            select(IngredientTerm).where(IngredientTerm.term == "aubergine")
+        ).first()
+        is None
+    )
+    assert (
+        session.scalars(
+            select(IngredientTerm).where(IngredientTerm.term == "rocket")
+        ).first()
+        is None
+    )
+    assert repository.find_ingredient_by_name("eggplant", session) is None
+    assert repository.find_ingredient_by_name("arugula", session) is None
+
+
+def test_hand_alias_beats_conflicting_accepted_suggestion(
+    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hand seeds win: an accepted suggestion re-proposing a term the
+    hand ALIASES already name changes nothing."""
+    _write_suggestions(
+        tmp_path,
+        monkeypatch,
+        _entry(
+            "alias",
+            "warm milk",
+            {"term": "warm milk", "target": "cream", "variant": None},
+        ),
+    )
+
+    seed_ingredient_data(session)
+
+    milk = repository.find_ingredient_by_name("milk", session)
+    term = term_row("warm milk", session)
+    assert milk is not None
+    assert (term.ingredient_id, term.variant, term.resolution) == (
+        milk.id,
+        "warm",
+        "seed",
+    )
+
+
+def test_accepted_not_food_marks_the_term(
+    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An accepted not_food suggestion acts like a NOT_FOOD entry: the
+    term is marked not_food, an existing auto term is flipped."""
+    stale = Ingredient(name="stand mixer")
+    session.add(stale)
+    session.flush()
+    session.add(
+        IngredientTerm(term="stand mixer", ingredient_id=stale.id, resolution="auto")
+    )
+
+    _write_suggestions(
+        tmp_path,
+        monkeypatch,
+        _entry("not_food", "stand mixer", {"term": "stand mixer"}),
+    )
+
+    seed_ingredient_data(session)
+
+    row = term_row("stand mixer", session)
+    assert (row.resolution, row.ingredient_id, row.variant) == ("not_food", None, None)
+
+
+def test_accepted_food_ref_creates_confirmed_rows(
+    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An accepted food_ref suggestion confirms the mapping at role
+    nutrition — plus conversion, fdc being a conversion source — and
+    creates the ingredient if missing, like FOOD_REFS does."""
+    _add_fdc_food(session, "1269801", "Seeds, sesame butter, tahini")
+    _write_suggestions(
+        tmp_path,
+        monkeypatch,
+        _entry(
+            "food_ref",
+            "tahini",
+            {"ingredient": "tahini", "source": "fdc", "source_food_id": "1269801"},
+        ),
+    )
+
+    seed_ingredient_data(session)
+
+    tahini = session.scalars(
+        select(Ingredient).where(Ingredient.name == "tahini")
+    ).one()
+    assert tahini.origin == "seed"
+    refs = session.scalars(
+        select(IngredientFoodRef).where(IngredientFoodRef.ingredient_id == tahini.id)
+    ).all()
+    assert sorted((ref.role, ref.status) for ref in refs) == [
+        ("conversion", "confirmed"),
+        ("nutrition", "confirmed"),
+    ]
+
+
+def test_hand_food_ref_beats_conflicting_accepted_suggestion(
+    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hand seeds win per (ingredient, source): an accepted food_ref
+    suggesting another food for a hand-seeded mapping changes nothing."""
+    food_id = _add_fdc_food(session, "171287", "Egg, whole, raw, fresh")
+    _add_fdc_food(session, "167806", "Baobab powder")
+    _write_suggestions(
+        tmp_path,
+        monkeypatch,
+        _entry(
+            "food_ref",
+            "egg",
+            {"ingredient": "egg", "source": "fdc", "source_food_id": "167806"},
+        ),
+    )
+
+    seed_ingredient_data(session)
+
+    egg = repository.find_ingredient_by_name("egg", session)
+    assert egg is not None
+    refs = session.scalars(
+        select(IngredientFoodRef).where(IngredientFoodRef.ingredient_id == egg.id)
+    ).all()
+    assert refs
+    assert all(ref.ref_food_id == food_id and ref.status == "confirmed" for ref in refs)
+
+
+def test_malformed_accepted_suggestion_is_skipped(
+    session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A malformed accepted entry (a missing proposal key) is logged
+    and skipped, never a seeding crash."""
+    _write_suggestions(
+        tmp_path,
+        monkeypatch,
+        _entry("alias", "aubergine", {"term": "aubergine"}),  # no target
+    )
+
+    with caplog.at_level(logging.WARNING):
+        seed_ingredient_data(session)
+
+    assert "malformed" in caplog.text
+    assert (
+        session.scalars(
+            select(IngredientTerm).where(IngredientTerm.term == "aubergine")
+        ).first()
+        is None
+    )
 
 
 def test_seed_derives_from_fdc_before_cnf(session: Session) -> None:

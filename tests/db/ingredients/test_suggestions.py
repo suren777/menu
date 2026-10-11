@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 import pydantic
 import pytest
 
+from menu.db.ingredients import suggestions as suggestions_module
 from menu.db.ingredients.suggestions import (
     Suggestion,
     accepted,
@@ -96,3 +97,18 @@ def test_accepted_filters_by_status_and_kind() -> None:
     assert accepted(entries, "alias") == [entries[0]]
     assert accepted(entries, "variant") == [entries[2]]
     assert accepted(entries, "line_override") == []
+
+
+def test_default_path_resolved_at_call_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """load()/save() with no path read SUGGESTIONS_PATH at call time,
+    so tests (and callers) can repoint the ledger."""
+    path = tmp_path / "suggestions.json"
+    monkeypatch.setattr(suggestions_module, "SUGGESTIONS_PATH", path)
+    entry = _suggestion(subject="late")
+
+    save([entry])
+
+    assert path.exists()
+    assert load() == [entry]

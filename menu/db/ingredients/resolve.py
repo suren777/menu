@@ -77,11 +77,11 @@ def _recompute_terms(session: Session) -> int:
     """Re-apply the review heuristic to every non-seed term: a
     name_needs_review term goes back to 'review', everything else to
     'auto' pointing at the concept of the same name (created when
-    missing). Seed and not_food terms still in seed.py are curated
-    decisions and stand; one whose entry was removed from seed.py is
+    missing). Seed and not_food terms still curated (in seed.py or an
+    accepted suggestion) stand; one whose entry was removed is
     recomputed like any other term. Run after seeding. Returns the
     number of terms changed."""
-    curated = {alias for alias, _, _ in seed.ALIASES} | set(seed.NOT_FOOD)
+    curated = {alias for alias, _, _ in seed.aliases()} | set(seed.not_food())
     curated |= set(
         session.scalars(select(Ingredient.name).where(Ingredient.origin == "seed"))
     )

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 import menu.db.connection
 from menu.db.database import initialise
+from menu.db.engine import configure_sqlite
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -22,8 +23,10 @@ def db_engine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Engin
 
     It is also installed as the default engine, so actions that open
     their own session (via get_session) operate on the same database.
+    Foreign keys are enforced, like the real engine.
     """
     engine = create_engine(f"sqlite:///{tmp_path}/test.db")
+    configure_sqlite(engine)
     monkeypatch.setattr(menu.db.connection, "default_engine", engine)
     initialise(engine)
     yield engine

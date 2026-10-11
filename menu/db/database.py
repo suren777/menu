@@ -7,7 +7,15 @@ types and call sites need no casts.
 from datetime import datetime  # noqa: TC003 - Mapped annotations resolve at runtime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from menu.db.engine import engine as default_engine
@@ -193,33 +201,82 @@ class Ingredient(Base):
 class IngredientFoodRef(Base):
     """A canonical ingredient mapped to a reference food.
 
-    Hand-seeded mappings (seed.FOOD_REFS) are confirmed, with the role
-    the reference serves: conversion (portion weights) or nutrition
-    (per-100g values). One ingredient can hold one confirmed reference
-    per role. The parser's own suggestion seeds an unconfirmed
-    candidate row (role NULL) — candidates feed the --ref-review
-    report, never conversion or nutrition.
+    `status` carries the review state instead of a role-NULL +
+    boolean pair. 'confirmed' rows are the hand-seeded mappings
+    (seed.FOOD_REFS) and carry the role the reference serves:
+    conversion (portion weights) or nutrition (per-100g values) — one
+    confirmed reference per role per source per ingredient, which the
+    partial unique index makes the database enforce. 'candidate' rows
+    are the parser's own suggestion (role NULL): they feed the
+    --ref-review report, never conversion or nutrition. 'rejected'
+    rows were reviewed and turned down (seed.REJECTED_REFS), so they
+    leave the report too and a re-crawl cannot resurrect them.
+    `origin` records where the row came from.
     """
 
-    __tablename__ = "ingredient_food_ref"
+    __tablename__ = "ingredient_food_refs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     ingredient_id: Mapped[int] = mapped_column(
         ForeignKey("ingredient.id"), nullable=False
     )
-    ref_food_id: Mapped[int] = mapped_column(
-        ForeignKey("ref_food.id"), nullable=False
-    )
+    ref_food_id: Mapped[int] = mapped_column(nullable=False)
+    source_id: Mapped[int] = mapped_column(nullable=False)
+    """The food's source, denormalised from ref_food: the composite
+    FK below keeps the pair consistent, and the partial unique index
+    scopes "one confirmed per role" to a source."""
     role: Mapped[str | None]
-    """'conversion' | 'nutrition'; NULL for unconfirmed parser
-    candidates, which are suggestions for either use."""
-    confirmed: Mapped[bool] = mapped_column(default=False)
+    """'conversion' | 'nutrition'; NULL for candidates and rejected
+    rows, which are suggestions for either use."""
+    status: Mapped[str] = mapped_column(nullable=False, default="candidate")
+    """'candidate' | 'confirmed' | 'rejected'."""
+    origin: Mapped[str] = mapped_column(nullable=False)
+    """'seed' (curated in seed.py) | 'parser' (the fdc_id
+    suggestion)."""
 
     __table_args__ = (
-        Index("ix_ingredient_food_ref_ingredient", "ingredient_id"),
+        # The composite FK's parent key: (id, source_id) must be
+        # unique for SQLite to accept the reference to it.
+        UniqueConstraint("id", "source_id"),
+        ForeignKeyConstraint(
+            ["ref_food_id", "source_id"],
+            ["ref_food.id", "ref_food.source_id"],
+        ),
+        # The same ingredient -> food mapping must not be stored
+        # twice, whatever the statuses; candidates have role NULL, so
+        # the coalesce folds that into one key.
+        Index(
+            "ix_ingredient_food_refs_ingredient_food_role",
+            "ingredient_id",
+            "ref_food_id",
+            text("COALESCE(role, '')"),
+            unique=True,
+        ),
+        # One confirmed reference per role per source per ingredient.
+        Index(
+            "ix_ingredient_food_refs_confirmed_role_source",
+            "ingredient_id",
+            "role",
+            "source_id",
+            unique=True,
+            sqlite_where=text("status = 'confirmed'"),
+        ),
+        Index("ix_ingredient_food_refs_ingredient", "ingredient_id"),
         CheckConstraint(
             "role IS NULL OR role IN ('conversion', 'nutrition')",
-            "ck_ingredient_food_ref_role",
+            "ck_ingredient_food_refs_role",
+        ),
+        CheckConstraint(
+            "status IN ('candidate', 'confirmed', 'rejected')",
+            "ck_ingredient_food_refs_status",
+        ),
+        CheckConstraint(
+            "origin IN ('seed', 'parser')",
+            "ck_ingredient_food_refs_origin",
+        ),
+        CheckConstraint(
+            "status <> 'confirmed' OR role IS NOT NULL",
+            "ck_ingredient_food_refs_confirmed_has_role",
         ),
     )
 
@@ -337,6 +394,9 @@ class RefFood(Base):
 
     __table_args__ = (
         Index("ix_ref_food_source", "source_id", "source_food_id", unique=True),
+        # Parent key for ingredient_food_refs' composite FK
+        # (ref_food_id, source_id).
+        UniqueConstraint("id", "source_id"),
     )
 
 

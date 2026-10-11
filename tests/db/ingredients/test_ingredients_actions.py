@@ -306,8 +306,10 @@ def test_store_writes_grams_from_confirmed_ref() -> None:
             IngredientFoodRef(
                 ingredient_id=egg.id,
                 ref_food_id=food.id,
+                source_id=food.source_id,
                 role="conversion",
-                confirmed=True,
+                status="confirmed",
+                origin="seed",
             )
         )
 
@@ -515,18 +517,26 @@ def test_aggregate_skips_optional_and_alternative_lines() -> None:
                 optional=True,
             )
         )
+        vanilla = RecipeIngredient(
+            recipe_id=recipe_id,
+            position=1,
+            raw_text="rosewater",
+            ingredient_id=milk.id,
+        )
+        session.add(vanilla)
+        session.flush()
         session.add(
             RecipeIngredient(
                 recipe_id=recipe_id,
-                position=1,
+                position=2,
                 raw_text="rosewater or vanilla",
                 ingredient_id=milk.id,
-                alternative_of=999,
+                alternative_of=vanilla.id,
             )
         )
         session.add(
             RecipeIngredient(
-                recipe_id=recipe_id, position=2, raw_text="salt to taste"
+                recipe_id=recipe_id, position=3, raw_text="salt to taste"
             )
         )
         session.add(
@@ -705,13 +715,33 @@ def test_fdc_id_conflicts_reported_not_merged() -> None:
         session.flush()
         session.add_all(
             [
-                IngredientFoodRef(ingredient_id=almond.id, ref_food_id=extract.id),
-                IngredientFoodRef(ingredient_id=vanilla.id, ref_food_id=extract.id),
                 IngredientFoodRef(
-                    ingredient_id=rosewater.id, ref_food_id=extract.id
+                    ingredient_id=almond.id,
+                    ref_food_id=extract.id,
+                    source_id=extract.source_id,
+                    status="candidate",
+                    origin="parser",
                 ),
                 IngredientFoodRef(
-                    ingredient_id=butter.id, ref_food_id=butter_food.id
+                    ingredient_id=vanilla.id,
+                    ref_food_id=extract.id,
+                    source_id=extract.source_id,
+                    status="candidate",
+                    origin="parser",
+                ),
+                IngredientFoodRef(
+                    ingredient_id=rosewater.id,
+                    ref_food_id=extract.id,
+                    source_id=extract.source_id,
+                    status="candidate",
+                    origin="parser",
+                ),
+                IngredientFoodRef(
+                    ingredient_id=butter.id,
+                    ref_food_id=butter_food.id,
+                    source_id=butter_food.source_id,
+                    status="candidate",
+                    origin="parser",
                 ),
             ]
         )
@@ -769,12 +799,20 @@ def test_ref_review_lists_unconfirmed() -> None:
             IngredientFoodRef(
                 ingredient_id=egg.id,
                 ref_food_id=egg_food.id,
+                source_id=egg_food.source_id,
                 role="nutrition",
-                confirmed=True,
+                status="confirmed",
+                origin="seed",
             )
         )
         session.add(
-            IngredientFoodRef(ingredient_id=mystery.id, ref_food_id=baobab.id)
+            IngredientFoodRef(
+                ingredient_id=mystery.id,
+                ref_food_id=baobab.id,
+                source_id=baobab.source_id,
+                status="candidate",
+                origin="parser",
+            )
         )
         session.add_all(
             [
@@ -800,6 +838,52 @@ def test_ref_review_lists_unconfirmed() -> None:
         )
 
     assert actions.ref_review() == [(2, "mystery powder", "Baobab powder", ())]
+
+
+@pytest.mark.usefixtures("db_engine")
+def test_ref_review_excludes_rejected_candidates() -> None:
+    """A REJECTED_REFS row takes its food out of the report: not shown
+    as the candidate, not offered as a text match. The ingredient
+    itself stays listed until it has a confirmed reference."""
+    recipe_id = add_recipe("https://x/cake")
+    with get_session() as session:
+        source = FoodSource(
+            name="fdc",
+            version="test",
+            licence="public domain",
+            citation="test",
+        )
+        session.add(source)
+        session.flush()
+        baobab = RefFood(
+            source_id=source.id,
+            source_food_id="167806",
+            description="Baobab powder",
+        )
+        session.add(baobab)
+        session.flush()
+        mystery = Ingredient(name="baobab powder")
+        session.add(mystery)
+        session.flush()
+        session.add(
+            IngredientFoodRef(
+                ingredient_id=mystery.id,
+                ref_food_id=baobab.id,
+                source_id=baobab.source_id,
+                status="rejected",
+                origin="parser",
+            )
+        )
+        session.add(
+            RecipeIngredient(
+                recipe_id=recipe_id,
+                position=0,
+                raw_text="1 tsp baobab powder",
+                ingredient_id=mystery.id,
+            )
+        )
+
+    assert actions.ref_review() == [(1, "baobab powder", None, ())]
 
 
 @pytest.mark.usefixtures("db_engine")
@@ -1101,8 +1185,10 @@ def test_conversion_portions_prefer_fdc_over_cnf(session: Session) -> None:
                 IngredientFoodRef(
                     ingredient_id=egg.id,
                     ref_food_id=food.id,
+                    source_id=food.source_id,
                     role="conversion",
-                    confirmed=True,
+                    status="confirmed",
+                    origin="seed",
                 ),
             ]
         )

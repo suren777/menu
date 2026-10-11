@@ -179,7 +179,7 @@ def coverage_report(limit: int = 50) -> None:
                 and_(
                     IngredientFoodRef.ingredient_id == Ingredient.id,
                     IngredientFoodRef.role == "nutrition",
-                    IngredientFoodRef.confirmed.is_(True),
+                    IngredientFoodRef.status == "confirmed",
                 ),
             )
             .where(

@@ -151,8 +151,10 @@ def test_coverage_report_lists_unreferenced_ingredients(
             IngredientFoodRef(
                 ingredient_id=egg.id,
                 ref_food_id=food.id,
+                source_id=food.source_id,
                 role="nutrition",
-                confirmed=True,
+                status="confirmed",
+                origin="seed",
             )
         )
         foods = ((egg, 2.0), (egg, 1.0), (water, 250.0))

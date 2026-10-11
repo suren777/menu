@@ -251,17 +251,26 @@ def _resolve_ingredient(
 def _seed_candidate(
     ingredient_id: int, source_food_id: str, session: Session
 ) -> None:
-    """The parser's fdc_id as an unconfirmed candidate row (role
-    NULL): a suggestion for the --ref-review report, never used for
-    conversion or nutrition."""
-    ref_food = session.execute(
-        select(RefFood.id)
+    """The parser's fdc_id as a candidate row (role NULL, status
+    'candidate'): a suggestion for the --ref-review report, never used
+    for conversion or nutrition. Only called for an ingredient created
+    by this very parse, so it cannot double an existing row — the
+    (ingredient, food, role) expression index would refuse that."""
+    food = session.execute(
+        select(RefFood.id, RefFood.source_id)
         .join(FoodSource, FoodSource.id == RefFood.source_id)
         .where(FoodSource.name == "fdc", RefFood.source_food_id == source_food_id)
-    ).scalar_one_or_none()
-    if ref_food is not None:
+    ).first()
+    if food is not None:
+        ref_food_id, source_id = food
         session.add(
-            IngredientFoodRef(ingredient_id=ingredient_id, ref_food_id=ref_food)
+            IngredientFoodRef(
+                ingredient_id=ingredient_id,
+                ref_food_id=ref_food_id,
+                source_id=source_id,
+                status="candidate",
+                origin="parser",
+            )
         )
 
 
@@ -402,7 +411,8 @@ def _conversion_portions(
 ) -> tuple[str, list[RefPortion]]:
     """Portions of the ingredient's confirmed conversion reference,
     with the source's name for grams provenance. Only confirmed
-    references feed conversion — the parser's candidates never do."""
+    references feed conversion — candidates and rejected rows never
+    do."""
     rows = session.execute(
         select(FoodSource.name, RefPortion)
         .join(RefFood, RefFood.source_id == FoodSource.id)
@@ -411,7 +421,7 @@ def _conversion_portions(
         .where(
             IngredientFoodRef.ingredient_id == ingredient_id,
             IngredientFoodRef.role == "conversion",
-            IngredientFoodRef.confirmed.is_(True),
+            IngredientFoodRef.status == "confirmed",
         )
     ).all()
     by_source: dict[str, list[RefPortion]] = {}
@@ -487,7 +497,7 @@ def fdc_id_conflicts() -> list[tuple[str, list[str]]]:
             select(
                 IngredientFoodRef.ref_food_id,
                 IngredientFoodRef.ingredient_id,
-            ).where(IngredientFoodRef.confirmed.is_(False))
+            ).where(IngredientFoodRef.status == "candidate")
         ).all()
         descriptions = dict(
             session.execute(select(RefFood.id, RefFood.description)).all()
@@ -520,8 +530,10 @@ def ref_review(
 ) -> list[tuple[int, str, str | None, tuple[str, ...]]]:
     """Top ingredients without a confirmed reference by line count,
     with the parser's candidate and the best text matches from each
-    imported source, for hand-seeding into seed.FOOD_REFS. Needs the
-    reference import; a report, never an auto-merge."""
+    imported source, for hand-seeding into seed.FOOD_REFS. Candidates
+    that REJECTED_REFS turned down — and their foods as text matches —
+    stay out. Needs the reference import; a report, never an
+    auto-merge."""
     with get_session() as session:
         rows = session.execute(
             select(func.count(RecipeIngredient.id), Ingredient.id, Ingredient.name)
@@ -532,7 +544,7 @@ def ref_review(
                 IngredientFoodRef,
                 and_(
                     IngredientFoodRef.ingredient_id == Ingredient.id,
-                    IngredientFoodRef.confirmed.is_(True),
+                    IngredientFoodRef.status == "confirmed",
                 ),
             )
             .where(IngredientFoodRef.id.is_(None))
@@ -540,10 +552,16 @@ def ref_review(
             .order_by(func.count(RecipeIngredient.id).desc())
             .limit(limit)
         ).all()
+        rejected: dict[int, set[int]] = {}
+        for owner_id, food_id in session.execute(
+            select(IngredientFoodRef.ingredient_id, IngredientFoodRef.ref_food_id)
+            .where(IngredientFoodRef.status == "rejected")
+        ).all():
+            rejected.setdefault(owner_id, set()).add(food_id)
         sources = list(session.scalars(select(FoodSource)))
         descriptions = {
             source.id: session.execute(
-                select(RefFood.source_food_id, RefFood.description).where(
+                select(RefFood.id, RefFood.source_food_id, RefFood.description).where(
                     RefFood.source_id == source.id
                 )
             ).all()
@@ -554,7 +572,7 @@ def ref_review(
             candidate_food = session.scalar(
                 select(IngredientFoodRef.ref_food_id).where(
                     IngredientFoodRef.ingredient_id == ingredient_id,
-                    IngredientFoodRef.confirmed.is_(False),
+                    IngredientFoodRef.status == "candidate",
                 )
             )
             candidate = (
@@ -565,11 +583,17 @@ def ref_review(
                 else None
             )
             # Text match: descriptions containing every word of the
-            # name, one candidate per source.
+            # name, one candidate per source. A food this ingredient's
+            # REJECTED_REFS entry turned down is not offered again.
             words = name.lower().split()
+            rejected_foods = rejected.get(ingredient_id, set())
             matches = []
             for source in sources:
-                for source_food_id, description in descriptions[source.id]:
+                for ref_food_id, source_food_id, description in descriptions[
+                    source.id
+                ]:
+                    if ref_food_id in rejected_foods:
+                        continue
                     text = description.lower()
                     if all(word in text for word in words):
                         matches.append(

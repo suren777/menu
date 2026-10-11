@@ -70,7 +70,7 @@ def _add_nutrition_food(
     source_food_id: str,
     description: str,
     nutrients: list[tuple[str, float, str]],
-) -> int:
+) -> RefFood:
     """One fdc ref_food with per-100g nutrient rows."""
     source = session.scalar(select(FoodSource).where(FoodSource.name == "fdc"))
     if source is None:
@@ -98,7 +98,7 @@ def _add_nutrition_food(
                 definition=definition,
             )
         )
-    return food.id
+    return food
 
 
 def _add_recipe(session: Session, url: str, name: str) -> Recipe:
@@ -123,7 +123,7 @@ def test_derive_nutrition_sums_confirmed_reference() -> None:
     """Each counted line contributes grams x per-100g; rerunning
     updates the one derived row."""
     with get_session() as session:
-        food_id = _add_nutrition_food(
+        food = _add_nutrition_food(
             session,
             "171287",
             "Egg, whole, raw, fresh",
@@ -139,9 +139,11 @@ def test_derive_nutrition_sums_confirmed_reference() -> None:
         session.add(
             IngredientFoodRef(
                 ingredient_id=egg.id,
-                ref_food_id=food_id,
+                ref_food_id=food.id,
+                source_id=food.source_id,
                 role="nutrition",
-                confirmed=True,
+                status="confirmed",
+                origin="seed",
             )
         )
         session.add(
@@ -181,7 +183,7 @@ def test_derive_nutrition_midpoint_and_skips() -> None:
     """Ranges eat the midpoint; no-quantity lines count as
     unconverted; optional and alternative lines are skipped."""
     with get_session() as session:
-        food_id = _add_nutrition_food(
+        food = _add_nutrition_food(
             session,
             "171287",
             "Egg, whole, raw, fresh",
@@ -195,9 +197,11 @@ def test_derive_nutrition_midpoint_and_skips() -> None:
         session.add(
             IngredientFoodRef(
                 ingredient_id=egg.id,
-                ref_food_id=food_id,
+                ref_food_id=food.id,
+                source_id=food.source_id,
                 role="nutrition",
-                confirmed=True,
+                status="confirmed",
+                origin="seed",
             )
         )
         session.add(
@@ -284,17 +288,21 @@ def test_derive_nutrition_coverage_and_definitions() -> None:
         session.add(
             IngredientFoodRef(
                 ingredient_id=egg.id,
-                ref_food_id=egg_food,
+                ref_food_id=egg_food.id,
+                source_id=egg_food.source_id,
                 role="nutrition",
-                confirmed=True,
+                status="confirmed",
+                origin="seed",
             )
         )
         session.add(
             IngredientFoodRef(
                 ingredient_id=flour.id,
-                ref_food_id=flour_food,
+                ref_food_id=flour_food.id,
+                source_id=flour_food.source_id,
                 role="nutrition",
-                confirmed=True,
+                status="confirmed",
+                origin="seed",
             )
         )
         foods = ((egg, 100.0), (flour, 100.0), (water, 100.0))
@@ -349,9 +357,11 @@ def test_derive_nutrition_uses_prepared_form() -> None:
         session.add(
             IngredientFoodRef(
                 ingredient_id=egg.id,
-                ref_food_id=whole,
+                ref_food_id=whole.id,
+                source_id=whole.source_id,
                 role="nutrition",
-                confirmed=True,
+                status="confirmed",
+                origin="seed",
             )
         )
         session.add(

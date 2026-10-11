@@ -76,7 +76,7 @@ def _nutrition_ref(
             .where(
                 IngredientFoodRef.ingredient_id == ingredient_id,
                 IngredientFoodRef.role == "nutrition",
-                IngredientFoodRef.confirmed.is_(True),
+                IngredientFoodRef.status == "confirmed",
             )
         ).all()
     )

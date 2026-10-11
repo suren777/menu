@@ -1,52 +1,52 @@
-"""Discovery: find candidate recipe URLs per site via sitemaps."""
+"""Discovery: sitemap XML through the page fetch path.
 
-import re
+`request_xml` fetches one sitemap document — robots, politeness and
+the disk cache all apply, exactly like a page — and returns its root
+kind with the URLs listed in it, each with the lastmod the sitemap
+gives. Live crawls fetch sitemaps fresh (they change) but cache them,
+so a later rebuild can replay the crawl.
+"""
+
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from defusedxml.ElementTree import fromstring
 
-from menu.ingest.errors import BlockedError, FetchError
-from menu.ingest.fetch import _politeness, check_robots
-from menu.ingest.http import session
+from menu.ingest.fetch import fetch_page
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
-
     from menu.ingest.registry import SiteConfig
 
 
-def request_xml(url: str, site: SiteConfig | None = None) -> tuple[str, list[str]]:
+@dataclass
+class SitemapEntry:
+    """One <url> or <sitemap> element of a sitemap document."""
+
+    loc: str
+    lastmod: str | None = None
+
+
+def request_xml(
+    url: str, site: SiteConfig, *, offline: bool = False
+) -> tuple[str, list[SitemapEntry]]:
     """Fetch a sitemap and return its root kind ("sitemapindex" or
-    "urlset") with the URLs listed in it, matching food-guru's
-    _urls_from_xml. Sitemap fetches honour robots.txt too when the
-    site is given."""
-    if site is not None:
-        check_robots(url, site)
-        # Sitemaps wait their turn like page fetches: a discovery run
-        # hitting one host is the same crawl for politeness purposes.
-        _politeness.wait(site.base_url, site.politeness_delay)
-    response = session.get(url, timeout=10)
-    if response.status_code in (401, 402, 403, 429):
-        raise BlockedError(f"Blocked with HTTP {response.status_code}: {url!r}")
-    if not response.ok:
-        raise FetchError(f"Can't fetch {url!r}")
-
-    tree = fromstring(response.content)
+    "urlset") with the entries listed in it, matching food-guru's
+    _urls_from_xml. The fetch is a normal page fetch: robots.txt,
+    politeness and the disk cache apply. Offline replays the cached
+    sitemap instead (a rebuild never touches the network); live stays
+    as before: fetched fresh, but cached for the replay."""
+    content = fetch_page(url, site, use_cache=offline, offline=offline)
+    tree = fromstring(content)
     kind = tree.tag.rsplit("}", 1)[-1]
-    locs = [
-        child.text
-        for child in tree.iter()
-        if child.tag.endswith("loc") and child.text is not None
-    ]
-    return kind, locs
-
-
-def discover_urls(site: SiteConfig, sitemap_url: str | None = None) -> Iterator[str]:
-    """Yield candidate recipe URLs for a site, honouring its URL pattern."""
-    pattern = re.compile(site.url_pattern) if site.url_pattern else None
-    sitemaps = [sitemap_url] if sitemap_url else site.sitemap_urls
-    for sitemap in sitemaps:
-        _, locs = request_xml(sitemap, site)
-        for url in locs:
-            if pattern is None or pattern.match(url):
-                yield url
+    entries: list[SitemapEntry] = []
+    for child in tree:
+        loc = lastmod = None
+        for sub in child.iter():
+            tag = sub.tag.rsplit("}", 1)[-1]
+            if tag == "loc" and sub.text and loc is None:
+                loc = sub.text
+            elif tag == "lastmod" and sub.text and lastmod is None:
+                lastmod = sub.text
+        if loc is not None:
+            entries.append(SitemapEntry(loc=loc, lastmod=lastmod))
+    return kind, entries

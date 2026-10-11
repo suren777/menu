@@ -4,7 +4,9 @@ Repeat runs read from the cache instead of hitting the sites again;
 the cache lives in .cache/ at the project root (gitignored) and is
 safe to delete. robots.txt is honoured per site: a disallowed URL
 raises DisallowedError, and the robots crawl-delay is respected on
-top of the site's own politeness delay.
+top of the site's own politeness delay. Sitemap XML goes through the
+same path as pages: fetched fresh on a live crawl (sitemaps change)
+but written to the cache, so a later rebuild can replay them.
 """
 
 import hashlib
@@ -16,7 +18,12 @@ from urllib.robotparser import RobotFileParser
 from bs4 import BeautifulSoup
 from requests.exceptions import RequestException, RetryError
 
-from menu.ingest.errors import BlockedError, DisallowedError, FetchError
+from menu.ingest.errors import (
+    BlockedError,
+    DisallowedError,
+    FetchError,
+    NotCachedError,
+)
 from menu.ingest.http import USER_AGENT, session
 
 if TYPE_CHECKING:
@@ -113,13 +120,24 @@ def _retry_after(response: Response) -> float:
 def fetch_page(
     url: str,
     site: SiteConfig,
-    cache_dir: Path = DEFAULT_CACHE_DIR,
+    cache_dir: Path | None = None,
     use_cache: bool = True,
+    offline: bool = False,
 ) -> bytes:
-    """Fetch a page's raw bytes, from the disk cache when possible."""
+    """Fetch a page's raw bytes, from the disk cache when possible.
+
+    The cache directory is resolved at call time (defaulting to
+    DEFAULT_CACHE_DIR) so a rebuild can point it at another cache.
+    Offline never touches the network, robots.txt or the politeness
+    delay: a URL the cache doesn't hold raises NotCachedError.
+    """
+    if cache_dir is None:
+        cache_dir = DEFAULT_CACHE_DIR
     path = _cache_path(url, cache_dir)
     if use_cache and path.exists():
         return path.read_bytes()
+    if offline:
+        raise NotCachedError(f"Not in the offline cache: {url!r}")
 
     check_robots(url, site)
     parser = _robots.parser(site.base_url)
@@ -139,11 +157,14 @@ def fetch_page(
         time.sleep(_retry_after(response))
         response = session.get(url, timeout=10)
         if response.status_code == 429:
-            raise BlockedError(f"Still rate-limited: {url!r}")
+            raise BlockedError(f"Still rate-limited: {url!r}", status_code=429)
     if response.status_code in (401, 402, 403):
-        raise BlockedError(f"Blocked with HTTP {response.status_code}: {url!r}")
+        raise BlockedError(
+            f"Blocked with HTTP {response.status_code}: {url!r}",
+            status_code=response.status_code,
+        )
     if not response.ok:
-        raise FetchError(f"Can't fetch {url!r}")
+        raise FetchError(f"Can't fetch {url!r}", status_code=response.status_code)
 
     cache_dir.mkdir(parents=True, exist_ok=True)
     path.write_bytes(response.content)

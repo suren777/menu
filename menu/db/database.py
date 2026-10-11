@@ -4,9 +4,18 @@ Typed 2.0-style columns (Mapped/mapped_column) so mypy sees the column
 types and call sites need no casts.
 """
 
+from datetime import datetime  # noqa: TC003 - Mapped annotations resolve at runtime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from menu.db.engine import engine as default_engine
@@ -20,29 +29,112 @@ class Base(DeclarativeBase):
 
 
 class Sitemap(Base):
-    __tablename__ = "sitemap"
+    """One sitemap document of one site, with its fetch outcome.
+
+    A sitemap index stores itself (kind "index", status "done") and
+    its children as pending rows; the crawl fetches every sitemap
+    still pending or blocked and queues the page URLs it lists. The
+    status is the recorded outcome of the last fetch attempt, not a
+    boolean: a failed or blocked sitemap is data, not a crash.
+    """
+
+    __tablename__ = "sitemaps"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    url: Mapped[str] = mapped_column(nullable=False, unique=True)
     site: Mapped[str] = mapped_column(nullable=False)
     """Registry name of the site this sitemap belongs to."""
-    completed: Mapped[bool] = mapped_column(default=False)
+    url: Mapped[str] = mapped_column(nullable=False, unique=True)
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("sitemaps.id"))
+    """The index sitemap that listed this one, if any."""
+    kind: Mapped[str | None]
+    """'index' | 'urlset'; NULL until the document has been fetched."""
+    status: Mapped[str] = mapped_column(nullable=False, default="pending")
+    """'pending' | 'done' | 'failed' | 'blocked'."""
+    fetched_at: Mapped[datetime | None]
+    error: Mapped[str | None]
+
+    __table_args__ = (
+        CheckConstraint(
+            "kind IS NULL OR kind IN ('index', 'urlset')",
+            "ck_sitemaps_kind",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'done', 'failed', 'blocked')",
+            "ck_sitemaps_status",
+        ),
+    )
 
 
-class RecipeUrls(Base):
-    __tablename__ = "recipe_urls"
+class Page(Base):
+    """One crawled URL and its outcome: the crawl ledger.
+
+    Every URL a sitemap lists gets a row, whatever happens to it —
+    fetched, not a recipe, failed, blocked or disallowed — so a re-run
+    continues from the queued pages instead of re-walking sitemaps,
+    and "what was crawled and what failed" is a query.
+    """
+
+    __tablename__ = "pages"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    site: Mapped[str] = mapped_column(nullable=False)
+    """Registry name of the site this page belongs to."""
     url: Mapped[str] = mapped_column(nullable=False, unique=True)
-    """Unique: recipes are deduplicated on their URL."""
+    sitemap_id: Mapped[int | None] = mapped_column(ForeignKey("sitemaps.id"))
+    lastmod: Mapped[str | None]
+    """The sitemap's lastmod for the URL, as the sitemap spells it."""
+    status: Mapped[str] = mapped_column(nullable=False, default="queued")
+    """'queued' | 'fetched' | 'no_recipe' | 'failed' | 'blocked' |
+    'disallowed' — the last fetch attempt's outcome."""
+    http_status: Mapped[int | None]
+    attempts: Mapped[int] = mapped_column(nullable=False, default=0)
+    fetched_at: Mapped[datetime | None]
+    content_sha256: Mapped[str | None]
+    """sha256 of the fetched bytes: detects upstream changes."""
+    error: Mapped[str | None]
+
+    __table_args__ = (
+        Index("ix_pages_site_status", "site", "status"),
+        CheckConstraint(
+            "status IN ('queued', 'fetched', 'no_recipe', 'failed', "
+            "'blocked', 'disallowed')",
+            "ck_pages_status",
+        ),
+    )
+
+
+class Recipe(Base):
+    """The raw recipe data captured from one page.
+
+    Split from the page: the page is the fetch, the recipe is what was
+    extracted from it. data_sha256 — the fingerprint of the canonical
+    JSON — says whether upstream changed the recipe since the last
+    capture; the site is the page's site (join through page_id).
+    """
+
+    __tablename__ = "recipes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    page_id: Mapped[int] = mapped_column(
+        ForeignKey("pages.id"), nullable=False, unique=True
+    )
     name: Mapped[str] = mapped_column(nullable=False)
+    """The JSON-LD name; the page <title> when the data names nothing."""
     data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    site: Mapped[str | None]
-    """Registry name of the site the recipe came from; stamped at
-    ingest time (rows stored before the column existed get it on
-    reparse)."""
+    data_sha256: Mapped[str] = mapped_column(nullable=False)
+    extractor: Mapped[str] = mapped_column(nullable=False)
+    """'json_ld' | 'test_id' | 'microdata' — what found the recipe."""
     servings: Mapped[int | None]
     """Parsed from recipeYield ("Serves 12", "Makes 16")."""
+    yield_text: Mapped[str | None]
+    """The raw recipeYield as text."""
+
+    __table_args__ = (
+        CheckConstraint(
+            "extractor IN ('json_ld', 'test_id', 'microdata')",
+            "ck_recipes_extractor",
+        ),
+    )
 
 
 class RecipeNutrition(Base):
@@ -56,7 +148,7 @@ class RecipeNutrition(Base):
     __tablename__ = "recipe_nutrition"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    recipe_id: Mapped[int] = mapped_column(ForeignKey("recipe_urls.id"))
+    recipe_id: Mapped[int] = mapped_column(ForeignKey("recipes.id"))
     source: Mapped[str]
     """\"derived\" | \"published\" — never mixed in one row."""
     energy_kcal: Mapped[float | None]
@@ -92,92 +184,246 @@ class RecipeNutrition(Base):
 
 
 class Ingredient(Base):
-    """Canonical ingredient, shared by aliases and recipe lines."""
+    """Canonical ingredient concept, shared by terms and recipe lines."""
 
-    __tablename__ = "ingredient"
+    __tablename__ = "ingredients"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(nullable=False, unique=True)
     """Canonical, singular, lowercase: "milk"."""
-    density_g_per_ml: Mapped[float | None]
-    """Enables volume<->mass conversion. Hand-seeded; derived from the
-    reference data when no seed exists."""
-    unit_weight_g: Mapped[float | None]
-    """Per-item weight for count->mass conversion (egg ~= 50 g)."""
+    origin: Mapped[str] = mapped_column(nullable=False, default="auto")
+    """'seed' (curated in seed.py) | 'auto' (a parser name the
+    heuristics let through). Seeding a name that exists as auto flips
+    it to seed; auto concepts are what pruning cleans up."""
+
+    __table_args__ = (
+        CheckConstraint("origin IN ('seed', 'auto')", "ck_ingredients_origin"),
+    )
 
 
 class IngredientFoodRef(Base):
     """A canonical ingredient mapped to a reference food.
 
-    Hand-seeded mappings (seed.FOOD_REFS) are confirmed, with the role
-    the reference serves: conversion (portion weights) or nutrition
-    (per-100g values). One ingredient can hold one confirmed reference
-    per role. The parser's own suggestion seeds an unconfirmed
-    candidate row (role NULL) — candidates feed the --ref-review
-    report, never conversion or nutrition.
+    `status` carries the review state instead of a role-NULL +
+    boolean pair. 'confirmed' rows are the hand-seeded mappings
+    (seed.FOOD_REFS) and carry the role the reference serves:
+    conversion (portion weights) or nutrition (per-100g values) — one
+    confirmed reference per role per source per ingredient, which the
+    partial unique index makes the database enforce. 'candidate' rows
+    are the parser's own suggestion (role NULL): they feed the
+    --ref-review report, never conversion or nutrition. 'rejected'
+    rows were reviewed and turned down (seed.REJECTED_REFS), so they
+    leave the report too and a re-crawl cannot resurrect them.
+    `origin` records where the row came from.
     """
 
-    __tablename__ = "ingredient_food_ref"
+    __tablename__ = "ingredient_food_refs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     ingredient_id: Mapped[int] = mapped_column(
-        ForeignKey("ingredient.id"), nullable=False
+        ForeignKey("ingredients.id"), nullable=False
     )
-    ref_food_id: Mapped[int] = mapped_column(
-        ForeignKey("ref_food.id"), nullable=False
-    )
+    ref_food_id: Mapped[int] = mapped_column(nullable=False)
+    source_id: Mapped[int] = mapped_column(nullable=False)
+    """The food's source, denormalised from ref_food: the composite
+    FK below keeps the pair consistent, and the partial unique index
+    scopes "one confirmed per role" to a source."""
     role: Mapped[str | None]
-    """'conversion' | 'nutrition'; NULL for unconfirmed parser
-    candidates, which are suggestions for either use."""
-    confirmed: Mapped[bool] = mapped_column(default=False)
+    """'conversion' | 'nutrition'; NULL for candidates and rejected
+    rows, which are suggestions for either use."""
+    status: Mapped[str] = mapped_column(nullable=False, default="candidate")
+    """'candidate' | 'confirmed' | 'rejected'."""
+    origin: Mapped[str] = mapped_column(nullable=False)
+    """'seed' (curated in seed.py) | 'parser' (the fdc_id
+    suggestion)."""
 
     __table_args__ = (
-        Index("ix_ingredient_food_ref_ingredient", "ingredient_id"),
+        # The composite FK's parent key: (id, source_id) must be
+        # unique for SQLite to accept the reference to it.
+        UniqueConstraint("id", "source_id"),
+        ForeignKeyConstraint(
+            ["ref_food_id", "source_id"],
+            ["ref_food.id", "ref_food.source_id"],
+        ),
+        # The same ingredient -> food mapping must not be stored
+        # twice, whatever the statuses; candidates have role NULL, so
+        # the coalesce folds that into one key.
+        Index(
+            "ix_ingredient_food_refs_ingredient_food_role",
+            "ingredient_id",
+            "ref_food_id",
+            text("COALESCE(role, '')"),
+            unique=True,
+        ),
+        # One confirmed reference per role per source per ingredient.
+        Index(
+            "ix_ingredient_food_refs_confirmed_role_source",
+            "ingredient_id",
+            "role",
+            "source_id",
+            unique=True,
+            sqlite_where=text("status = 'confirmed'"),
+        ),
+        Index("ix_ingredient_food_refs_ingredient", "ingredient_id"),
         CheckConstraint(
             "role IS NULL OR role IN ('conversion', 'nutrition')",
-            "ck_ingredient_food_ref_role",
+            "ck_ingredient_food_refs_role",
+        ),
+        CheckConstraint(
+            "status IN ('candidate', 'confirmed', 'rejected')",
+            "ck_ingredient_food_refs_status",
+        ),
+        CheckConstraint(
+            "origin IN ('seed', 'parser')",
+            "ck_ingredient_food_refs_origin",
+        ),
+        CheckConstraint(
+            "status <> 'confirmed' OR role IS NOT NULL",
+            "ck_ingredient_food_refs_confirmed_has_role",
         ),
     )
 
 
-class IngredientAlias(Base):
-    """Maps a line's parsed name to its canonical ingredient.
+class IngredientTerm(Base):
+    """One parsed name (a term) and the concept it resolves to.
 
-    Variants ("whole", "unsalted") are kept so a shopping list can
-    roll them up to the parent by default, or keep them apart.
+    Every parsed name is a term; recipe lines point at terms, not
+    concepts, so re-pointing a term re-resolves every line that uses
+    it with no reparse. `resolution` says how the term was decided:
+    'seed' (curated in seed.py), 'auto' (the parser name the
+    heuristics let through), 'review' (the review queue — a name the
+    parser likely mangled) or 'not_food' (equipment and other
+    non-ingredients; their lines stay stored but are excluded from
+    aggregation and nutrition). A term resolves exactly when its
+    resolution is seed/auto, which the CHECK enforces.
     """
 
-    __tablename__ = "ingredient_alias"
+    __tablename__ = "ingredient_terms"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    alias: Mapped[str] = mapped_column(nullable=False, unique=True)
-    ingredient_id: Mapped[int] = mapped_column(
-        ForeignKey("ingredient.id"), nullable=False
+    term: Mapped[str] = mapped_column(nullable=False, unique=True)
+    """The canonical_name of a parsed name: "warm milk"."""
+    ingredient_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ingredients.id")
     )
+    """The concept the term resolves to; NULL exactly when the term is
+    unresolved (review/not_food)."""
     variant: Mapped[str | None]
+    """Which variant the term carries ("whole", "warm"); lets a
+    shopping list keep variants apart."""
+    resolution: Mapped[str] = mapped_column(nullable=False)
+    """'seed' | 'auto' | 'review' | 'not_food'."""
+
+    __table_args__ = (
+        Index("ix_ingredient_terms_ingredient_id", "ingredient_id"),
+        CheckConstraint(
+            "resolution IN ('seed', 'auto', 'review', 'not_food')",
+            "ck_ingredient_terms_resolution",
+        ),
+        CheckConstraint(
+            "(resolution IN ('review', 'not_food') AND ingredient_id IS NULL) "
+            "OR (resolution NOT IN ('review', 'not_food') "
+            "AND ingredient_id IS NOT NULL)",
+            "ck_ingredient_terms_resolution_ingredient",
+        ),
+    )
+
+
+class IngredientConversion(Base):
+    """One conversion factor of one ingredient: how its quantities
+    turn into grams.
+
+    The curated seeds (seed.py) and the confirmed conversion
+    reference's portions live here side by side, and the read
+    precedence (seed > reference source) applies at query time — the
+    exact row a line's grams came from is named by
+    recipe_ingredients.conversion_id. `kind` says what the factor is:
+    a density (grams per ml), a per-piece unit weight, or the grams
+    of one named unit ("cup", "medium", "stick") — `unit` is NULL
+    exactly for the first two. `origin` is 'seed' or the reference
+    source's name ("fdc", "cnf", ...): source names are data, not an
+    enum. A derived row keeps the ref portion it was computed from.
+    """
+
+    __tablename__ = "ingredient_conversions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ingredient_id: Mapped[int] = mapped_column(
+        ForeignKey("ingredients.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(nullable=False)
+    """'density' | 'unit_weight' | 'portion'."""
+    unit: Mapped[str | None]
+    """The named unit a `portion` row weighs ("cup", "medium", "cup
+    (4.86 large eggs)"); NULL for density and unit_weight rows."""
+    modifier: Mapped[str | None]
+    """The ref portion's modifier ("large"), for preparation
+    matching."""
+    grams: Mapped[float] = mapped_column(nullable=False)
+    """Grams per ml (density), per piece (unit_weight) or per one
+    `unit` (portion)."""
+    origin: Mapped[str] = mapped_column(nullable=False)
+    """'seed' (curated in seed.py) or the reference source's name."""
+    ref_food_id: Mapped[int | None]
+    ref_seq_num: Mapped[int | None]
+    """The ref portion a derived row was computed from; NULL for seed
+    rows. No FK: a re-import replaces ref_portion rows, and the next
+    seeding re-derives these rows anyway."""
+
+    __table_args__ = (
+        # The upsert key: one factor per (ingredient, origin, kind,
+        # unit, modifier), so re-seeding keeps ids stable and lines
+        # can point at them.
+        Index(
+            "ix_ingredient_conversions_key",
+            "ingredient_id",
+            "origin",
+            "kind",
+            text("COALESCE(unit, '')"),
+            text("COALESCE(modifier, '')"),
+            unique=True,
+        ),
+        CheckConstraint(
+            "kind IN ('density', 'unit_weight', 'portion')",
+            "ck_ingredient_conversions_kind",
+        ),
+        CheckConstraint("grams > 0", "ck_ingredient_conversions_grams"),
+        CheckConstraint(
+            "(kind IN ('density', 'unit_weight') AND unit IS NULL) "
+            "OR (kind = 'portion' AND unit IS NOT NULL)",
+            "ck_ingredient_conversions_unit",
+        ),
+    )
 
 
 class RecipeIngredient(Base):
     """One parsed ingredient line of one recipe.
 
-    ingredient_id NULL means unresolved: the raw text is always kept,
-    so the row can be reviewed and matched later.
+    The line points at its term; the effective ingredient is reached
+    through the term (see repository.effective_ingredient_*). The raw
+    text is always kept, so an unresolved or failed line can be
+    reviewed and matched later.
     """
 
-    __tablename__ = "recipe_ingredient"
+    __tablename__ = "recipe_ingredients"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    recipe_id: Mapped[int] = mapped_column(ForeignKey("recipe_urls.id"))
+    recipe_id: Mapped[int] = mapped_column(ForeignKey("recipes.id"))
     position: Mapped[int]
     section: Mapped[str | None]
     """BBC publishes a flat ingredient list, so NULL today; populated
     for sites with sectioned ingredient groups."""
     raw_text: Mapped[str] = mapped_column(nullable=False)
-    ingredient_id: Mapped[int | None] = mapped_column(ForeignKey("ingredient.id"))
-    variant: Mapped[str | None]
-    """Which alias variant the line resolved through ("whole",
-    "unsalted"); lets a shopping list keep variants apart. Set only
-    when an alias row carried a variant."""
+    term_id: Mapped[int | None] = mapped_column(ForeignKey("ingredient_terms.id"))
+    """The term the line's parsed name resolved to; NULL when the
+    parse failed outright."""
+    needs_review: Mapped[bool] = mapped_column(nullable=False, default=False)
+    """The line-level review flag (line_needs_review): it is about the
+    line's raw text, not the term, so it must not taint the term for
+    other lines. A seeded term clears it."""
+    parse_status: Mapped[str] = mapped_column(nullable=False, default="ok")
+    """'ok' | 'failed' — a parse that raised is stored with 'failed'
+    and no term instead of being dropped."""
     quantity: Mapped[float | None]
     """Base units (g / ml / piece)."""
     quantity_max: Mapped[float | None]
@@ -193,7 +439,7 @@ class RecipeIngredient(Base):
     note: Mapped[str | None]
     optional: Mapped[bool] = mapped_column(default=False)
     alternative_of: Mapped[int | None] = mapped_column(
-        ForeignKey("recipe_ingredient.id")
+        ForeignKey("recipe_ingredients.id", ondelete="CASCADE")
     )
     """Set on the non-counted options of "rosewater or vanilla"."""
     parse_confidence: Mapped[float | None]
@@ -204,16 +450,26 @@ class RecipeIngredient(Base):
     grams_max: Mapped[float | None]
     """Upper end of a range ("2-3"), in grams."""
     grams_source: Mapped[str | None]
-    """Provenance of the conversion: "seed", the reference source's
-    name ("fdc"), NULL for mass lines (no lookup happened) and for
-    unconverted lines."""
+    """Provenance of the conversion — the used conversion row's
+    origin: "seed" or the reference source's name ("fdc"). NULL for
+    mass lines (no lookup happened) and unconverted lines."""
+    conversion_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ingredient_conversions.id", ondelete="SET NULL")
+    )
+    """The conversion row the grams came from, so a derived value
+    names the factor that produced it; NULL for mass lines (no lookup
+    happened) and lines with no conversion."""
 
     __table_args__ = (
-        Index("ix_recipe_ingredient_ingredient_id", "ingredient_id"),
-        Index("ix_recipe_ingredient_recipe_id_position", "recipe_id", "position"),
+        Index("ix_recipe_ingredients_term_id", "term_id"),
+        Index("ix_recipe_ingredients_recipe_id_position", "recipe_id", "position"),
         CheckConstraint(
             "dimension IS NULL OR dimension IN ('mass', 'volume', 'count')",
-            "ck_recipe_ingredient_dimension",
+            "ck_recipe_ingredients_dimension",
+        ),
+        CheckConstraint(
+            "parse_status IN ('ok', 'failed')",
+            "ck_recipe_ingredients_parse_status",
         ),
     )
 
@@ -253,6 +509,9 @@ class RefFood(Base):
 
     __table_args__ = (
         Index("ix_ref_food_source", "source_id", "source_food_id", unique=True),
+        # Parent key for ingredient_food_refs' composite FK
+        # (ref_food_id, source_id).
+        UniqueConstraint("id", "source_id"),
     )
 
 

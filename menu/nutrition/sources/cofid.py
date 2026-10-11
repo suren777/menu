@@ -26,6 +26,7 @@ from menu.db.database import (
     RefPortion,
     initialise,
 )
+from menu.nutrition.sources.common import upsert_foods
 
 if TYPE_CHECKING:
     from openpyxl.worksheet.worksheet import Worksheet
@@ -136,8 +137,10 @@ def _food_source(session: Session) -> FoodSource:
 
 
 def import_cofid(path: Path, session: Session) -> dict[str, int]:
-    """Replace the CoFID rows in the common ref tables with the 2021
-    workbook's slices. Returns the row counts."""
+    """Refresh the CoFID rows in the common ref tables with the 2021
+    workbook's slices: ref_food rows are upserted (ids stay stable
+    across re-imports), nutrients are replaced wholesale. Returns the
+    row counts."""
     source = _food_source(session)
     session.execute(delete(NutrientMap).where(NutrientMap.source_id == source.id))
     session.execute(
@@ -162,7 +165,6 @@ def import_cofid(path: Path, session: Session) -> dict[str, int]:
         delete(RefNutrient).where(RefNutrient.ref_food_id.in_(ref_food_ids))
     )
     session.execute(delete(RefPortion).where(RefPortion.ref_food_id.in_(ref_food_ids)))
-    session.execute(delete(RefFood).where(RefFood.source_id == source.id))
 
     foods: list[dict[str, Any]] = []
     nutrients: list[dict[str, Any]] = []
@@ -215,14 +217,7 @@ def import_cofid(path: Path, session: Session) -> dict[str, int]:
     finally:
         workbook.close()
 
-    session.execute(insert(RefFood), foods)
-    ref_ids = dict(
-        session.execute(
-            select(RefFood.source_food_id, RefFood.id).where(
-                RefFood.source_id == source.id
-            )
-        ).all()
-    )
+    ref_ids, kept_missing = upsert_foods(session, source.id, foods)
     nutrient_rows: list[dict[str, Any]] = [
         {"ref_food_id": ref_ids[row.pop("source_food_id")], **row}
         for row in nutrients
@@ -234,6 +229,7 @@ def import_cofid(path: Path, session: Session) -> dict[str, int]:
         "foods": len(foods),
         "portions": 0,  # CoFID publishes no household portions.
         "nutrients": len(nutrients),
+        "kept_missing": kept_missing,
     }
 
 

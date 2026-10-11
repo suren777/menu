@@ -32,6 +32,9 @@ class SiteConfig(BaseModel):
     nutrition_sources: tuple[str, ...] = ("fdc",)
     """Preferred order of reference sources for nutrition values: the
     first source with a confirmed food for the ingredient wins."""
+    ingredient_strip_patterns: tuple[str, ...] = ()
+    """Regexes removed from each ingredient line before parsing, e.g.
+    the site's brand name; case-insensitive."""
 
 
 def get_site(name: str) -> SiteConfig:

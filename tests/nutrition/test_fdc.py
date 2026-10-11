@@ -8,6 +8,9 @@ from sqlalchemy import select
 
 from menu.db.database import (
     FoodSource,
+    Ingredient,
+    IngredientConversion,
+    IngredientFoodRef,
     NutrientMap,
     RefFood,
     RefNutrient,
@@ -156,3 +159,67 @@ def test_reimport_is_idempotent(counts: dict[str, int], session: Session) -> Non
     again = import_fdc([FIXTURE_DIR / "sr", FIXTURE_DIR / "survey"], session)
     assert again == counts
     assert len(session.scalars(select(RefFood)).all()) == 3
+
+
+@pytest.mark.usefixtures("counts")
+def test_reimport_keeps_food_ids(session: Session) -> None:
+    """A confirmed mapping pins its food: the re-import upserts the
+    ref_food rows, so ids — and what the mapping points at — never
+    move."""
+    before = dict(session.execute(select(RefFood.source_food_id, RefFood.id)).all())
+    egg = Ingredient(name="egg")
+    session.add(egg)
+    session.flush()
+    food = _ref_food(session, "171287")
+    mapping = IngredientFoodRef(
+        ingredient_id=egg.id,
+        ref_food_id=food.id,
+        source_id=food.source_id,
+        role="nutrition",
+        status="confirmed",
+        origin="seed",
+    )
+    session.add(mapping)
+    session.flush()
+
+    import_fdc([FIXTURE_DIR / "sr", FIXTURE_DIR / "survey"], session)
+
+    assert dict(
+        session.execute(select(RefFood.source_food_id, RefFood.id)).all()
+    ) == before
+    session.expire_all()
+    resolved = session.get(IngredientFoodRef, mapping.id)
+    assert resolved is not None
+    pinned = session.get(RefFood, resolved.ref_food_id)
+    assert pinned is not None
+    assert pinned.source_food_id == "171287"
+
+
+@pytest.mark.usefixtures("counts")
+def test_reimport_with_derived_conversions(session: Session) -> None:
+    """Derived conversion rows name the portion they came from, but a
+    re-import replaces portions, so that provenance must not block it."""
+    egg = Ingredient(name="egg")
+    session.add(egg)
+    session.flush()
+    portion = session.scalars(
+        select(RefPortion).where(
+            RefPortion.ref_food_id == _ref_food(session, "171287").id
+        )
+    ).first()
+    assert portion is not None
+    session.add(
+        IngredientConversion(
+            ingredient_id=egg.id,
+            kind="portion",
+            unit=portion.unit or "piece",
+            grams=portion.gram_weight,
+            origin="fdc",
+            ref_food_id=portion.ref_food_id,
+            ref_seq_num=portion.seq_num,
+        )
+    )
+    session.flush()
+
+    import_fdc([FIXTURE_DIR / "sr", FIXTURE_DIR / "survey"], session)
+    session.flush()

@@ -1,11 +1,23 @@
+"""Discovery tests: request_xml parses sitemap XML into entries.
+
+The pattern filtering the old discover_urls did now happens when the
+crawl queues pages (_walk_sitemap), so those tests live in
+test_pipeline.py.
+"""
+
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from menu.ingest.discover import discover_urls, request_xml
-from menu.ingest.errors import FetchError
+from menu.ingest.discover import SitemapEntry, request_xml
+from menu.ingest.errors import FetchError, NotCachedError
+from menu.ingest.fetch import _cache_path
 from menu.ingest.registry import SiteConfig
 from menu.ingest.sites.bbc_good_food import BBC_GOOD_FOOD
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 SITE = SiteConfig(
     name="test",
@@ -14,84 +26,91 @@ SITE = SiteConfig(
 )
 
 
-@patch("menu.ingest.discover.session.get")
-def test_request_xml_ok(mock_get: MagicMock) -> None:
-    mock_response = MagicMock()
-    mock_response.ok = True
-    mock_response.content = b'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>http://test.com</loc></url></urlset>'
-    mock_get.return_value = mock_response
+@patch("menu.ingest.discover.fetch_page")
+def test_request_xml_urlset(mock_fetch: MagicMock) -> None:
+    mock_fetch.return_value = (
+        b'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        b"<url><loc>https://test.com/recipes/a</loc>"
+        b"<lastmod>2026-10-01</lastmod></url></urlset>"
+    )
 
-    assert request_xml("https://test.com/sitemap.xml") == (
+    assert request_xml("https://test.com/sitemap.xml", SITE) == (
         "urlset",
-        ["http://test.com"],
+        [SitemapEntry(loc="https://test.com/recipes/a", lastmod="2026-10-01")],
     )
 
 
-@patch("menu.ingest.discover.session.get")
-def test_request_xml_sitemap_index(mock_get: MagicMock) -> None:
-    mock_response = MagicMock()
-    mock_response.ok = True
-    mock_response.content = (
+@patch("menu.ingest.discover.fetch_page")
+def test_request_xml_sitemap_index(mock_fetch: MagicMock) -> None:
+    mock_fetch.return_value = (
         b'<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
         b"<sitemap><loc>https://test.com/recipes-1.xml</loc></sitemap>"
-        b"<sitemap><loc>https://test.com/recipes-2.xml</loc></sitemap>"
+        b"<sitemap><loc>https://test.com/recipes-2.xml</loc>"
+        b"<lastmod>2026-10-02</lastmod></sitemap>"
         b"</sitemapindex>"
     )
-    mock_get.return_value = mock_response
 
-    assert request_xml("https://test.com/sitemap.xml") == (
+    assert request_xml("https://test.com/sitemap.xml", SITE) == (
         "sitemapindex",
         [
-            "https://test.com/recipes-1.xml",
-            "https://test.com/recipes-2.xml",
+            SitemapEntry(loc="https://test.com/recipes-1.xml"),
+            SitemapEntry(loc="https://test.com/recipes-2.xml", lastmod="2026-10-02"),
         ],
     )
 
 
-@patch("menu.ingest.discover.session.get")
-def test_request_xml_fail(mock_get: MagicMock) -> None:
-    mock_response = MagicMock()
-    mock_response.ok = False
-    mock_get.return_value = mock_response
+@patch("menu.ingest.discover.fetch_page")
+def test_request_xml_fetches_fresh_but_cached(mock_fetch: MagicMock) -> None:
+    """Sitemaps change, so a live crawl fetches fresh — through the
+    cache-writing path, so a later rebuild can replay the crawl."""
+    mock_fetch.return_value = b"<urlset></urlset>"
+
+    request_xml("https://test.com/sitemap.xml", SITE)
+
+    mock_fetch.assert_called_once_with(
+        "https://test.com/sitemap.xml", SITE, use_cache=False, offline=False
+    )
+
+
+@patch("menu.ingest.discover.fetch_page")
+def test_request_xml_fail(mock_fetch: MagicMock) -> None:
+    mock_fetch.side_effect = FetchError("Can't fetch '...'", status_code=404)
 
     with pytest.raises(FetchError, match="Can't fetch"):
-        request_xml("https://test.com/sitemap.xml")
+        request_xml("https://test.com/sitemap.xml", SITE)
 
 
-@patch("menu.ingest.discover.session.get")
-def test_discover_urls_filters_by_pattern(mock_get: MagicMock) -> None:
-    mock_response = MagicMock()
-    mock_response.ok = True
-    mock_response.status_code = 200
-    mock_response.text = ""
-    mock_response.content = (
+# --- offline mode -----------------------------------------------------------
+
+
+def test_request_xml_offline_replays_the_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Offline reads the cached sitemap (fetched fresh live, but
+    cached) — no network, robots or politeness."""
+    monkeypatch.setattr("menu.ingest.fetch.DEFAULT_CACHE_DIR", tmp_path)
+    _cache_path("https://test.com/sitemap.xml", tmp_path).write_bytes(
         b'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
-        b"<url><loc>https://test.com/recipes/cake</loc></url>"
-        b"<url><loc>https://test.com/recipes/cake/step-2</loc></url>"
-        b"<url><loc>https://test.com/about</loc></url>"
-        b"</urlset>"
+        b"<url><loc>https://test.com/recipes/a</loc></url></urlset>"
     )
-    mock_get.return_value = mock_response
 
-    site = SITE.model_copy(update={"url_pattern": r"^https://test\.com/recipes/[^/]+$"})
-    assert list(discover_urls(site)) == ["https://test.com/recipes/cake"]
+    with patch("menu.ingest.http.session.get", side_effect=RuntimeError("network")):
+        kind, entries = request_xml("https://test.com/sitemap.xml", SITE, offline=True)
+
+    assert kind == "urlset"
+    assert entries == [SitemapEntry(loc="https://test.com/recipes/a")]
 
 
-@patch("menu.ingest.discover.session.get")
-def test_discover_urls_without_pattern_yields_all(mock_get: MagicMock) -> None:
-    mock_response = MagicMock()
-    mock_response.ok = True
-    mock_response.status_code = 200
-    mock_response.text = ""
-    mock_response.content = (
-        b'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
-        b"<url><loc>https://test.com/a</loc></url>"
-        b"<url><loc>https://test.com/b</loc></url>"
-        b"</urlset>"
-    )
-    mock_get.return_value = mock_response
+def test_request_xml_offline_uncached_raises(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("menu.ingest.fetch.DEFAULT_CACHE_DIR", tmp_path)
 
-    assert list(discover_urls(SITE)) == ["https://test.com/a", "https://test.com/b"]
+    with (
+        patch("menu.ingest.http.session.get", side_effect=RuntimeError("network")),
+        pytest.raises(NotCachedError, match="offline cache"),
+    ):
+        request_xml("https://test.com/sitemap.xml", SITE, offline=True)
 
 
 def test_bbc_site_config() -> None:

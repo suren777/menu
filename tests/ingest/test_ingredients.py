@@ -53,6 +53,32 @@ def test_canonical_name_singularises(raw: str, expected: str) -> None:
 
 
 @pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (
+            "Confectioners\u2019 Sugar",
+            "confectioners' sugar",
+        ),
+        (
+            "Confectioners\u2018 Sugar",
+            "confectioners' sugar",
+        ),
+        (
+            "\u201csoft\u201d ball stage",
+            '"soft" ball stage',
+        ),
+        ("golden\u00a0caster\u202fsugar", "golden caster sugar"),
+    ],
+)
+def test_canonical_name_folds_typography(raw: str, expected: str) -> None:
+    """Typographic quotes and NBSPs fold to the ASCII forms the alias
+    table is keyed on: the typographic spelling of "confectioners
+    sugar" resolves to the same ingredient as its ASCII spelling, and
+    NBSPs act as plain spaces."""
+    assert canonical_name(raw) == expected
+
+
+@pytest.mark.parametrize(
     ("name", "expected"),
     [
         ("milk", False),
@@ -272,6 +298,35 @@ def test_parse_line_prefers_metric_amount_in_dual_units() -> None:
     assert parsed.quantity == 360.0
     assert parsed.base_unit == "g"
     assert parsed.original_quantity_text == "360 g"
+
+
+@pytest.mark.parametrize(
+    ("line", "expected_name"),
+    [
+        ("1 tsp King Arthur Pure Vanilla Extract", "pure vanilla extract"),
+        (
+            "2 cups (240g) King Arthur Unbleached All-Purpose Flour",
+            "unbleached all-purpose flour",
+        ),
+    ],
+)
+def test_parse_line_strips_site_brand(line: str, expected_name: str) -> None:
+    """King Arthur's brand prefix is removed before the parser sees
+    the line; raw_text stays the verbatim original."""
+    parsed = parse_line(line, KING_ARTHUR)
+
+    assert parsed.name == expected_name
+    assert "king arthur" not in parsed.name
+    assert parsed.raw_text == line
+
+
+def test_parse_line_strip_leaves_other_sites_alone() -> None:
+    """BBC has no strip patterns: the same brand text parses through
+    into the name there."""
+    parsed = parse_line("1 tsp King Arthur Pure Vanilla Extract", BBC_GOOD_FOOD)
+
+    assert parsed.name is not None
+    assert "king arthur" in parsed.name
 
 
 KAB_FIXTURE = Path(__file__).parent / "fixtures" / "king_arthur_lines.json"

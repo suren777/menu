@@ -1,5 +1,6 @@
 """CNF bulk import against a hand-picked CSV slice; never downloads."""
 
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -8,6 +9,8 @@ from sqlalchemy import select
 
 from menu.db.database import (
     FoodSource,
+    Ingredient,
+    IngredientFoodRef,
     NutrientMap,
     RefFood,
     RefNutrient,
@@ -181,6 +184,91 @@ def test_reimport_is_idempotent(counts: dict[str, int], session: Session) -> Non
     again = import_cnf(FIXTURE_DIR, session)
     assert again == counts
     assert len(session.scalars(select(RefFood)).all()) == 3
+
+
+@pytest.mark.usefixtures("counts")
+def test_reimport_keeps_food_ids(session: Session) -> None:
+    """A confirmed mapping pins its food: the re-import upserts the
+    ref_food rows, so ids — and what the mapping points at — never
+    move."""
+    before = dict(session.execute(select(RefFood.source_food_id, RefFood.id)).all())
+    egg = Ingredient(name="egg")
+    session.add(egg)
+    session.flush()
+    food = _ref_food(session, "125")
+    mapping = IngredientFoodRef(
+        ingredient_id=egg.id,
+        ref_food_id=food.id,
+        source_id=food.source_id,
+        role="nutrition",
+        status="confirmed",
+        origin="seed",
+    )
+    session.add(mapping)
+    session.flush()
+
+    import_cnf(FIXTURE_DIR, session)
+
+    assert dict(
+        session.execute(select(RefFood.source_food_id, RefFood.id)).all()
+    ) == before
+    session.expire_all()
+    resolved = session.get(IngredientFoodRef, mapping.id)
+    assert resolved is not None
+    pinned = session.get(RefFood, resolved.ref_food_id)
+    assert pinned is not None
+    assert pinned.source_food_id == "125"
+
+
+def _release_without(food_id: str, target: Path) -> Path:
+    """A copy of the fixture release minus one food: the "next
+    release" for the stale-food test."""
+    variant = target / f"cnf_without_{food_id}"
+    variant.mkdir()
+    for path in FIXTURE_DIR.glob("*.csv"):
+        rows = path.read_text(encoding="latin-1").splitlines(keepends=True)
+        if rows and rows[0].startswith("FoodID,"):
+            head, data = rows[0], rows[1:]
+            rows = [head, *(row for row in data if not row.startswith(f"{food_id},"))]
+        (variant / path.name).write_text("".join(rows), encoding="latin-1")
+    return variant
+
+
+@pytest.mark.usefixtures("counts")
+def test_stale_food_deleted_or_kept(
+    session: Session, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A food the release dropped is deleted — unless a confirmed
+    mapping still references it: then it is kept and warned about."""
+    chicken = Ingredient(name="chicken")
+    session.add(chicken)
+    session.flush()
+    kept_food = _ref_food(session, "600")
+    session.add(
+        IngredientFoodRef(
+            ingredient_id=chicken.id,
+            ref_food_id=kept_food.id,
+            source_id=kept_food.source_id,
+            role="nutrition",
+            status="confirmed",
+            origin="seed",
+        )
+    )
+    session.flush()
+
+    with caplog.at_level(logging.WARNING):
+        counts = import_cnf(_release_without("600", tmp_path), session)
+    assert counts["kept_missing"] == 1
+    assert "600" in caplog.text
+    assert _ref_food(session, "600").id == kept_food.id
+
+    import_cnf(_release_without("125", tmp_path), session)
+    assert (
+        session.scalars(
+            select(RefFood).where(RefFood.source_food_id == "125")
+        ).first()
+        is None
+    )
 
 
 def test_fdc_rows_untouched(session: Session) -> None:

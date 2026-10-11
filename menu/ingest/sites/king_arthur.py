@@ -10,4 +10,5 @@ KING_ARTHUR = SiteConfig(
     politeness_delay=1.0,
     unit_system="us",
     nutrition_sources=("fdc", "cnf"),
+    ingredient_strip_patterns=(r"\bKing Arthur\s+",),
 )

@@ -4,42 +4,62 @@ Run a site end-to-end with:
 
     uv run python -m menu.ingest bbc_good_food
 
-The local SQLite database is scratch storage for experiments; it is
-never the source of truth. Code here graduates to food-guru's
-backend/app/ingest/ with minimal rework.
+Every URL's outcome is recorded on its `pages` row (the crawl
+ledger), so a re-run continues from the queued pages instead of
+re-walking sitemaps, and a recipe is written in the same transaction
+as its ingredient lines. The local SQLite database is scratch storage
+for experiments; it is never the source of truth. Code here graduates
+to food-guru's backend/app/ingest/ with minimal rework.
 """
 
+import hashlib
 import json
 import logging
+import re
 from argparse import ArgumentParser
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import or_, select
+from bs4 import BeautifulSoup
+from sqlalchemy import select
 
 from menu.db.connection import get_session
-from menu.db.database import RecipeUrls, Sitemap, initialise
+from menu.db.database import Page, Sitemap, initialise
 from menu.db.ingredients.actions import (
     fdc_id_conflicts,
     prune_orphan_ingredients,
+    re_resolve,
     ref_review,
     store_recipe_ingredients,
 )
 from menu.db.ingredients.seed import seed_ingredient_data
 from menu.db.metrics import collect_metrics
-from menu.db.recipe_urls.actions import add_recipe
-from menu.db.sitemap.actions import finalise_sitemap
-from menu.db.sitemap.repository import get_unfinished, url_exists
-from menu.ingest.discover import discover_urls, request_xml
-from menu.ingest.errors import BlockedError, CrawlBlockedError
-from menu.ingest.extract import extract_recipe_data
-from menu.ingest.fetch import fetch_recipe
+from menu.db.pages import actions as page_actions
+from menu.db.pages import repository as pages
+from menu.db.sitemaps import actions as sitemap_actions
+from menu.db.sitemaps import repository as sitemaps
+from menu.ingest.discover import request_xml
+from menu.ingest.errors import (
+    BlockedError,
+    CrawlBlockedError,
+    DisallowedError,
+    FetchError,
+    NotCachedError,
+)
+from menu.ingest.extract import extract_recipe
+from menu.ingest.fetch import fetch_page
 from menu.ingest.registry import SiteConfig, get_site
 from menu.nutrition.reports import (
     coverage_report,
     derive_all_nutrition,
     validation_report,
 )
+
+if TYPE_CHECKING:
+    from menu.db.pages.repository import PageModel
+    from menu.db.sitemaps.repository import SitemapModel
 
 logger = logging.getLogger(__name__)
 
@@ -55,118 +75,275 @@ class CrawlReport:
     stored: int = 0
     failed: int = 0
 
-    def merge(self, other: CrawlReport) -> None:
-        self.fetched += other.fetched
-        self.stored += other.stored
-        self.failed += other.failed
+
+def _utcnow() -> datetime:
+    """Naive UTC for fetched_at columns: SQLite's DateTime keeps no
+    timezone of its own (pages.actions.utcnow is the same shape)."""
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
-def import_sitemap(site: SiteConfig, sitemap_url: str | None = None) -> None:
-    """Store the sitemap's URLs in the scratch database, ready to crawl.
+def _exc_text(exc: Exception) -> str:
+    return f"{type(exc).__name__}: {exc}"
 
-    A sitemap index stores its children — the sub-sitemaps to crawl.
-    A plain urlset stores the sitemap URL itself as the single row, so
-    process_sitemap reads its page URLs as normal.
+
+def import_sitemap(
+    site: SiteConfig, sitemap_url: str | None = None, *, offline: bool = False
+) -> None:
+    """Store the site's sitemaps in the ledger, ready to crawl.
+
+    A sitemap index stores itself (kind "index", status "done") and
+    its children as pending rows with parent_id — the crawl walks
+    those. A plain urlset stores itself as one pending row, so the
+    crawl reads its page URLs as normal. The top-level documents are
+    re-read on every run, so an index's new children are picked up;
+    rows that already exist are left alone. Offline replays the cached
+    sitemaps; one that isn't cached raises NotCachedError and the
+    caller moves on.
     """
     urls = [sitemap_url] if sitemap_url else list(site.sitemap_urls)
 
+    for url in urls:
+        kind, entries = request_xml(url, site, offline=offline)
+        with get_session() as session:
+            record = session.scalars(select(Sitemap).where(Sitemap.url == url)).first()
+            if record is None:
+                record = Sitemap(url=url, site=site.name)
+                session.add(record)
+            if kind != "sitemapindex":
+                record.kind = "urlset"
+                continue
+            record.kind = "index"
+            record.status = "done"
+            record.fetched_at = _utcnow()
+            session.flush()
+            for entry in entries:
+                if sitemaps.find_by_url(entry.loc, session) is None:
+                    session.add(
+                        Sitemap(url=entry.loc, site=site.name, parent_id=record.id)
+                    )
+
+
+def _walk_sitemap(
+    sitemap: SitemapModel, site: SiteConfig, offline: bool = False
+) -> None:
+    """Fetch one pending sitemap and queue its recipe URLs as pages.
+
+    The sitemap row records the outcome: done, with its kind and a
+    fetched_at. URLs already in pages are skipped, so re-walking is
+    cheap. An index lists sitemaps, not pages — import_sitemap stores
+    its children — so only a urlset queues pages. Offline a sitemap
+    the cache doesn't hold raises NotCachedError, leaving it pending.
+    """
+    kind, entries = request_xml(sitemap.url, site, offline=offline)
+    pattern = re.compile(site.url_pattern) if site.url_pattern else None
     with get_session() as session:
-        for url in urls:
-            kind, locs = request_xml(url, site)
-            if kind == "urlset":
-                locs = [url]
-            for loc in locs:
-                if not url_exists(loc, site.name, session):
-                    session.add(Sitemap(url=loc, site=site.name))
+        record = session.get(Sitemap, sitemap.id)
+        if record is None:  # pragma: no cover - deleted mid-crawl
+            return
+        if kind == "urlset":
+            for entry in entries:
+                if pattern is not None and not pattern.match(entry.loc):
+                    continue
+                if pages.page_exists(entry.loc, session):
+                    continue
+                session.add(
+                    Page(
+                        url=entry.loc,
+                        site=site.name,
+                        sitemap_id=record.id,
+                        lastmod=entry.lastmod,
+                    )
+                )
+        record.kind = "index" if kind == "sitemapindex" else "urlset"
+        record.status = "done"
+        record.fetched_at = _utcnow()
 
 
-def process_url(url: str, site: SiteConfig) -> bool:
-    """Fetch one recipe URL (cached, polite) and store its raw JSON-LD
-    plus its parsed ingredient lines in the scratch database.
+def _recipe_name(data: dict[str, Any], soup: BeautifulSoup) -> str:
+    """The JSON-LD name when the data gives one, else the page
+    <title> text, else ""."""
+    name = data.get("name")
+    if isinstance(name, str) and name:
+        return name
+    return soup.title.text if soup.title else ""
 
-    Returns True if a recipe was stored, False if the page yielded no
-    recipe data.
+
+def _store_recipe(
+    page: PageModel,
+    site: SiteConfig,
+    soup: BeautifulSoup,
+    recipe: tuple[dict[str, Any], str] | None,
+) -> bool:
+    """Store the extracted recipe and its lines in ONE transaction.
+
+    An upsert on data_sha256: a new recipe is inserted, changed data
+    replaces it and its lines, unchanged data does nothing (the lines
+    stay as they are). Returns whether anything was stored.
     """
-    soup = fetch_recipe(url, site)
-
-    recipe_data = extract_recipe_data(site, soup)
-    if recipe_data is None:
+    if recipe is None:
         return False
+    data, extractor = recipe
+    name = _recipe_name(data, soup)
+    with get_session() as session:
+        stored = pages.upsert_recipe(page.id, name, data, extractor, session)
+        if stored is None:
+            return False
+        store_recipe_ingredients(stored.id, data, site, session)
+        return True
 
-    name = soup.title.text if soup.title else ""
-    add_recipe(url, name, recipe_data)
-    store_recipe_ingredients(url, recipe_data, site)
-    return True
 
+def process_url(page: PageModel, site: SiteConfig, offline: bool = False) -> str:
+    """Fetch one page (cached, polite) and record the outcome on its
+    ledger row: 'fetched' with the recipe stored, 'no_recipe' when the
+    page holds no recipe, 'failed'/'blocked'/'disallowed' with the
+    error otherwise. The recipe and its ingredient lines go in one
+    transaction.
 
-def process_sitemap(url: str, site: SiteConfig) -> CrawlReport:
-    """Crawl one sitemap's recipe URLs, then finalise it.
+    Offline a page the cache doesn't hold raises NotCachedError: the
+    page simply wasn't replayable, so it stays queued with no attempt
+    counted and returns "queued".
 
-    A bad URL (404, timeout, undecodable page) is logged and skipped:
-    BBC's sitemap lists tens of thousands of URLs, so a dead link or
-    two is likely and one of them must not stop the crawl. The sitemap
-    is finalised either way — a permanently dead URL would otherwise
-    wedge the queue forever, since it fails identically on every re-run.
-
-    A block is different: consecutive BlockedErrors mean the site is
-    shutting the crawl out as a whole, so this sitemap is abandoned
-    UNfinalised (its URLs stay queued for a later run) and
-    CrawlBlockedError stops the whole crawl.
+    Returns the recorded status, so the crawl can count stores and
+    failures; a BlockedError is re-raised for the block-streak logic.
     """
-    report = CrawlReport()
+    try:
+        content = fetch_page(page.url, site, offline=offline)
+    except NotCachedError:
+        logger.info("Offline: %s not cached, stays queued", page.url)
+        return "queued"
+    except DisallowedError as exc:
+        page_actions.record_outcome(page.id, "disallowed", error=_exc_text(exc))
+        return "disallowed"
+    except BlockedError as exc:
+        page_actions.record_outcome(
+            page.id, "blocked", http_status=exc.status_code, error=_exc_text(exc)
+        )
+        raise
+    except FetchError as exc:
+        page_actions.record_outcome(
+            page.id, "failed", http_status=exc.status_code, error=_exc_text(exc)
+        )
+        return "failed"
+    except Exception as exc:  # noqa: BLE001 - a bad URL must not stop the crawl
+        page_actions.record_outcome(page.id, "failed", error=_exc_text(exc))
+        return "failed"
+
+    content_sha = hashlib.sha256(content).hexdigest()
+    soup = BeautifulSoup(content, "html.parser")
+    recipe = extract_recipe(site, soup)
+    try:
+        _store_recipe(page, site, soup, recipe)
+    except Exception as exc:  # noqa: BLE001 - a bad recipe must not stop the crawl
+        page_actions.record_outcome(
+            page.id,
+            "failed",
+            http_status=200,
+            content_sha256=content_sha,
+            error=_exc_text(exc),
+        )
+        return "failed"
+
+    status = "fetched" if recipe is not None else "no_recipe"
+    page_actions.record_outcome(
+        page.id,
+        status,
+        http_status=200,
+        content_sha256=content_sha,
+        fetched=True,
+    )
+    return status
+
+
+def _crawl_pages(
+    site: SiteConfig, report: CrawlReport, offline: bool = False
+) -> None:
+    """Fetch the site's queued and blocked pages in id order, counting
+    the outcomes into the report.
+
+    A bad page (404, timeout, undecodable body) is recorded on its row
+    and skipped: BBC's sitemaps list tens of thousands of URLs, so a
+    dead link or two is likely and one of them must not stop the
+    crawl. A block is different: consecutive BlockedErrors mean the
+    site is shutting the crawl out as a whole, so CrawlBlockedError
+    stops the run with the remaining pages queued for a later run.
+    Offline, a page missing from the cache stays queued instead.
+    """
+    with get_session() as session:
+        queue = pages.get_unfinished(session, site.name)
+
     blocked = 0
-    for recipe_url in discover_urls(site, url):
-        report.fetched += 1
+    for page in queue:
         try:
-            if process_url(recipe_url, site):
-                report.stored += 1
-            blocked = 0
+            status = process_url(page, site, offline=offline)
         except BlockedError as exc:
+            report.fetched += 1
             blocked += 1
-            logger.warning("Blocked on %s: %s", recipe_url, exc)
+            logger.warning("Blocked on %s: %s", page.url, exc)
             if blocked >= _BLOCK_LIMIT:
                 raise CrawlBlockedError(
-                    f"{site.name}: {blocked} URLs blocked in a row"
+                    f"{site.name}: {blocked} pages blocked in a row"
                 ) from exc
-        except Exception as exc:  # noqa: BLE001 - a bad URL must not stop the crawl
-            blocked = 0
+            continue
+        if status == "queued":  # offline and not cached: not an attempt
+            continue
+        report.fetched += 1
+        blocked = 0
+        if status == "fetched":
+            report.stored += 1
+        elif status == "failed":
             report.failed += 1
-            logger.warning("Skipping %s: %s: %s", recipe_url, type(exc).__name__, exc)
-    finalise_sitemap(url, site.name)
-    return report
 
 
-def crawl_sitemap(site: SiteConfig) -> CrawlReport:
-    """Crawl every unfinished sitemap for a site.
+def crawl_sitemap(site: SiteConfig, *, offline: bool = False) -> CrawlReport:
+    """Crawl a site: queue pages from its unfetched sitemaps, then
+    fetch every queued or blocked page, in id order.
 
     Single process on purpose: the per-host politeness delay lives in
     process memory, so parallel workers would each hammer the site at
     full speed (food-guru's worker is single-process for the same
     reason).
 
-    A sitemap whose discovery fails (unreachable, broken XML) is logged
-    and finalised so the crawl moves on to the next one. A block is the
-    opposite — a blocked sitemap fetch (402/403/429 from the sitemap
-    itself) is a site-wide block: the run stops and everything
-    unfinalised stays queued for a later run.
+    A sitemap whose fetch fails (unreachable, broken XML) is marked
+    failed and the crawl moves on. A block is the opposite — a blocked
+    sitemap fetch (402/403/429 from the sitemap itself) is a site-wide
+    block: the run stops and the unfinished work stays queued for a
+    later run. Offline, a sitemap missing from the cache is neither:
+    it simply wasn't replayable, so it stays pending.
     """
-    with get_session() as session:
-        urls = [s.url for s in get_unfinished(session, site.name)]
-
     report = CrawlReport()
-    for url in urls:
+    with get_session() as session:
+        pending = sitemaps.get_unfinished(session, site.name)
+
+    stopped = False
+    for sitemap in pending:
         try:
-            report.merge(process_sitemap(url, site))
+            _walk_sitemap(sitemap, site, offline=offline)
+        except BlockedError as exc:
+            sitemap_actions.set_status(
+                sitemap.url, site.name, "blocked", error=_exc_text(exc)
+            )
+            logger.error(
+                "Stopping %s: sitemap %s blocked: %s", site.name, sitemap.url, exc
+            )
+            stopped = True
+            break
+        except NotCachedError:
+            logger.info("Offline: sitemap %s not cached, stays pending", sitemap.url)
+            continue
+        except Exception as exc:  # noqa: BLE001 - a dead sitemap must not stop the crawl
+            sitemap_actions.set_status(
+                sitemap.url, site.name, "failed", error=_exc_text(exc)
+            )
+            report.failed += 1
+            logger.warning(
+                "Skipping sitemap %s: %s: %s", sitemap.url, type(exc).__name__, exc
+            )
+
+    if not stopped:
+        try:
+            _crawl_pages(site, report, offline=offline)
         except CrawlBlockedError as exc:
             logger.error("Stopping %s: %s", site.name, exc)
-            break
-        except BlockedError as exc:
-            logger.error("Stopping %s: sitemap %s blocked: %s", site.name, url, exc)
-            break
-        except Exception as exc:  # noqa: BLE001
-            report.failed += 1
-            logger.warning("Skipping sitemap %s: %s: %s", url, type(exc).__name__, exc)
-            finalise_sitemap(url, site.name)
 
     print(
         f"Done: {report.fetched} fetched, "
@@ -178,32 +355,23 @@ def crawl_sitemap(site: SiteConfig) -> CrawlReport:
 def reparse_site(site: SiteConfig) -> None:
     """Backfill: re-parse stored ingredient lines without re-fetching.
 
-    Only the site's recipes are reparsed — plus, for the BBC alone,
-    rows stamped before sites existed (site IS NULL), which get
-    stamped here. Reads each stored recipe's raw JSON-LD again and
-    runs it through the parser. Per-recipe failures are counted and
+    The site's recipes — found through their pages — are re-stored,
+    one session per recipe. Per-recipe failures are counted and
     logged, like a crawl's bad URLs; store_recipe_ingredients replaces
     a recipe's previous rows, so reparsing is idempotent. Afterwards
-    ingredients no line and no alias points at are pruned: the reparse
-    re-resolves lines through the seeded aliases, stranding the junk
-    canonical ingredients the first pass created.
+    auto terms no line uses and auto concepts nothing points at are
+    pruned: the reparse re-resolves lines through the seeded terms,
+    stranding the junk auto concepts the first pass created.
     """
-    conditions = [RecipeUrls.site == site.name]
-    if site.name == "bbc_good_food":
-        # Only the BBC predates the site column. Another site's
-        # reparse must not adopt someone else's unstamped rows.
-        conditions.append(RecipeUrls.site.is_(None))
     with get_session() as session:
-        recipes = [
-            (record.url, dict(record.data))
-            for record in session.scalars(select(RecipeUrls).where(or_(*conditions)))
-        ]
+        recipes = pages.get_site_recipes(site.name, session)
 
     stored = 0
     failed = 0
-    for url, recipe_data in recipes:
+    for recipe, url in recipes:
         try:
-            store_recipe_ingredients(url, recipe_data, site)
+            with get_session() as session:
+                store_recipe_ingredients(recipe.id, recipe.data, site, session)
             stored += 1
         except Exception as exc:  # noqa: BLE001 - a bad recipe must not stop the backfill
             failed += 1
@@ -228,6 +396,12 @@ def main() -> None:
         "--reparse",
         action="store_true",
         help="re-parse stored ingredient lines without re-fetching",
+    )
+    parser.add_argument(
+        "--re-resolve",
+        action="store_true",
+        help="re-apply the seeds and review heuristics to the terms "
+        "without re-running the parser, then exit",
     )
     parser.add_argument(
         "--fdc-report",
@@ -303,6 +477,13 @@ def main() -> None:
         )
         print(f"Metrics snapshot written to {path}")
         return
+    if args.re_resolve:
+        terms_changed, regrammed, pruned = re_resolve()
+        print(
+            f"Re-resolved: {terms_changed} terms changed, "
+            f"{regrammed} lines regrammed, {pruned} concepts pruned"
+        )
+        return
     if args.site is None:
         parser.error("a site is required unless a report flag is given")
     site = get_site(args.site)
@@ -314,7 +495,7 @@ def main() -> None:
         crawl_sitemap(site)
     except BlockedError as exc:
         # A blocked sitemap or crawl is a site-wide block: stop cleanly
-        # instead of a traceback. Unfinished sitemaps stay queued.
+        # instead of a traceback. Unfinished pages stay queued.
         raise SystemExit(f"{site.name}: blocked: {exc}") from exc
 
 

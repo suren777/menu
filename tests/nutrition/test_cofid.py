@@ -6,7 +6,14 @@ from typing import TYPE_CHECKING
 import pytest
 from sqlalchemy import select
 
-from menu.db.database import FoodSource, NutrientMap, RefFood, RefNutrient
+from menu.db.database import (
+    FoodSource,
+    Ingredient,
+    IngredientFoodRef,
+    NutrientMap,
+    RefFood,
+    RefNutrient,
+)
 from menu.nutrition.sources.cofid import import_cofid
 
 if TYPE_CHECKING:
@@ -70,7 +77,12 @@ def test_nutrient_map(session: Session) -> None:
 
 
 def test_foods(counts: dict[str, int], session: Session) -> None:
-    assert counts == {"foods": 3, "portions": 0, "nutrients": 22}
+    assert counts == {
+        "foods": 3,
+        "portions": 0,
+        "nutrients": 22,
+        "kept_missing": 0,
+    }
     milk = _ref_food(session, "12-320")
     assert milk.description == "Milk, whole, UHT"
     assert milk.category == "BAK"
@@ -135,6 +147,40 @@ def test_reimport_is_idempotent(counts: dict[str, int], session: Session) -> Non
     again = import_cofid(FIXTURE, session)
     assert again == counts
     assert len(session.scalars(select(RefFood)).all()) == 3
+
+
+@pytest.mark.usefixtures("counts")
+def test_reimport_keeps_food_ids(session: Session) -> None:
+    """A confirmed mapping pins its food: the re-import upserts the
+    ref_food rows, so ids — and what the mapping points at — never
+    move."""
+    before = dict(session.execute(select(RefFood.source_food_id, RefFood.id)).all())
+    milk = Ingredient(name="milk")
+    session.add(milk)
+    session.flush()
+    food = _ref_food(session, "12-320")
+    mapping = IngredientFoodRef(
+        ingredient_id=milk.id,
+        ref_food_id=food.id,
+        source_id=food.source_id,
+        role="nutrition",
+        status="confirmed",
+        origin="seed",
+    )
+    session.add(mapping)
+    session.flush()
+
+    import_cofid(FIXTURE, session)
+
+    assert dict(
+        session.execute(select(RefFood.source_food_id, RefFood.id)).all()
+    ) == before
+    session.expire_all()
+    resolved = session.get(IngredientFoodRef, mapping.id)
+    assert resolved is not None
+    pinned = session.get(RefFood, resolved.ref_food_id)
+    assert pinned is not None
+    assert pinned.source_food_id == "12-320"
 
 
 def test_fdc_rows_untouched(session: Session) -> None:

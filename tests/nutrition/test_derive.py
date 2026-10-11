@@ -12,9 +12,11 @@ from menu.db.database import (
     FoodSource,
     Ingredient,
     IngredientFoodRef,
+    IngredientTerm,
+    Page,
+    Recipe,
     RecipeIngredient,
     RecipeNutrition,
-    RecipeUrls,
     RefFood,
     RefNutrient,
 )
@@ -64,12 +66,29 @@ def test_parse_published_nutrition_missing_block() -> None:
     assert parse_published_nutrition({}) == {}
 
 
+def _add_term(
+    session: Session,
+    term: str,
+    ingredient: Ingredient,
+    *,
+    variant: str | None = None,
+    resolution: str = "seed",
+) -> IngredientTerm:
+    """A resolved term for a hand-built line to point at."""
+    row = IngredientTerm(
+        term=term, ingredient_id=ingredient.id, variant=variant, resolution=resolution
+    )
+    session.add(row)
+    session.flush()
+    return row
+
+
 def _add_nutrition_food(
     session: Session,
     source_food_id: str,
     description: str,
     nutrients: list[tuple[str, float, str]],
-) -> int:
+) -> RefFood:
     """One fdc ref_food with per-100g nutrient rows."""
     source = session.scalar(select(FoodSource).where(FoodSource.name == "fdc"))
     if source is None:
@@ -97,7 +116,24 @@ def _add_nutrition_food(
                 definition=definition,
             )
         )
-    return food.id
+    return food
+
+
+def _add_recipe(session: Session, url: str, name: str) -> Recipe:
+    """A bare recipe row, reached through its page (the ledger)."""
+    page = Page(url=url, site="bbc_good_food")
+    session.add(page)
+    session.flush()
+    recipe = Recipe(
+        page_id=page.id,
+        name=name,
+        data={},
+        data_sha256=url,
+        extractor="json_ld",
+    )
+    session.add(recipe)
+    session.flush()
+    return recipe
 
 
 @pytest.mark.usefixtures("db_engine")
@@ -105,7 +141,7 @@ def test_derive_nutrition_sums_confirmed_reference() -> None:
     """Each counted line contributes grams x per-100g; rerunning
     updates the one derived row."""
     with get_session() as session:
-        food_id = _add_nutrition_food(
+        food = _add_nutrition_food(
             session,
             "171287",
             "Egg, whole, raw, fresh",
@@ -115,28 +151,26 @@ def test_derive_nutrition_sums_confirmed_reference() -> None:
             ],
         )
         egg = Ingredient(name="egg")
-        recipe = RecipeUrls(
-            url="https://x/omelette",
-            name="Omelette",
-            data={},
-            site="bbc_good_food",
-        )
-        session.add_all([egg, recipe])
-        session.flush()
+        session.add(egg)
+        recipe = _add_recipe(session, "https://x/omelette", "Omelette")
+        recipe_id = recipe.id
         session.add(
             IngredientFoodRef(
                 ingredient_id=egg.id,
-                ref_food_id=food_id,
+                ref_food_id=food.id,
+                source_id=food.source_id,
                 role="nutrition",
-                confirmed=True,
+                status="confirmed",
+                origin="seed",
             )
         )
+        egg_term = _add_term(session, "egg", egg)
         session.add(
             RecipeIngredient(
                 recipe_id=recipe.id,
                 position=0,
                 raw_text="1 egg",
-                ingredient_id=egg.id,
+                term_id=egg_term.id,
                 quantity=1.0,
                 dimension="count",
                 base_unit="piece",
@@ -144,7 +178,6 @@ def test_derive_nutrition_sums_confirmed_reference() -> None:
                 grams_source="seed",
             )
         )
-        recipe_id = recipe.id
 
     derive_nutrition(recipe_id)
     derive_nutrition(recipe_id)
@@ -168,7 +201,7 @@ def test_derive_nutrition_midpoint_and_skips() -> None:
     """Ranges eat the midpoint; no-quantity lines count as
     unconverted; optional and alternative lines are skipped."""
     with get_session() as session:
-        food_id = _add_nutrition_food(
+        food = _add_nutrition_food(
             session,
             "171287",
             "Egg, whole, raw, fresh",
@@ -176,41 +209,42 @@ def test_derive_nutrition_midpoint_and_skips() -> None:
         )
         egg = Ingredient(name="egg")
         salt = Ingredient(name="salt")
-        recipe = RecipeUrls(
-            url="https://x/curry", name="Curry", data={}, site="bbc_good_food"
-        )
-        session.add_all([egg, salt, recipe])
-        session.flush()
+        session.add_all([egg, salt])
+        recipe = _add_recipe(session, "https://x/curry", "Curry")
         recipe_id = recipe.id
         session.add(
             IngredientFoodRef(
                 ingredient_id=egg.id,
-                ref_food_id=food_id,
+                ref_food_id=food.id,
+                source_id=food.source_id,
                 role="nutrition",
-                confirmed=True,
+                status="confirmed",
+                origin="seed",
             )
         )
-        session.add(
-            RecipeIngredient(
-                recipe_id=recipe.id,
-                position=0,
-                raw_text="2-3 eggs",
-                ingredient_id=egg.id,
-                quantity=2.0,
-                quantity_max=3.0,
-                dimension="count",
-                base_unit="piece",
-                grams=50.0,
-                grams_max=100.0,
-                grams_source="seed",
-            )
+        egg_term = _add_term(session, "egg", egg)
+        salt_term = _add_term(session, "salt", salt)
+        eggs_row = RecipeIngredient(
+            recipe_id=recipe.id,
+            position=0,
+            raw_text="2-3 eggs",
+            term_id=egg_term.id,
+            quantity=2.0,
+            quantity_max=3.0,
+            dimension="count",
+            base_unit="piece",
+            grams=50.0,
+            grams_max=100.0,
+            grams_source="seed",
         )
+        session.add(eggs_row)
+        session.flush()
         session.add(
             RecipeIngredient(
                 recipe_id=recipe.id,
                 position=1,
                 raw_text="salt to serve",
-                ingredient_id=salt.id,
+                term_id=salt_term.id,
                 dimension="count",
                 base_unit="piece",
             )
@@ -220,7 +254,7 @@ def test_derive_nutrition_midpoint_and_skips() -> None:
                 recipe_id=recipe.id,
                 position=2,
                 raw_text="1 egg (optional)",
-                ingredient_id=egg.id,
+                term_id=egg_term.id,
                 quantity=1.0,
                 dimension="count",
                 base_unit="piece",
@@ -234,13 +268,13 @@ def test_derive_nutrition_midpoint_and_skips() -> None:
                 recipe_id=recipe.id,
                 position=3,
                 raw_text="2 tsp vanilla",
-                ingredient_id=egg.id,
+                term_id=egg_term.id,
                 quantity=2.0,
                 dimension="volume",
                 base_unit="ml",
                 grams=2.0,
                 grams_source="seed",
-                alternative_of=1,
+                alternative_of=eggs_row.id,
             )
         )
 
@@ -268,36 +302,41 @@ def test_derive_nutrition_coverage_and_definitions() -> None:
         egg = Ingredient(name="egg")
         flour = Ingredient(name="flour")
         water = Ingredient(name="water")
-        recipe = RecipeUrls(
-            url="https://x/dough", name="Dough", data={}, site="bbc_good_food"
-        )
-        session.add_all([egg, flour, water, recipe])
-        session.flush()
+        session.add_all([egg, flour, water])
+        recipe = _add_recipe(session, "https://x/dough", "Dough")
         recipe_id = recipe.id
         session.add(
             IngredientFoodRef(
                 ingredient_id=egg.id,
-                ref_food_id=egg_food,
+                ref_food_id=egg_food.id,
+                source_id=egg_food.source_id,
                 role="nutrition",
-                confirmed=True,
+                status="confirmed",
+                origin="seed",
             )
         )
         session.add(
             IngredientFoodRef(
                 ingredient_id=flour.id,
-                ref_food_id=flour_food,
+                ref_food_id=flour_food.id,
+                source_id=flour_food.source_id,
                 role="nutrition",
-                confirmed=True,
+                status="confirmed",
+                origin="seed",
             )
         )
-        foods = ((egg, 100.0), (flour, 100.0), (water, 100.0))
-        for position, (ingredient, grams) in enumerate(foods):
+        egg_term = _add_term(session, "egg", egg)
+        flour_term = _add_term(session, "flour", flour)
+        water_term = _add_term(session, "water", water)
+        for position, (term, grams) in enumerate(
+            ((egg_term, 100.0), (flour_term, 100.0), (water_term, 100.0))
+        ):
             session.add(
                 RecipeIngredient(
                     recipe_id=recipe.id,
                     position=position,
-                    raw_text=ingredient.name,
-                    ingredient_id=ingredient.id,
+                    raw_text=term.term,
+                    term_id=term.id,
                     quantity=grams,
                     dimension="mass",
                     base_unit="g",
@@ -320,9 +359,8 @@ def test_derive_nutrition_coverage_and_definitions() -> None:
 
 @pytest.mark.usefixtures("db_engine")
 def test_derive_nutrition_uses_prepared_form() -> None:
-    """A line that resolved through the "yolk" alias variant takes
-    the yolk food's nutrients; a plain egg line keeps the whole
-    egg's."""
+    """A line that resolved through the "yolk" variant term takes the
+    yolk food's nutrients; a plain egg line keeps the whole egg's."""
     with get_session() as session:
         whole = _add_nutrition_food(
             session,
@@ -337,32 +375,32 @@ def test_derive_nutrition_uses_prepared_form() -> None:
             [("protein_g", 15.86, "by_weight")],
         )
         egg = Ingredient(name="egg")
-        recipe = RecipeUrls(
-            url="https://x/custard", name="Custard", data={}, site="bbc_good_food"
-        )
-        session.add_all([egg, recipe])
-        session.flush()
+        session.add(egg)
+        recipe = _add_recipe(session, "https://x/custard", "Custard")
         session.add(
             IngredientFoodRef(
                 ingredient_id=egg.id,
-                ref_food_id=whole,
+                ref_food_id=whole.id,
+                source_id=whole.source_id,
                 role="nutrition",
-                confirmed=True,
+                status="confirmed",
+                origin="seed",
             )
         )
+        yolk_term = _add_term(session, "egg yolk", egg, variant="yolk")
+        egg_term = _add_term(session, "egg", egg)
         session.add(
             RecipeIngredient(
                 recipe_id=recipe.id,
                 position=0,
                 raw_text="2 large egg yolks",
-                ingredient_id=egg.id,
+                term_id=yolk_term.id,
                 quantity=2.0,
                 dimension="count",
                 base_unit="piece",
                 size="large",
                 grams=34.0,
                 grams_source="seed",
-                variant="yolk",
             )
         )
         session.add(
@@ -370,7 +408,7 @@ def test_derive_nutrition_uses_prepared_form() -> None:
                 recipe_id=recipe.id,
                 position=1,
                 raw_text="1 egg",
-                ingredient_id=egg.id,
+                term_id=egg_term.id,
                 quantity=1.0,
                 dimension="count",
                 base_unit="piece",
@@ -389,3 +427,72 @@ def test_derive_nutrition_uses_prepared_form() -> None:
             34.0 / 100 * 15.86 + 50.0 / 100 * 12.56
         )
         assert row.sources == "fdc"
+
+
+@pytest.mark.usefixtures("db_engine")
+def test_derive_nutrition_skips_not_food_lines() -> None:
+    """Equipment lines ("12-hole mini bundt tin" on its not_food term)
+    stay stored but are not food: excluded from the totals and the
+    coverage denominator."""
+    with get_session() as session:
+        food = _add_nutrition_food(
+            session,
+            "171287",
+            "Egg, whole, raw, fresh",
+            [("protein_g", 12.56, "by_weight")],
+        )
+        egg = Ingredient(name="egg")
+        session.add(egg)
+        recipe = _add_recipe(session, "https://x/bundt", "Bundt")
+        recipe_id = recipe.id
+        session.add(
+            IngredientFoodRef(
+                ingredient_id=egg.id,
+                ref_food_id=food.id,
+                source_id=food.source_id,
+                role="nutrition",
+                status="confirmed",
+                origin="seed",
+            )
+        )
+        tin_term = IngredientTerm(
+            term="12-hole mini bundt tin", resolution="not_food"
+        )
+        session.add(tin_term)
+        egg_term = _add_term(session, "egg", egg)
+        session.flush()
+        session.add_all(
+            [
+                RecipeIngredient(
+                    recipe_id=recipe.id,
+                    position=0,
+                    raw_text="12-hole mini bundt tin",
+                    term_id=tin_term.id,
+                    quantity=1.0,
+                    dimension="count",
+                    base_unit="piece",
+                    grams=100.0,
+                    grams_source="seed",
+                ),
+                RecipeIngredient(
+                    recipe_id=recipe.id,
+                    position=1,
+                    raw_text="1 egg",
+                    term_id=egg_term.id,
+                    quantity=1.0,
+                    dimension="count",
+                    base_unit="piece",
+                    grams=50.0,
+                    grams_source="seed",
+                ),
+            ]
+        )
+
+    derive_nutrition(recipe_id)
+    with get_session() as session:
+        row = session.scalars(
+            select(RecipeNutrition).where(RecipeNutrition.recipe_id == recipe_id)
+        ).one()
+        assert row.protein_g == pytest.approx(50.0 / 100 * 12.56)
+        assert row.coverage == 1.0
+        assert row.unconverted_lines == 0

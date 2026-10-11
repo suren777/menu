@@ -1,0 +1,36 @@
+[
+  {"a": "icing sugar", "b": "confectioners' sugar", "label": "same"},
+  {"a": "aubergine", "b": "eggplant", "label": "same"},
+  {"a": "rocket", "b": "arugula", "label": "same"},
+  {"a": "coriander leaf", "b": "cilantro", "label": "same"},
+  {"a": "whole milk", "b": "milk", "label": "variant"},
+  {"a": "coriander", "b": "ground coriander", "label": "different"},
+  {"a": "baking soda", "b": "baking powder", "label": "different"},
+  {"a": "caster sugar", "b": "icing sugar", "label": "different"},
+
+  {"a": "courgette", "b": "zucchini", "label": "same"},
+  {"a": "spring onion", "b": "scallion", "label": "same"},
+  {"a": "plain flour", "b": "all-purpose flour", "label": "same"},
+  {"a": "double cream", "b": "heavy cream", "label": "same"},
+  {"a": "swede", "b": "rutabaga", "label": "same"},
+  {"a": "wholemeal flour", "b": "whole wheat flour", "label": "same"},
+  {"a": "mangetout", "b": "snow pea", "label": "same"},
+  {"a": "prawn", "b": "shrimp", "label": "same"},
+
+  {"a": "unsalted butter", "b": "butter", "label": "variant"},
+  {"a": "smoked bacon", "b": "bacon", "label": "variant"},
+  {"a": "red lentils", "b": "lentils", "label": "variant"},
+  {"a": "dark chocolate", "b": "chocolate", "label": "variant"},
+  {"a": "mature cheddar", "b": "cheddar", "label": "variant"},
+  {"a": "free-range eggs", "b": "eggs", "label": "variant"},
+
+  {"a": "single cream", "b": "double cream", "label": "different"},
+  {"a": "bicarbonate of soda", "b": "baking powder", "label": "different"},
+  {"a": "sweet potato", "b": "potato", "label": "different"},
+  {"a": "white pepper", "b": "black pepper", "label": "different"},
+  {"a": "green lentils", "b": "red lentils", "label": "different"},
+  {"a": "self-raising flour", "b": "plain flour", "label": "different"},
+  {"a": "chicken breast", "b": "chicken thigh", "label": "different"},
+  {"a": "chicken stock", "b": "vegetable stock", "label": "different"},
+  {"a": "scallion", "b": "shallot", "label": "different"}
+]

@@ -26,3 +26,4 @@ def test_site_config_defaults() -> None:
     assert site.politeness_delay == 1.0
     assert site.url_pattern is None
     assert site.json_ld_test_id is None
+    assert site.ingredient_strip_patterns == ()

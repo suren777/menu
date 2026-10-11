@@ -9,12 +9,20 @@ from sqlalchemy.orm import Session
 import menu.db.connection
 from menu.db.database import initialise
 from menu.db.engine import configure_sqlite
+from menu.db.ingredients import suggestions
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
 
     from sqlalchemy.engine import Engine
+
+
+@pytest.fixture(autouse=True)
+def empty_suggestions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Seeding reads suggestions.json; tests start from an empty ledger
+    so accepted entries committed to the real file can't change them."""
+    monkeypatch.setattr(suggestions, "SUGGESTIONS_PATH", tmp_path / "suggestions.json")
 
 
 @pytest.fixture

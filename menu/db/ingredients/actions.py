@@ -13,8 +13,8 @@ from menu.db.database import (
     Ingredient,
     IngredientAlias,
     IngredientFoodRef,
+    Recipe,
     RecipeIngredient,
-    RecipeUrls,
     RefFood,
     RefPortion,
 )
@@ -49,131 +49,135 @@ _OR_ALTERNATIVE = re.compile(r"\bor\b", re.IGNORECASE)
 
 
 def store_recipe_ingredients(
-    url: str, recipe_data: dict[str, Any], site: SiteConfig
+    recipe_id: int,
+    recipe_data: dict[str, Any],
+    site: SiteConfig,
+    session: Session,
 ) -> None:
     """Parse a recipe's ingredient lines and store recipe_ingredient rows.
 
-    Re-running a recipe replaces its previous rows, so reparsing is
-    idempotent. The recipe is stamped with the site and its servings
-    parsed from recipeYield. A line that fails to parse is logged and
-    skipped: bad lines must not stop a recipe (or a crawl), mirroring
-    the pipeline's per-URL handling.
+    Runs in the caller's transaction: the pipeline writes the recipe
+    and its lines in one commit, so a crash cannot leave a recipe
+    without lines. Re-running a recipe replaces its previous rows, so
+    reparsing is idempotent. The recipe's servings are parsed from
+    recipeYield and the raw yield is kept as yield_text. A line that
+    fails to parse is logged and skipped: bad lines must not stop a
+    recipe (or a crawl), mirroring the pipeline's per-URL handling.
     """
     lines = recipe_data.get("recipeIngredient", [])
     if not isinstance(lines, list):
-        logger.warning("recipeIngredient is not a list for %s", url)
+        logger.warning("recipeIngredient is not a list for recipe %s", recipe_id)
         return
 
-    with get_session() as session:
-        record = session.scalars(
-            select(RecipeUrls).where(RecipeUrls.url == url)
-        ).first()
-        if record is None:
-            logger.warning("No recipe stored for %s; ingredients skipped", url)
-            return
+    record = session.get(Recipe, recipe_id)
+    if record is None:
+        logger.warning("No recipe %s stored; ingredients skipped", recipe_id)
+        return
 
-        record.site = site.name
-        record.servings = _servings_from_yield(recipe_data.get("recipeYield"))
+    record.servings = _servings_from_yield(recipe_data.get("recipeYield"))
+    record.yield_text = _yield_text(recipe_data.get("recipeYield"))
 
-        session.execute(
-            delete(RecipeIngredient).where(RecipeIngredient.recipe_id == record.id)
+    session.execute(
+        delete(RecipeIngredient).where(RecipeIngredient.recipe_id == recipe_id)
+    )
+
+    for position, raw in enumerate(lines):
+        if not isinstance(raw, str):
+            logger.warning(
+                "Skipping non-string ingredient for recipe %s: %r", recipe_id, raw
+            )
+            continue
+        try:
+            parsed = parse_line(raw, site)
+        except Exception as exc:  # noqa: BLE001 - a bad line must not stop the recipe
+            logger.warning(
+                "Skipping ingredient line %r for recipe %s: %s: %s",
+                raw,
+                recipe_id,
+                type(exc).__name__,
+                exc,
+            )
+            continue
+        override = LINE_OVERRIDES.get(" ".join(raw.lower().split()))
+        alt_parsed = (
+            None if parsed.alternatives else _split_or_alternative(raw, site)
         )
-
-        for position, raw in enumerate(lines):
-            if not isinstance(raw, str):
-                logger.warning("Skipping non-string ingredient for %s: %r", url, raw)
-                continue
-            try:
-                parsed = parse_line(raw, site)
-            except Exception as exc:  # noqa: BLE001 - a bad line must not stop the recipe
-                logger.warning(
-                    "Skipping ingredient line %r for %s: %s: %s",
-                    raw,
-                    url,
-                    type(exc).__name__,
-                    exc,
-                )
-                continue
-            override = LINE_OVERRIDES.get(" ".join(raw.lower().split()))
-            alt_parsed = (
-                None if parsed.alternatives else _split_or_alternative(raw, site)
+        ingredient_id, variant = _resolve_ingredient(
+            override if override is not None else parsed.name,
+            parsed.fdc_id,
+            session,
+            needs_review=override is None
+            and line_needs_review(raw, parsed, alt_parsed),
+        )
+        grams = grams_max = None
+        grams_source = None
+        if ingredient_id is not None:
+            grams, grams_max, grams_source = _line_grams(
+                parsed, ingredient_id, session
             )
-            ingredient_id, variant = _resolve_ingredient(
-                override if override is not None else parsed.name,
-                parsed.fdc_id,
+        line = RecipeIngredient(
+            recipe_id=recipe_id,
+            position=position,
+            raw_text=raw,
+            ingredient_id=ingredient_id,
+            variant=variant,
+            quantity=parsed.quantity,
+            quantity_max=parsed.quantity_max,
+            dimension=parsed.dimension,
+            base_unit=parsed.base_unit,
+            original_quantity_text=parsed.original_quantity_text,
+            original_unit=parsed.original_unit,
+            preparation=parsed.preparation,
+            size=parsed.size,
+            note=parsed.note,
+            optional=parsed.optional,
+            parse_confidence=parsed.parse_confidence,
+            grams=grams,
+            grams_max=grams_max,
+            grams_source=grams_source,
+        )
+        session.add(line)
+        session.flush()  # the row's id is needed by the alternative rows
+        for alternative in parsed.alternatives:
+            alternative_id, _ = _resolve_ingredient(
+                alternative,
+                None,
                 session,
-                needs_review=override is None
-                and line_needs_review(raw, parsed, alt_parsed),
+                needs_review=name_needs_review(alternative),
             )
-            grams = grams_max = None
-            grams_source = None
-            if ingredient_id is not None:
-                grams, grams_max, grams_source = _line_grams(
-                    parsed, ingredient_id, session
+            session.add(
+                RecipeIngredient(
+                    recipe_id=recipe_id,
+                    position=position,
+                    raw_text=raw,
+                    ingredient_id=alternative_id,
+                    alternative_of=line.id,
                 )
-            line = RecipeIngredient(
-                recipe_id=record.id,
-                position=position,
-                raw_text=raw,
-                ingredient_id=ingredient_id,
-                variant=variant,
-                quantity=parsed.quantity,
-                quantity_max=parsed.quantity_max,
-                dimension=parsed.dimension,
-                base_unit=parsed.base_unit,
-                original_quantity_text=parsed.original_quantity_text,
-                original_unit=parsed.original_unit,
-                preparation=parsed.preparation,
-                size=parsed.size,
-                note=parsed.note,
-                optional=parsed.optional,
-                parse_confidence=parsed.parse_confidence,
-                grams=grams,
-                grams_max=grams_max,
-                grams_source=grams_source,
             )
-            session.add(line)
-            session.flush()  # the row's id is needed by the alternative rows
-            for alternative in parsed.alternatives:
-                alternative_id, _ = _resolve_ingredient(
-                    alternative,
-                    None,
-                    session,
-                    needs_review=name_needs_review(alternative),
+        # The parser handles bare "X or Y" name alternatives itself,
+        # but drops the second option of "2 tsp vanilla or 1 tsp
+        # essential oil" into the note. Split it off here so it is
+        # still kept as an alternative row.
+        if alt_parsed is not None:
+            alternative_id, _ = _resolve_ingredient(
+                alt_parsed.name,
+                alt_parsed.fdc_id,
+                session,
+                needs_review=name_needs_review(alt_parsed.name or ""),
+            )
+            session.add(
+                RecipeIngredient(
+                    recipe_id=recipe_id,
+                    position=position,
+                    raw_text=raw,
+                    ingredient_id=alternative_id,
+                    quantity=alt_parsed.quantity,
+                    quantity_max=alt_parsed.quantity_max,
+                    dimension=alt_parsed.dimension,
+                    base_unit=alt_parsed.base_unit,
+                    alternative_of=line.id,
                 )
-                session.add(
-                    RecipeIngredient(
-                        recipe_id=record.id,
-                        position=position,
-                        raw_text=raw,
-                        ingredient_id=alternative_id,
-                        alternative_of=line.id,
-                    )
-                )
-            # The parser handles bare "X or Y" name alternatives itself,
-            # but drops the second option of "2 tsp vanilla or 1 tsp
-            # essential oil" into the note. Split it off here so it is
-            # still kept as an alternative row.
-            if alt_parsed is not None:
-                alternative_id, _ = _resolve_ingredient(
-                    alt_parsed.name,
-                    alt_parsed.fdc_id,
-                    session,
-                    needs_review=name_needs_review(alt_parsed.name or ""),
-                )
-                session.add(
-                    RecipeIngredient(
-                        recipe_id=record.id,
-                        position=position,
-                        raw_text=raw,
-                        ingredient_id=alternative_id,
-                        quantity=alt_parsed.quantity,
-                        quantity_max=alt_parsed.quantity_max,
-                        dimension=alt_parsed.dimension,
-                        base_unit=alt_parsed.base_unit,
-                        alternative_of=line.id,
-                    )
-                )
+            )
 
 
 def _split_or_alternative(raw: str, site: SiteConfig) -> ParsedLine | None:
@@ -437,6 +441,16 @@ def _line_grams(
         portions,
         source,
     )
+
+
+def _yield_text(value: Any) -> str | None:
+    """The raw recipeYield as text ("Serves 12"); a list takes the
+    first entry, like _servings_from_yield."""
+    if value is None:
+        return None
+    if isinstance(value, list):
+        value = value[0] if value else None
+    return None if value is None else str(value)
 
 
 def _servings_from_yield(value: Any) -> int | None:

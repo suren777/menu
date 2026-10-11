@@ -4,6 +4,7 @@ Typed 2.0-style columns (Mapped/mapped_column) so mypy sees the column
 types and call sites need no casts.
 """
 
+from datetime import datetime  # noqa: TC003 - Mapped annotations resolve at runtime
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index
@@ -20,29 +21,112 @@ class Base(DeclarativeBase):
 
 
 class Sitemap(Base):
-    __tablename__ = "sitemap"
+    """One sitemap document of one site, with its fetch outcome.
+
+    A sitemap index stores itself (kind "index", status "done") and
+    its children as pending rows; the crawl fetches every sitemap
+    still pending or blocked and queues the page URLs it lists. The
+    status is the recorded outcome of the last fetch attempt, not a
+    boolean: a failed or blocked sitemap is data, not a crash.
+    """
+
+    __tablename__ = "sitemaps"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    url: Mapped[str] = mapped_column(nullable=False, unique=True)
     site: Mapped[str] = mapped_column(nullable=False)
     """Registry name of the site this sitemap belongs to."""
-    completed: Mapped[bool] = mapped_column(default=False)
+    url: Mapped[str] = mapped_column(nullable=False, unique=True)
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("sitemaps.id"))
+    """The index sitemap that listed this one, if any."""
+    kind: Mapped[str | None]
+    """'index' | 'urlset'; NULL until the document has been fetched."""
+    status: Mapped[str] = mapped_column(nullable=False, default="pending")
+    """'pending' | 'done' | 'failed' | 'blocked'."""
+    fetched_at: Mapped[datetime | None]
+    error: Mapped[str | None]
+
+    __table_args__ = (
+        CheckConstraint(
+            "kind IS NULL OR kind IN ('index', 'urlset')",
+            "ck_sitemaps_kind",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'done', 'failed', 'blocked')",
+            "ck_sitemaps_status",
+        ),
+    )
 
 
-class RecipeUrls(Base):
-    __tablename__ = "recipe_urls"
+class Page(Base):
+    """One crawled URL and its outcome: the crawl ledger.
+
+    Every URL a sitemap lists gets a row, whatever happens to it —
+    fetched, not a recipe, failed, blocked or disallowed — so a re-run
+    continues from the queued pages instead of re-walking sitemaps,
+    and "what was crawled and what failed" is a query.
+    """
+
+    __tablename__ = "pages"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    site: Mapped[str] = mapped_column(nullable=False)
+    """Registry name of the site this page belongs to."""
     url: Mapped[str] = mapped_column(nullable=False, unique=True)
-    """Unique: recipes are deduplicated on their URL."""
+    sitemap_id: Mapped[int | None] = mapped_column(ForeignKey("sitemaps.id"))
+    lastmod: Mapped[str | None]
+    """The sitemap's lastmod for the URL, as the sitemap spells it."""
+    status: Mapped[str] = mapped_column(nullable=False, default="queued")
+    """'queued' | 'fetched' | 'no_recipe' | 'failed' | 'blocked' |
+    'disallowed' — the last fetch attempt's outcome."""
+    http_status: Mapped[int | None]
+    attempts: Mapped[int] = mapped_column(nullable=False, default=0)
+    fetched_at: Mapped[datetime | None]
+    content_sha256: Mapped[str | None]
+    """sha256 of the fetched bytes: detects upstream changes."""
+    error: Mapped[str | None]
+
+    __table_args__ = (
+        Index("ix_pages_site_status", "site", "status"),
+        CheckConstraint(
+            "status IN ('queued', 'fetched', 'no_recipe', 'failed', "
+            "'blocked', 'disallowed')",
+            "ck_pages_status",
+        ),
+    )
+
+
+class Recipe(Base):
+    """The raw recipe data captured from one page.
+
+    Split from the page: the page is the fetch, the recipe is what was
+    extracted from it. data_sha256 — the fingerprint of the canonical
+    JSON — says whether upstream changed the recipe since the last
+    capture; the site is the page's site (join through page_id).
+    """
+
+    __tablename__ = "recipes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    page_id: Mapped[int] = mapped_column(
+        ForeignKey("pages.id"), nullable=False, unique=True
+    )
     name: Mapped[str] = mapped_column(nullable=False)
+    """The JSON-LD name; the page <title> when the data names nothing."""
     data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    site: Mapped[str | None]
-    """Registry name of the site the recipe came from; stamped at
-    ingest time (rows stored before the column existed get it on
-    reparse)."""
+    data_sha256: Mapped[str] = mapped_column(nullable=False)
+    extractor: Mapped[str] = mapped_column(nullable=False)
+    """'json_ld' | 'test_id' | 'microdata' — what found the recipe."""
     servings: Mapped[int | None]
     """Parsed from recipeYield ("Serves 12", "Makes 16")."""
+    yield_text: Mapped[str | None]
+    """The raw recipeYield as text."""
+
+    __table_args__ = (
+        CheckConstraint(
+            "extractor IN ('json_ld', 'test_id', 'microdata')",
+            "ck_recipes_extractor",
+        ),
+    )
 
 
 class RecipeNutrition(Base):
@@ -56,7 +140,7 @@ class RecipeNutrition(Base):
     __tablename__ = "recipe_nutrition"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    recipe_id: Mapped[int] = mapped_column(ForeignKey("recipe_urls.id"))
+    recipe_id: Mapped[int] = mapped_column(ForeignKey("recipes.id"))
     source: Mapped[str]
     """\"derived\" | \"published\" — never mixed in one row."""
     energy_kcal: Mapped[float | None]
@@ -167,7 +251,7 @@ class RecipeIngredient(Base):
     __tablename__ = "recipe_ingredient"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    recipe_id: Mapped[int] = mapped_column(ForeignKey("recipe_urls.id"))
+    recipe_id: Mapped[int] = mapped_column(ForeignKey("recipes.id"))
     position: Mapped[int]
     section: Mapped[str | None]
     """BBC publishes a flat ingredient list, so NULL today; populated

@@ -12,9 +12,10 @@ from menu.db.database import (
     FoodSource,
     Ingredient,
     IngredientFoodRef,
+    Page,
+    Recipe,
     RecipeIngredient,
     RecipeNutrition,
-    RecipeUrls,
     RefFood,
     RefNutrient,
 )
@@ -100,6 +101,23 @@ def _add_nutrition_food(
     return food.id
 
 
+def _add_recipe(session: Session, url: str, name: str) -> Recipe:
+    """A bare recipe row, reached through its page (the ledger)."""
+    page = Page(url=url, site="bbc_good_food")
+    session.add(page)
+    session.flush()
+    recipe = Recipe(
+        page_id=page.id,
+        name=name,
+        data={},
+        data_sha256=url,
+        extractor="json_ld",
+    )
+    session.add(recipe)
+    session.flush()
+    return recipe
+
+
 @pytest.mark.usefixtures("db_engine")
 def test_derive_nutrition_sums_confirmed_reference() -> None:
     """Each counted line contributes grams x per-100g; rerunning
@@ -115,14 +133,9 @@ def test_derive_nutrition_sums_confirmed_reference() -> None:
             ],
         )
         egg = Ingredient(name="egg")
-        recipe = RecipeUrls(
-            url="https://x/omelette",
-            name="Omelette",
-            data={},
-            site="bbc_good_food",
-        )
-        session.add_all([egg, recipe])
-        session.flush()
+        session.add(egg)
+        recipe = _add_recipe(session, "https://x/omelette", "Omelette")
+        recipe_id = recipe.id
         session.add(
             IngredientFoodRef(
                 ingredient_id=egg.id,
@@ -176,11 +189,8 @@ def test_derive_nutrition_midpoint_and_skips() -> None:
         )
         egg = Ingredient(name="egg")
         salt = Ingredient(name="salt")
-        recipe = RecipeUrls(
-            url="https://x/curry", name="Curry", data={}, site="bbc_good_food"
-        )
-        session.add_all([egg, salt, recipe])
-        session.flush()
+        session.add_all([egg, salt])
+        recipe = _add_recipe(session, "https://x/curry", "Curry")
         recipe_id = recipe.id
         session.add(
             IngredientFoodRef(
@@ -268,11 +278,8 @@ def test_derive_nutrition_coverage_and_definitions() -> None:
         egg = Ingredient(name="egg")
         flour = Ingredient(name="flour")
         water = Ingredient(name="water")
-        recipe = RecipeUrls(
-            url="https://x/dough", name="Dough", data={}, site="bbc_good_food"
-        )
-        session.add_all([egg, flour, water, recipe])
-        session.flush()
+        session.add_all([egg, flour, water])
+        recipe = _add_recipe(session, "https://x/dough", "Dough")
         recipe_id = recipe.id
         session.add(
             IngredientFoodRef(
@@ -337,11 +344,8 @@ def test_derive_nutrition_uses_prepared_form() -> None:
             [("protein_g", 15.86, "by_weight")],
         )
         egg = Ingredient(name="egg")
-        recipe = RecipeUrls(
-            url="https://x/custard", name="Custard", data={}, site="bbc_good_food"
-        )
-        session.add_all([egg, recipe])
-        session.flush()
+        session.add(egg)
+        recipe = _add_recipe(session, "https://x/custard", "Custard")
         session.add(
             IngredientFoodRef(
                 ingredient_id=egg.id,

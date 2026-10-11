@@ -8,6 +8,7 @@ from menu.ingest.extract import (
     extract_json_ld,
     extract_json_ld_recipe,
     extract_microdata_recipe,
+    extract_recipe,
     extract_recipe_data,
 )
 from menu.ingest.registry import SiteConfig
@@ -71,6 +72,25 @@ def test_extract_recipe_data_prefers_test_id_script() -> None:
     payload = {"@type": "Recipe", "name": "From test id"}
     soup = _page_with_script({"data-testid": "page-schema"}, payload)
     assert extract_recipe_data(BBC_GOOD_FOOD, soup) == payload
+
+
+def test_extract_recipe_names_the_test_id_extractor() -> None:
+    payload = {"@type": "Recipe", "name": "From test id"}
+    soup = _page_with_script({"data-testid": "page-schema"}, payload)
+    assert extract_recipe(BBC_GOOD_FOOD, soup) == (payload, "test_id")
+
+
+def test_extract_recipe_names_the_json_ld_extractor() -> None:
+    soup = _page_with_script({"type": "application/ld+json"}, JSON_LD_RECIPE)
+    assert extract_recipe(BBC_GOOD_FOOD, soup) == (JSON_LD_RECIPE, "json_ld")
+
+
+def test_extract_recipe_names_the_microdata_extractor() -> None:
+    site = SiteConfig(name="x", base_url="u", sitemap_urls=("s",))
+    soup = BeautifulSoup(SMITTEN_PAGE, "html.parser")
+    recipe = extract_recipe(site, soup)
+    assert recipe is not None
+    assert recipe[1] == "microdata"
 
 
 def test_extract_recipe_data_ignores_non_recipe_test_id_script() -> None:

@@ -4,7 +4,9 @@ Repeat runs read from the cache instead of hitting the sites again;
 the cache lives in .cache/ at the project root (gitignored) and is
 safe to delete. robots.txt is honoured per site: a disallowed URL
 raises DisallowedError, and the robots crawl-delay is respected on
-top of the site's own politeness delay.
+top of the site's own politeness delay. Sitemap XML goes through the
+same path as pages: fetched fresh on a live crawl (sitemaps change)
+but written to the cache, so a later rebuild can replay them.
 """
 
 import hashlib
@@ -139,11 +141,14 @@ def fetch_page(
         time.sleep(_retry_after(response))
         response = session.get(url, timeout=10)
         if response.status_code == 429:
-            raise BlockedError(f"Still rate-limited: {url!r}")
+            raise BlockedError(f"Still rate-limited: {url!r}", status_code=429)
     if response.status_code in (401, 402, 403):
-        raise BlockedError(f"Blocked with HTTP {response.status_code}: {url!r}")
+        raise BlockedError(
+            f"Blocked with HTTP {response.status_code}: {url!r}",
+            status_code=response.status_code,
+        )
     if not response.ok:
-        raise FetchError(f"Can't fetch {url!r}")
+        raise FetchError(f"Can't fetch {url!r}", status_code=response.status_code)
 
     cache_dir.mkdir(parents=True, exist_ok=True)
     path.write_bytes(response.content)

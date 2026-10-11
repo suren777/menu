@@ -12,18 +12,30 @@ from menu.db.database import (
     FoodSource,
     Ingredient,
     IngredientFoodRef,
+    Page,
+    Recipe,
     RecipeIngredient,
     RecipeNutrition,
-    RecipeUrls,
     RefFood,
+    Sitemap,
 )
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 
-def _add_recipe(session: Session) -> RecipeUrls:
-    recipe = RecipeUrls(url="https://x/1", name="Test", data={})
+def _add_recipe(session: Session) -> Recipe:
+    """A recipe row, reached through its page (the ledger)."""
+    page = Page(url="https://x/1", site="bbc_good_food")
+    session.add(page)
+    session.flush()
+    recipe = Recipe(
+        page_id=page.id,
+        name="Test",
+        data={},
+        data_sha256="x",
+        extractor="json_ld",
+    )
     session.add(recipe)
     return recipe
 
@@ -49,6 +61,45 @@ def test_unknown_nutrition_source_is_refused(session: Session) -> None:
             energy_kcal=1.0,
         )
     )
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_unknown_page_status_is_refused(session: Session) -> None:
+    session.add(
+        Page(
+            url="https://x/page",
+            site="bbc_good_food",
+            status="pending",  # not a page status
+        )
+    )
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_unknown_sitemap_kind_is_refused(session: Session) -> None:
+    session.add(
+        Sitemap(url="https://x/sitemap.xml", site="bbc_good_food", kind="feed")
+    )
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_unknown_sitemap_status_is_refused(session: Session) -> None:
+    session.add(
+        Sitemap(
+            url="https://x/sitemap.xml",
+            site="bbc_good_food",
+            status="queued",  # pending | done | failed | blocked
+        )
+    )
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_unknown_extractor_is_refused(session: Session) -> None:
+    recipe = _add_recipe(session)
+    recipe.extractor = "guessing"  # json_ld | test_id | microdata
     with pytest.raises(IntegrityError):
         session.flush()
 

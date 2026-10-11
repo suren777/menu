@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from sqlalchemy import select
@@ -13,8 +13,9 @@ from menu.db.database import (
     Ingredient,
     IngredientAlias,
     IngredientFoodRef,
+    Page,
+    Recipe,
     RecipeIngredient,
-    RecipeUrls,
     RefFood,
     RefPortion,
 )
@@ -33,13 +34,43 @@ if TYPE_CHECKING:
 
 
 def add_recipe(url: str) -> int:
-    """Insert a bare recipe row; the action opens its own session, so
-    the seed must be committed before it runs."""
+    """Insert a bare recipe row, reached through its page (the
+    ledger); the action opens its own session, so the seed must be
+    committed before it runs."""
     with get_session() as session:
-        recipe = RecipeUrls(url=url, name="Test", data={})
+        page = Page(url=url, site="bbc_good_food")
+        session.add(page)
+        session.flush()
+        recipe = Recipe(
+            page_id=page.id,
+            name="Test",
+            data={},
+            data_sha256=url,
+            extractor="json_ld",
+        )
         session.add(recipe)
         session.flush()
         return recipe.id
+
+
+def add_recipe_row(session: Session, url: str, name: str) -> Recipe:
+    """The same bare recipe, in the caller's transaction."""
+    page = Page(url=url, site="bbc_good_food")
+    session.add(page)
+    session.flush()
+    recipe = Recipe(
+        page_id=page.id, name=name, data={}, data_sha256=url, extractor="json_ld"
+    )
+    session.add(recipe)
+    session.flush()
+    return recipe
+
+
+def store_lines(recipe_id: int, data: dict[str, Any]) -> None:
+    """Store a recipe's lines through its recipe row: the action runs
+    in the caller's session (the pipeline supplies it)."""
+    with get_session() as session:
+        actions.store_recipe_ingredients(recipe_id, data, BBC_GOOD_FOOD, session)
 
 
 def _egg() -> repository.IngredientModel:
@@ -280,9 +311,7 @@ def test_store_writes_grams_from_confirmed_ref() -> None:
             )
         )
 
-    actions.store_recipe_ingredients(
-        "https://x/cake", {"recipeIngredient": ["2 medium eggs"]}, BBC_GOOD_FOOD
-    )
+    store_lines(recipe_id, {"recipeIngredient": ["2 medium eggs"]})
     with get_session() as session:
         line = session.scalars(
             select(RecipeIngredient).where(RecipeIngredient.recipe_id == recipe_id)
@@ -295,20 +324,18 @@ def test_store_writes_grams_from_confirmed_ref() -> None:
 
 @pytest.mark.usefixtures("db_engine")
 def test_store_recipe_ingredients() -> None:
-    add_recipe("https://x/pancakes")
+    recipe_id = add_recipe("https://x/pancakes")
     data = {
         "recipeIngredient": ["240ml warm milk", "2 eggs, beaten", "oil, for proving"],
         "recipeYield": "Serves 12",
     }
 
-    actions.store_recipe_ingredients("https://x/pancakes", data, BBC_GOOD_FOOD)
+    store_lines(recipe_id, data)
 
     with get_session() as session:
-        recipe = session.scalars(
-            select(RecipeUrls).where(RecipeUrls.url == "https://x/pancakes")
-        ).first()
+        recipe = session.get(Recipe, recipe_id)
         assert recipe is not None
-        assert (recipe.site, recipe.servings) == ("bbc_good_food", 12)
+        assert (recipe.servings, recipe.yield_text) == (12, "Serves 12")
         lines = session.scalars(
             select(RecipeIngredient)
             .where(RecipeIngredient.recipe_id == recipe.id)
@@ -340,16 +367,12 @@ def test_store_recipe_ingredients() -> None:
 
 @pytest.mark.usefixtures("db_engine")
 def test_reparse_replaces_rows() -> None:
-    add_recipe("https://x/pancakes")
-    actions.store_recipe_ingredients(
-        "https://x/pancakes",
-        {"recipeIngredient": ["240ml warm milk", "100g butter"]},
-        BBC_GOOD_FOOD,
+    recipe_id = add_recipe("https://x/pancakes")
+    store_lines(
+        recipe_id, {"recipeIngredient": ["240ml warm milk", "100g butter"]}
     )
 
-    actions.store_recipe_ingredients(
-        "https://x/pancakes", {"recipeIngredient": ["2 eggs"]}, BBC_GOOD_FOOD
-    )
+    store_lines(recipe_id, {"recipeIngredient": ["2 eggs"]})
 
     with get_session() as session:
         lines = session.scalars(select(RecipeIngredient)).all()
@@ -360,11 +383,7 @@ def test_reparse_replaces_rows() -> None:
 def test_alternatives_stored_as_separate_rows() -> None:
     recipe_id = add_recipe("https://x/cake")
 
-    actions.store_recipe_ingredients(
-        "https://x/cake",
-        {"recipeIngredient": ["rosewater or vanilla extract"]},
-        BBC_GOOD_FOOD,
-    )
+    store_lines(recipe_id, {"recipeIngredient": ["rosewater or vanilla extract"]})
 
     with get_session() as session:
         lines = session.scalars(
@@ -388,12 +407,11 @@ def test_bad_line_does_not_stop_the_recipe(
         return parse_line(text, site)
 
     monkeypatch.setattr(actions, "parse_line", flaky)
-    add_recipe("https://x/pancakes")
+    recipe_id = add_recipe("https://x/pancakes")
 
-    actions.store_recipe_ingredients(
-        "https://x/pancakes",
+    store_lines(
+        recipe_id,
         {"recipeIngredient": ["240ml warm milk", "bad line", "2 eggs"]},
-        BBC_GOOD_FOOD,
     )
 
     with get_session() as session:
@@ -409,9 +427,8 @@ def test_aggregate_folds_volume_into_mass_with_density() -> None:
     with get_session() as session:
         flour = Ingredient(name="flour", density_g_per_ml=0.6)
         emmental = Ingredient(name="emmental")
-        recipe = RecipeUrls(url="https://x/cordon-bleu", name="Cordon bleu", data={})
-        session.add_all([flour, emmental, recipe])
-        session.flush()
+        session.add_all([flour, emmental])
+        recipe = add_recipe_row(session, "https://x/cordon-bleu", "Cordon bleu")
         recipe_id = recipe.id
         session.add(
             RecipeIngredient(
@@ -469,12 +486,8 @@ def test_aggregate_rolls_alias_variants_up() -> None:
 
     basbousa_id = add_recipe("https://x/basbousa")
     shokupan_id = add_recipe("https://x/shokupan")
-    actions.store_recipe_ingredients(
-        "https://x/basbousa", {"recipeIngredient": ["240ml warm milk"]}, BBC_GOOD_FOOD
-    )
-    actions.store_recipe_ingredients(
-        "https://x/shokupan", {"recipeIngredient": ["500ml whole milk"]}, BBC_GOOD_FOOD
-    )
+    store_lines(basbousa_id, {"recipeIngredient": ["240ml warm milk"]})
+    store_lines(shokupan_id, {"recipeIngredient": ["500ml whole milk"]})
 
     lines = actions.aggregate([basbousa_id, shokupan_id])
 
@@ -487,9 +500,8 @@ def test_aggregate_skips_optional_and_alternative_lines() -> None:
     with get_session() as session:
         coconut = Ingredient(name="desiccated coconut")
         milk = Ingredient(name="milk")
-        recipe = RecipeUrls(url="https://x/cake", name="Cake", data={})
-        session.add_all([coconut, milk, recipe])
-        session.flush()
+        session.add_all([coconut, milk])
+        recipe = add_recipe_row(session, "https://x/cake", "Cake")
         recipe_id = recipe.id
         session.add(
             RecipeIngredient(
@@ -546,9 +558,8 @@ def test_aggregate_skips_optional_and_alternative_lines() -> None:
 def test_aggregate_scales_by_servings() -> None:
     with get_session() as session:
         milk = Ingredient(name="milk")
-        recipe = RecipeUrls(url="https://x/1", name="X", data={})
-        session.add_all([milk, recipe])
-        session.flush()
+        session.add(milk)
+        recipe = add_recipe_row(session, "https://x/1", "X")
         recipe_id = recipe.id
         session.add(
             RecipeIngredient(
@@ -570,20 +581,20 @@ def test_aggregate_scales_by_servings() -> None:
 @pytest.mark.usefixtures("db_engine")
 def test_servings_parsed_from_yield_variants() -> None:
     """recipeYield is messy: "Makes 1 loaf" and plain 6."""
+    recipe_ids = []
     for url, data in (
         ("https://x/a", {"recipeYield": "Makes 1 loaf"}),
         ("https://x/b", {"recipeYield": 6}),
     ):
-        add_recipe(url)
-        actions.store_recipe_ingredients(url, data, BBC_GOOD_FOOD)
+        recipe_id = add_recipe(url)
+        recipe_ids.append(recipe_id)
+        store_lines(recipe_id, data)
 
     with get_session() as session:
         yields = {
-            recipe.url: recipe.servings
-            for recipe in session.scalars(select(RecipeUrls))
+            recipe.id: recipe.servings for recipe in session.scalars(select(Recipe))
         }
-    assert yields["https://x/a"] == 1
-    assert yields["https://x/b"] == 6
+    assert [yields[rid] for rid in recipe_ids] == [1, 6]
 
 
 @pytest.mark.usefixtures("db_engine")
@@ -593,10 +604,9 @@ def test_review_queue_catches_mangled_names() -> None:
     canonical ingredients."""
     recipe_id = add_recipe("https://x/cake")
 
-    actions.store_recipe_ingredients(
-        "https://x/cake",
+    store_lines(
+        recipe_id,
         {"recipeIngredient": ["200g good-quality candied orange and lemon peel"]},
-        BBC_GOOD_FOOD,
     )
 
     with get_session() as session:
@@ -616,10 +626,9 @@ def test_lost_conjunction_goes_to_review_queue() -> None:
     for review."""
     recipe_id = add_recipe("https://x/cake")
 
-    actions.store_recipe_ingredients(
-        "https://x/cake",
+    store_lines(
+        recipe_id,
         {"recipeIngredient": ["pink and yellow food colouring gels"]},
-        BBC_GOOD_FOOD,
     )
 
     with get_session() as session:
@@ -645,10 +654,9 @@ def test_seeded_alias_rescues_lost_conjunction() -> None:
         )
     recipe_id = add_recipe("https://x/cake")
 
-    actions.store_recipe_ingredients(
-        "https://x/cake",
+    store_lines(
+        recipe_id,
         {"recipeIngredient": ["pink and yellow food colouring gels"]},
-        BBC_GOOD_FOOD,
     )
 
     with get_session() as session:
@@ -804,14 +812,13 @@ def test_seeded_alias_rescues_mangled_name() -> None:
         seed_ingredient_data(session)
     recipe_id = add_recipe("https://x/cake")
 
-    actions.store_recipe_ingredients(
-        "https://x/cake",
+    store_lines(
+        recipe_id,
         {
             "recipeIngredient": [
                 "30g whole blanched almonds roughly chopped or flaked almonds"
             ]
         },
-        BBC_GOOD_FOOD,
     )
 
     with get_session() as session:
@@ -833,14 +840,13 @@ def test_line_override_fixes_wrong_merge() -> None:
     line override does, and the override matches the squashed line."""
     recipe_id = add_recipe("https://x/babka")
 
-    actions.store_recipe_ingredients(
-        "https://x/babka",
+    store_lines(
+        recipe_id,
         {
             "recipeIngredient": [
                 "70g  milk or dark chocolate roughly chopped (optional)"
             ]
         },
-        BBC_GOOD_FOOD,
     )
 
     with get_session() as session:
@@ -863,10 +869,9 @@ def test_quantity_level_or_alternative_kept() -> None:
     alternative row with its own quantity."""
     recipe_id = add_recipe("https://x/cake")
 
-    actions.store_recipe_ingredients(
-        "https://x/cake",
+    store_lines(
+        recipe_id,
         {"recipeIngredient": ["2 tsp vanilla or 1 tsp essential oil"]},
-        BBC_GOOD_FOOD,
     )
 
     with get_session() as session:
@@ -890,8 +895,8 @@ def test_nameless_or_remainders_not_stored() -> None:
     storing them would flood the review queue with nameless rows."""
     recipe_id = add_recipe("https://x/curry")
 
-    actions.store_recipe_ingredients(
-        "https://x/curry",
+    store_lines(
+        recipe_id,
         {
             "recipeIngredient": [
                 "2 large eggs (or 3 small)",
@@ -899,7 +904,6 @@ def test_nameless_or_remainders_not_stored() -> None:
                 "1 tbsp milk, or more if needed",
             ]
         },
-        BBC_GOOD_FOOD,
     )
 
     with get_session() as session:
@@ -918,12 +922,8 @@ def test_variant_recorded_and_keep_variants_splits() -> None:
         seed_ingredient_data(session)
     basbousa_id = add_recipe("https://x/basbousa")
     shokupan_id = add_recipe("https://x/shokupan")
-    actions.store_recipe_ingredients(
-        "https://x/basbousa", {"recipeIngredient": ["240ml warm milk"]}, BBC_GOOD_FOOD
-    )
-    actions.store_recipe_ingredients(
-        "https://x/shokupan", {"recipeIngredient": ["500ml whole milk"]}, BBC_GOOD_FOOD
-    )
+    store_lines(basbousa_id, {"recipeIngredient": ["240ml warm milk"]})
+    store_lines(shokupan_id, {"recipeIngredient": ["500ml whole milk"]})
 
     lines = actions.aggregate([basbousa_id, shokupan_id])
     assert len(lines) == 1
@@ -944,11 +944,7 @@ def test_aggregate_uses_range_upper_end() -> None:
     than over-buying it."""
     recipe_id = add_recipe("https://x/curry")
 
-    actions.store_recipe_ingredients(
-        "https://x/curry",
-        {"recipeIngredient": ["2-3 large onions, sliced"]},
-        BBC_GOOD_FOOD,
-    )
+    store_lines(recipe_id, {"recipeIngredient": ["2-3 large onions, sliced"]})
 
     lines = actions.aggregate([recipe_id])
 
@@ -962,9 +958,8 @@ def test_aggregate_uses_grams_when_every_line_has_them() -> None:
     of per-dimension sums ("1 egg" + "50 ml egg" -> ~101 g)."""
     with get_session() as session:
         egg = Ingredient(name="egg")
-        recipe = RecipeUrls(url="https://x/omelette", name="Omelette", data={})
-        session.add_all([egg, recipe])
-        session.flush()
+        session.add(egg)
+        recipe = add_recipe_row(session, "https://x/omelette", "Omelette")
         recipe_id = recipe.id
         session.add(
             RecipeIngredient(
@@ -1053,11 +1048,7 @@ def test_aggregate_real_cached_cordon_bleu() -> None:
         if "cordon" in str(case["name"]).lower()
     )
 
-    actions.store_recipe_ingredients(
-        "https://x/cordon-bleu",
-        {"recipeIngredient": case["lines"]},
-        BBC_GOOD_FOOD,
-    )
+    store_lines(recipe_id, {"recipeIngredient": case["lines"]})
 
     lines = actions.aggregate([recipe_id])
 

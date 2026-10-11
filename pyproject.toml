@@ -13,6 +13,7 @@ dependencies = [
     "ingredient-parser-nlp>=2.8.0",
     "numpy>=2.5.3",
     "openpyxl>=3.1.5",
+    "psycopg[binary]>=3.3.6",
     "pydantic>=2.5",
     "requests>=2.31",
     "sqlalchemy>=2.0.22",

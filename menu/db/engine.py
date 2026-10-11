@@ -5,6 +5,7 @@ the package: it is throwaway experiment storage, rebuilt from scratch
 whenever the schema changes.
 """
 
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -15,7 +16,14 @@ if TYPE_CHECKING:
 
 DB_PATH = Path(__file__).resolve().parents[2] / "database.db"
 
-engine = create_engine(f"sqlite:///{DB_PATH}")
+DEFAULT_DATABASE_URL = f"sqlite:///{DB_PATH}"
+
+
+def database_url() -> str:
+    """The configured database URL: env DATABASE_URL, else the default
+    SQLite file URL (still the default — the Postgres switch is a
+    separate decision)."""
+    return os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL)
 
 
 def _sqlite_pragmas(dbapi_connection: object, _record: object) -> None:
@@ -36,4 +44,15 @@ def configure_sqlite(target: Engine) -> None:
     event.listen(target, "connect", _sqlite_pragmas)
 
 
-configure_sqlite(engine)
+def make_engine(url: str | None = None) -> Engine:
+    """Build an engine for `url` (default: `database_url()`), wiring the
+    SQLite pragmas only when the URL's dialect is sqlite — a Postgres
+    connection would choke on them."""
+    resolved = url if url is not None else database_url()
+    engine = create_engine(resolved)
+    if engine.dialect.name == "sqlite":
+        configure_sqlite(engine)
+    return engine
+
+
+engine = make_engine(database_url())

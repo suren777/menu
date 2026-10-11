@@ -11,6 +11,7 @@ from menu.db.connection import get_session
 from menu.db.database import (
     FoodSource,
     Ingredient,
+    IngredientConversion,
     IngredientFoodRef,
     IngredientTerm,
     Page,
@@ -91,46 +92,63 @@ def add_term(
     return row
 
 
-def _egg() -> repository.IngredientModel:
-    return repository.IngredientModel(
-        id=1, name="egg", density_g_per_ml=None, unit_weight_g=50.0
-    )
-
-
-def _egg_portions() -> list[RefPortion]:
-    """The egg portion rows the FDC import stores: sizes plus the cup."""
+def _egg_conversions() -> list[IngredientConversion]:
+    """The egg's conversion rows: the seeded unit weight plus the
+    portion rows seeding derives from the FDC fixture (sizes plus the
+    cup). Ids are set so a returned conversion_id is checkable."""
     return [
-        RefPortion(
-            ref_food_id=1,
-            seq_num=1,
-            amount=1.0,
+        IngredientConversion(
+            id=1,
+            ingredient_id=1,
+            kind="unit_weight",
+            unit=None,
+            modifier=None,
+            grams=50.0,
+            origin="seed",
+        ),
+        IngredientConversion(
+            id=2,
+            ingredient_id=1,
+            kind="portion",
             unit="small",
             modifier="small",
-            gram_weight=38.0,
-        ),
-        RefPortion(
+            grams=38.0,
+            origin="fdc",
             ref_food_id=1,
-            seq_num=2,
-            amount=1.0,
+            ref_seq_num=1,
+        ),
+        IngredientConversion(
+            id=3,
+            ingredient_id=1,
+            kind="portion",
             unit="medium",
             modifier="medium",
-            gram_weight=44.0,
-        ),
-        RefPortion(
+            grams=44.0,
+            origin="fdc",
             ref_food_id=1,
-            seq_num=3,
-            amount=1.0,
+            ref_seq_num=2,
+        ),
+        IngredientConversion(
+            id=4,
+            ingredient_id=1,
+            kind="portion",
             unit="large",
             modifier="large",
-            gram_weight=50.0,
-        ),
-        RefPortion(
+            grams=50.0,
+            origin="fdc",
             ref_food_id=1,
-            seq_num=4,
-            amount=1.0,
+            ref_seq_num=3,
+        ),
+        IngredientConversion(
+            id=5,
+            ingredient_id=1,
+            kind="portion",
             unit="cup (4.86 large eggs)",
             modifier="cup (4.86 large eggs)",
-            gram_weight=243.0,
+            grams=243.0,
+            origin="fdc",
+            ref_food_id=1,
+            ref_seq_num=4,
         ),
     ]
 
@@ -138,20 +156,18 @@ def _egg_portions() -> list[RefPortion]:
 def test_to_grams_count_uses_size_matched_portion() -> None:
     """1 large egg -> 50 g, 2 medium eggs -> 88 g: the portion
     matching the line's size beats the seeded default."""
-    egg = _egg()
+    conversions = _egg_conversions()
     assert (
         actions.to_grams(
-            1.0, None, "count", "piece", None, None, "large", egg,
-            _egg_portions(), "fdc",
+            1.0, None, "count", "piece", None, None, "large", conversions
         )
-        == (50.0, None, "fdc")
+        == (50.0, None, "fdc", 4)
     )
     assert (
         actions.to_grams(
-            2.0, None, "count", "piece", None, None, "medium", egg,
-            _egg_portions(), "fdc",
+            2.0, None, "count", "piece", None, None, "medium", conversions
         )
-        == (88.0, None, "fdc")
+        == (88.0, None, "fdc", 3)
     )
 
 
@@ -159,10 +175,9 @@ def test_to_grams_count_falls_back_to_seed_weight() -> None:
     """No size: the seeded unit weight converts ("2 eggs" -> 100 g)."""
     assert (
         actions.to_grams(
-            2.0, None, "count", "piece", None, None, None, _egg(),
-            _egg_portions(), "fdc",
+            2.0, None, "count", "piece", None, None, None, _egg_conversions()
         )
-        == (100.0, None, "seed")
+        == (100.0, None, "seed", 1)
     )
 
 
@@ -170,126 +185,142 @@ def test_to_grams_volume_uses_unit_portion() -> None:
     """1 cup egg -> 243 g through the "cup (4.86 large eggs)" row."""
     assert (
         actions.to_grams(
-            1.0, None, "volume", "ml", "cup", None, None, _egg(),
-            _egg_portions(), "fdc",
+            1.0, None, "volume", "ml", "cup", None, None, _egg_conversions()
         )
-        == (243.0, None, "fdc")
+        == (243.0, None, "fdc", 5)
     )
 
 
-def test_to_grams_volume_seed_density_beats_implied() -> None:
+def test_to_grams_volume_seed_density_beats_derived() -> None:
     """A seed beats the reference: 100 ml of a 2.0 g/ml seed is
-    200 g even though the cup portion implies less."""
-    cup = RefPortion(
-        ref_food_id=2,
-        seq_num=1,
-        amount=1.0,
-        unit="cup",
-        modifier="cup",
-        gram_weight=200.0,
-    )
-    watery = repository.IngredientModel(
-        id=2, name="watery", density_g_per_ml=2.0, unit_weight_g=None
-    )
+    200 g, whatever the cup portion implies and whatever a derived
+    density row says."""
+    rows = [
+        IngredientConversion(
+            id=8,
+            ingredient_id=2,
+            kind="density",
+            unit=None,
+            modifier=None,
+            grams=2.0,
+            origin="seed",
+        ),
+        IngredientConversion(
+            id=9,
+            ingredient_id=2,
+            kind="density",
+            unit=None,
+            modifier=None,
+            grams=1.0,
+            origin="fdc",
+            ref_food_id=2,
+            ref_seq_num=1,
+        ),
+        IngredientConversion(
+            id=10,
+            ingredient_id=2,
+            kind="portion",
+            unit="cup",
+            modifier="cup",
+            grams=200.0,
+            origin="fdc",
+            ref_food_id=2,
+            ref_seq_num=2,
+        ),
+    ]
+    # The line's unit (ml) has no portion row, so the seeded density
+    # wins over the derived one and the cup row's implication.
     assert (
-        actions.to_grams(
-            100.0, None, "volume", "ml", "ml", None, None, watery, [cup], "fdc"
-        )
-        == (200.0, None, "seed")
+        actions.to_grams(100.0, None, "volume", "ml", "ml", None, None, rows)
+        == (200.0, None, "seed", 8)
     )
 
 
 def test_to_grams_volume_implied_density() -> None:
     """A pinch of salt converts through the density its teaspoon
-    portion implies."""
-    tsp = RefPortion(
-        ref_food_id=3,
-        seq_num=1,
-        amount=1.0,
+    portion row implies, recorded against that row."""
+    tsp = IngredientConversion(
+        id=7,
+        ingredient_id=3,
+        kind="portion",
         unit="tsp",
         modifier="tsp",
-        gram_weight=6.0,
-    )
-    salt = repository.IngredientModel(
-        id=3, name="salt", density_g_per_ml=None, unit_weight_g=None
+        grams=6.0,
+        origin="fdc",
+        ref_food_id=3,
+        ref_seq_num=1,
     )
     # "a pinch of salt" stores quantity 0.36 ml (the fixed amount
     # units._FIXED_AMOUNTS assigns a pinch), then converts via the
     # density the tsp portion implies.
-    grams, grams_max, source = actions.to_grams(
-        0.36, None, "volume", "ml", "pinch", None, None, salt, [tsp], "fdc"
+    grams, grams_max, source, conversion_id = actions.to_grams(
+        0.36, None, "volume", "ml", "pinch", None, None, [tsp]
     )
     assert grams == pytest.approx(0.36 * 6.0 / 4.928921610938, rel=1e-3)
     assert grams_max is None
     assert source == "fdc"
+    assert conversion_id == 7
 
 
 def test_to_grams_named_count_unit() -> None:
-    """2 sticks of butter convert through the stick portion."""
-    stick = RefPortion(
-        ref_food_id=4,
-        seq_num=1,
-        amount=1.0,
+    """2 sticks of butter convert through the stick row."""
+    stick = IngredientConversion(
+        id=6,
+        ingredient_id=4,
+        kind="portion",
         unit="stick",
         modifier="stick",
-        gram_weight=113.0,
-    )
-    butter = repository.IngredientModel(
-        id=4, name="butter", density_g_per_ml=0.96, unit_weight_g=None
+        grams=113.0,
+        origin="fdc",
+        ref_food_id=4,
+        ref_seq_num=1,
     )
     assert (
         actions.to_grams(
-            2.0, None, "count", "stick", "sticks", None, None, butter,
-            [stick], "fdc",
+            2.0, None, "count", "stick", "sticks", None, None, [stick]
         )
-        == (226.0, None, "fdc")
+        == (226.0, None, "fdc", 6)
     )
 
 
 def test_to_grams_never_guesses() -> None:
-    """No portion, no seed: grams stays NULL."""
-    garlic = repository.IngredientModel(
-        id=5, name="garlic", density_g_per_ml=None, unit_weight_g=None
-    )
+    """No conversion rows: grams stays NULL."""
     assert (
-        actions.to_grams(
-            2.0, None, "count", "piece", None, None, None, garlic, [], "fdc"
-        )
-        == (None, None, None)
+        actions.to_grams(2.0, None, "count", "piece", None, None, None, [])
+        == (None, None, None, None)
     )
 
 
 def test_to_grams_ranges_and_mass() -> None:
     """Ranges convert the upper end too; mass lines need no lookup."""
-    flour = repository.IngredientModel(
-        id=6, name="flour", density_g_per_ml=0.55, unit_weight_g=None
-    )
-    cup = RefPortion(
-        ref_food_id=7,
-        seq_num=1,
-        amount=1.0,
+    cup = IngredientConversion(
+        id=10,
+        ingredient_id=6,
+        kind="portion",
         unit="cup",
         modifier="cup",
-        gram_weight=125.0,
+        grams=125.0,
+        origin="fdc",
+        ref_food_id=7,
+        ref_seq_num=1,
     )
     assert (
         actions.to_grams(
-            2.0, 3.0, "volume", "ml", "cups", None, None, flour, [cup], "fdc"
+            2.0, 3.0, "volume", "ml", "cups", None, None, [cup]
         )
-        == (250.0, 375.0, "fdc")
+        == (250.0, 375.0, "fdc", 10)
     )
     assert (
-        actions.to_grams(
-            100.0, 120.0, "mass", "g", "g", None, None, flour, [], "fdc"
-        )
-        == (100.0, 120.0, None)
+        actions.to_grams(100.0, 120.0, "mass", "g", "g", None, None, [])
+        == (100.0, 120.0, None, None)
     )
 
 
 @pytest.mark.usefixtures("db_engine")
 def test_store_writes_grams_from_confirmed_ref() -> None:
-    """Storing a line converts it to grams through the ingredient's
-    confirmed conversion reference."""
+    """Storing a line converts it to grams through the portion rows
+    the seed derived from the ingredient's confirmed conversion
+    reference."""
     recipe_id = add_recipe("https://x/cake")
     with get_session() as session:
         source = FoodSource(
@@ -317,19 +348,8 @@ def test_store_writes_grams_from_confirmed_ref() -> None:
                 gram_weight=44.0,
             )
         )
-        egg = Ingredient(name="egg")
-        session.add(egg)
-        session.flush()
-        session.add(
-            IngredientFoodRef(
-                ingredient_id=egg.id,
-                ref_food_id=food.id,
-                source_id=food.source_id,
-                role="conversion",
-                status="confirmed",
-                origin="seed",
-            )
-        )
+    with get_session() as session:
+        seed_ingredient_data(session)
 
     store_lines(recipe_id, {"recipeIngredient": ["2 medium eggs"]})
     with get_session() as session:
@@ -340,6 +360,176 @@ def test_store_writes_grams_from_confirmed_ref() -> None:
         assert line.grams == 88.0
         assert line.grams_max is None
         assert line.grams_source == "fdc"
+        conversion = session.get(IngredientConversion, line.conversion_id)
+        assert conversion is not None
+        assert (conversion.kind, conversion.unit, conversion.origin) == (
+            "portion",
+            "medium",
+            "fdc",
+        )
+
+
+@pytest.mark.usefixtures("db_engine")
+def test_size_specific_eggs_use_their_own_row() -> None:
+    """All ref portion sizes become portion rows: "2 large eggs"
+    converts through the large row (not the seeded default weight)
+    and names it."""
+    recipe_id = add_recipe("https://x/omelette")
+    with get_session() as session:
+        source = FoodSource(
+            name="fdc", version="test", licence="public domain", citation="test"
+        )
+        session.add(source)
+        session.flush()
+        food = RefFood(
+            source_id=source.id,
+            source_food_id="171287",
+            description="Egg, whole, raw, fresh",
+        )
+        session.add(food)
+        session.flush()
+        for seq_num, (unit, grams) in enumerate(
+            (("small", 38.0), ("medium", 44.0), ("large", 50.0)), start=1
+        ):
+            session.add(
+                RefPortion(
+                    ref_food_id=food.id,
+                    seq_num=seq_num,
+                    amount=1.0,
+                    unit=unit,
+                    modifier=unit,
+                    gram_weight=grams,
+                )
+            )
+    with get_session() as session:
+        seed_ingredient_data(session)
+
+    store_lines(recipe_id, {"recipeIngredient": ["2 large eggs"]})
+
+    with get_session() as session:
+        line = session.scalars(
+            select(RecipeIngredient).where(RecipeIngredient.recipe_id == recipe_id)
+        ).one()
+        assert line.grams == 100.0
+        conversion = session.get(IngredientConversion, line.conversion_id)
+        assert conversion is not None
+        assert (conversion.kind, conversion.unit, conversion.origin) == (
+            "portion",
+            "large",
+            "fdc",
+        )
+        assert conversion.grams == 50.0
+
+
+@pytest.mark.usefixtures("db_engine")
+def test_seeded_density_beats_the_derived_one() -> None:
+    """Both rows exist side by side (seed 1.03, the cup portion's
+    implication); the line converts through the seed."""
+    recipe_id = add_recipe("https://x/1")
+    with get_session() as session:
+        source = FoodSource(
+            name="fdc", version="test", licence="public domain", citation="test"
+        )
+        session.add(source)
+        session.flush()
+        food = RefFood(
+            source_id=source.id,
+            source_food_id="2705385",
+            description="Milk, whole",
+        )
+        session.add(food)
+        session.flush()
+        session.add(
+            RefPortion(
+                ref_food_id=food.id,
+                seq_num=1,
+                amount=1.0,
+                unit="cup",
+                modifier="cup",
+                gram_weight=244.0,
+            )
+        )
+    with get_session() as session:
+        seed_ingredient_data(session)
+
+    store_lines(recipe_id, {"recipeIngredient": ["100ml milk"]})
+
+    with get_session() as session:
+        line = session.scalars(
+            select(RecipeIngredient).where(RecipeIngredient.recipe_id == recipe_id)
+        ).one()
+        assert line.grams == pytest.approx(100 * 1.03)
+        assert line.grams_source == "seed"
+        conversion = session.get(IngredientConversion, line.conversion_id)
+        assert conversion is not None
+        assert (conversion.kind, conversion.origin) == ("density", "seed")
+        derived = session.scalars(
+            select(IngredientConversion).where(
+                IngredientConversion.kind == "density",
+                IngredientConversion.origin == "fdc",
+            )
+        ).one()
+        assert derived.grams == pytest.approx(244.0 / 236.58823648)
+
+
+@pytest.mark.usefixtures("db_engine")
+def test_mass_lines_have_no_conversion() -> None:
+    """Mass is already grams: no lookup happened, so the line names
+    no conversion row."""
+    recipe_id = add_recipe("https://x/1")
+    store_lines(recipe_id, {"recipeIngredient": ["100g butter"]})
+
+    with get_session() as session:
+        line = session.scalars(
+            select(RecipeIngredient).where(RecipeIngredient.recipe_id == recipe_id)
+        ).one()
+        assert line.grams == 100.0
+        assert line.grams_source is None
+        assert line.conversion_id is None
+
+
+@pytest.mark.usefixtures("db_engine")
+def test_removing_a_density_seed_regrams_the_line(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Removing a DENSITIES_G_PER_ML entry: re-seeding deletes its
+    row and re-resolve regrams the line — to NULL, milk having no
+    reference to fall back on here."""
+    with get_session() as session:
+        seed_ingredient_data(session)
+    recipe_id = add_recipe("https://x/1")
+    store_lines(recipe_id, {"recipeIngredient": ["240ml milk"]})
+    with get_session() as session:
+        line = session.scalars(select(RecipeIngredient)).one()
+        assert line.grams == pytest.approx(240 * 1.03)
+        assert line.conversion_id is not None
+
+    monkeypatch.setattr(
+        seed_module,
+        "DENSITIES_G_PER_ML",
+        {
+            name: value
+            for name, value in seed_module.DENSITIES_G_PER_ML.items()
+            if name != "milk"
+        },
+    )
+    actions.re_resolve()
+
+    with get_session() as session:
+        milk_id = session.scalar(
+            select(Ingredient.id).where(Ingredient.name == "milk")
+        )
+        assert milk_id is not None
+        rows = session.scalars(
+            select(IngredientConversion).where(
+                IngredientConversion.ingredient_id == milk_id
+            )
+        ).all()
+        assert rows == []
+        line = session.scalars(select(RecipeIngredient)).one()
+        assert line.grams is None
+        assert line.grams_source is None
+        assert line.conversion_id is None
 
 
 @pytest.mark.usefixtures("db_engine")
@@ -457,10 +647,20 @@ def test_bad_line_stored_as_failed_not_dropped(
 def test_aggregate_folds_volume_into_mass_with_density() -> None:
     """Cordon bleu: 100g flour + 2 tbsp flour -> one flour line in grams."""
     with get_session() as session:
-        flour = Ingredient(name="flour", density_g_per_ml=0.6)
+        flour = Ingredient(name="flour")
         emmental = Ingredient(name="emmental")
         session.add_all([flour, emmental])
         session.flush()
+        session.add(
+            IngredientConversion(
+                ingredient_id=flour.id,
+                kind="density",
+                unit=None,
+                modifier=None,
+                grams=0.6,
+                origin="seed",
+            )
+        )
         flour_term = add_term(session, "flour", flour)
         emmental_term = add_term(session, "emmental", emmental)
         recipe = add_recipe_row(session, "https://x/cordon-bleu", "Cordon bleu")
@@ -1310,17 +1510,18 @@ def test_servings_from_yield(value: object, expected: int) -> None:
     assert actions._servings_from_yield(value) == expected
 
 
-def test_conversion_portions_prefer_fdc_over_cnf(session: Session) -> None:
+def test_seeding_derives_from_the_best_source_only(session: Session) -> None:
     """seed > FDC > CNF: with confirmed conversion references in both,
-    lines convert through FDC's portions (not alphabetical order)."""
-    egg = Ingredient(name="egg")
-    session.add(egg)
+    the derived conversion rows come from FDC's portions only, never
+    mixed with another source's."""
+    quail = Ingredient(name="quail egg")
+    session.add(quail)
     session.flush()
     for name, weight in (("cnf", 60.0), ("fdc", 50.0)):
         source = FoodSource(name=name, version="test", licence="test", citation="test")
         session.add(source)
         session.flush()
-        food = RefFood(source_id=source.id, source_food_id="1", description="Egg")
+        food = RefFood(source_id=source.id, source_food_id="1", description="Quail")
         session.add(food)
         session.flush()
         session.add_all(
@@ -1334,7 +1535,7 @@ def test_conversion_portions_prefer_fdc_over_cnf(session: Session) -> None:
                     gram_weight=weight,
                 ),
                 IngredientFoodRef(
-                    ingredient_id=egg.id,
+                    ingredient_id=quail.id,
                     ref_food_id=food.id,
                     source_id=food.source_id,
                     role="conversion",
@@ -1345,10 +1546,18 @@ def test_conversion_portions_prefer_fdc_over_cnf(session: Session) -> None:
         )
     session.flush()
 
-    source_name, portions = actions._conversion_portions(egg.id, session)
+    seed_ingredient_data(session)
 
-    assert source_name == "fdc"
-    assert [portion.gram_weight for portion in portions] == [50.0]
+    rows = session.scalars(
+        select(IngredientConversion).where(
+            IngredientConversion.ingredient_id == quail.id
+        )
+    ).all()
+    # "large" is neither a medium portion (no unit_weight row) nor
+    # volumetric (no density row): the single FDC portion row is all.
+    assert [(row.origin, row.kind, row.unit, row.grams) for row in rows] == [
+        ("fdc", "portion", "large", 50.0)
+    ]
 
 
 @pytest.mark.usefixtures("db_engine")

@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from menu.db.database import (
     FoodSource,
     Ingredient,
+    IngredientConversion,
     IngredientFoodRef,
     IngredientTerm,
     Page,
@@ -365,3 +366,94 @@ def test_deleting_a_line_cascades_to_alternatives(session: Session) -> None:
     session.delete(primary)
     session.flush()
     assert session.scalars(select(RecipeIngredient)).all() == []
+
+
+def _add_ingredient(session: Session) -> Ingredient:
+    ingredient = Ingredient(name="egg")
+    session.add(ingredient)
+    session.flush()
+    return ingredient
+
+
+def test_duplicate_conversion_key_is_refused(session: Session) -> None:
+    """The expression unique index folds NULL unit/modifier into the
+    key: one factor per (ingredient, origin, kind, unit, modifier)."""
+    ingredient = _add_ingredient(session)
+    session.add(
+        IngredientConversion(
+            ingredient_id=ingredient.id,
+            kind="unit_weight",
+            unit=None,
+            modifier=None,
+            grams=50.0,
+            origin="seed",
+        )
+    )
+    session.flush()
+    session.add(
+        IngredientConversion(
+            ingredient_id=ingredient.id,
+            kind="unit_weight",
+            unit=None,
+            modifier=None,
+            grams=52.0,
+            origin="seed",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_portion_without_unit_is_refused(session: Session) -> None:
+    """A portion row weighs one named unit; without the unit it says
+    nothing."""
+    ingredient = _add_ingredient(session)
+    session.add(
+        IngredientConversion(
+            ingredient_id=ingredient.id,
+            kind="portion",
+            unit=None,
+            modifier=None,
+            grams=50.0,
+            origin="fdc",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_non_positive_grams_is_refused(session: Session) -> None:
+    """A zero-weight conversion would zero a line's grams."""
+    ingredient = _add_ingredient(session)
+    session.add(
+        IngredientConversion(
+            ingredient_id=ingredient.id,
+            kind="unit_weight",
+            unit=None,
+            modifier=None,
+            grams=0.0,
+            origin="seed",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_deleting_an_ingredient_cascades_its_conversions(session: Session) -> None:
+    """A conversion exists only through its ingredient (ondelete
+    CASCADE)."""
+    ingredient = _add_ingredient(session)
+    session.add(
+        IngredientConversion(
+            ingredient_id=ingredient.id,
+            kind="unit_weight",
+            unit=None,
+            modifier=None,
+            grams=50.0,
+            origin="seed",
+        )
+    )
+    session.flush()
+    session.delete(ingredient)
+    session.flush()
+    assert session.scalars(select(IngredientConversion)).all() == []

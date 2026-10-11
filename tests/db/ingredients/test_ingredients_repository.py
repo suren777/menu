@@ -29,14 +29,14 @@ def _add_recipe(session: Session) -> Recipe:
 
 
 def test_find_ingredient_by_name(session: Session) -> None:
-    session.add(Ingredient(name="milk", density_g_per_ml=1.03))
+    session.add(Ingredient(name="milk"))
     session.flush()
 
     found = repository.find_ingredient_by_name("milk", session)
     missing = repository.find_ingredient_by_name("butter", session)
 
     assert found is not None
-    assert (found.name, found.density_g_per_ml) == ("milk", 1.03)
+    assert found.name == "milk"
     assert missing is None
 
 

@@ -11,19 +11,15 @@ from menu.db.connection import get_session
 from menu.db.database import (
     FoodSource,
     Ingredient,
+    IngredientConversion,
     IngredientFoodRef,
     IngredientTerm,
     Recipe,
     RecipeIngredient,
     RefFood,
-    RefPortion,
 )
 from menu.db.ingredients import repository, seed
-from menu.db.ingredients.seed import (
-    LINE_OVERRIDES,
-    conversion_rank,
-    seed_ingredient_data,
-)
+from menu.db.ingredients.seed import LINE_OVERRIDES, seed_ingredient_data
 from menu.ingest.ingredients import (
     canonical_name,
     line_needs_review,
@@ -43,7 +39,6 @@ from menu.ingest.units import (
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
-    from menu.db.ingredients.repository import IngredientModel
     from menu.ingest.ingredients import ParsedLine
     from menu.ingest.registry import SiteConfig
 
@@ -130,8 +125,9 @@ def store_recipe_ingredients(
         ingredient_id = repository.effective_ingredient_id(needs_review, term)
         grams = grams_max = None
         grams_source = None
+        conversion_id = None
         if ingredient_id is not None:
-            grams, grams_max, grams_source = _line_grams(
+            grams, grams_max, grams_source, conversion_id = _line_grams(
                 parsed.quantity,
                 parsed.quantity_max,
                 parsed.dimension,
@@ -162,6 +158,7 @@ def store_recipe_ingredients(
             grams=grams,
             grams_max=grams_max,
             grams_source=grams_source,
+            conversion_id=conversion_id,
         )
         session.add(line)
         session.flush()  # the row's id is needed by the alternative rows
@@ -313,23 +310,26 @@ _UNIT_ALIASES = {
 }
 
 
-def _portion_for(
-    portions: list[RefPortion], unit: str | None, prefer: str | None = None
-) -> RefPortion | None:
-    """The portion spoken as `unit` ("tbsp", "medium", "stick").
+def _portion_row(
+    conversions: list[IngredientConversion],
+    unit: str | None,
+    prefer: str | None = None,
+) -> IngredientConversion | None:
+    """The `portion` row spoken as `unit` ("tbsp", "medium", "stick").
 
     Egg's cup row is "cup (4.86 large eggs)", so a unit followed by a
     parenthetical counts as the unit too. When `prefer` is given (the
-    line's preparation or size), portions whose modifier says so come
+    line's preparation or size), rows whose modifier says so come
     first.
     """
     if unit is None:
         return None
     matches = [
-        p
-        for p in portions
-        if p.unit is not None
-        and (p.unit == unit or p.unit.startswith(f"{unit} ("))
+        row
+        for row in conversions
+        if row.kind == "portion"
+        and row.unit is not None
+        and (row.unit == unit or row.unit.startswith(f"{unit} ("))
     ]
     if prefer is not None:
         for candidate in matches:
@@ -338,19 +338,30 @@ def _portion_for(
     return matches[0] if matches else None
 
 
+def _factor_row(
+    conversions: list[IngredientConversion], kind: str
+) -> IngredientConversion | None:
+    """The ingredient's density or unit-weight row, seed rows before
+    derived ones."""
+    for row in sorted(conversions, key=lambda r: r.origin != "seed"):
+        if row.kind == kind:
+            return row
+    return None
+
+
 def _portion_density(
-    portions: list[RefPortion], prefer: str | None
-) -> float | None:
-    """g/ml implied by a volumetric portion: salt's "tsp = 6 g" row
-    is 1.22 g/ml, so "a pinch" converts. Preparation-matched portions
-    come first."""
-    for portion in sorted(portions, key=lambda p: p.modifier != prefer):
-        if portion.unit is None or not portion.amount:
+    conversions: list[IngredientConversion], prefer: str | None
+) -> tuple[float, IngredientConversion] | None:
+    """(g/ml, portion row) implied by a volumetric portion: salt's
+    "tsp = 6 g" row is 1.22 g/ml, so "a pinch" converts.
+    Preparation-matched rows come first."""
+    for row in sorted(conversions, key=lambda r: r.modifier != prefer):
+        if row.kind != "portion" or row.unit is None:
             continue
-        ml = unit_ml(singular(portion.unit))
+        ml = unit_ml(singular(row.unit))
         if ml is None:
             continue
-        return portion.gram_weight / (portion.amount * ml)
+        return row.grams / ml, row
     return None
 
 
@@ -362,103 +373,104 @@ def to_grams(
     original_unit: str | None,
     preparation: str | None,
     size: str | None,
-    ingredient: repository.IngredientModel,
-    portions: list[RefPortion],
-    source: str,
-) -> tuple[float | None, float | None, str | None]:
-    """(grams, grams_max, provenance) for one stored line.
+    conversions: list[IngredientConversion],
+) -> tuple[float | None, float | None, str | None, int | None]:
+    """(grams, grams_max, provenance, conversion row id) for one line.
 
-    Precedence is seed > reference portion > NULL — a conversion is
-    never guessed:
+    Precedence over the ingredient's conversion rows, seed rows
+    before derived ones — a conversion is never guessed:
 
-    - mass is already grams (provenance NULL: no lookup happened).
-    - volume converts through the portion for the line's unit ("1
-      cup egg" -> its 243 g row), preferring a modifier that matches
-      the line's preparation; else the seeded density; else the
-      density a volumetric portion implies (salt's "tsp = 6 g").
-    - count converts through the portion matching the line's size
-      ("medium" egg -> 44 g); else the seeded unit weight; else the
-      medium portion. Named count units ("2 sticks butter") convert
-      through a portion with that name, or the seeded weight.
+    - mass is already grams (no lookup: provenance and row NULL).
+    - volume converts through the portion row for the line's unit
+      ("1 cup egg" -> its 243 g row), preferring a modifier that
+      matches the line's preparation; else the seeded density; else a
+      derived one; else the density a volumetric portion row implies
+      (salt's "tsp = 6 g"), recorded against that row.
+    - count converts through the portion row matching the line's size
+      ("large" egg -> the large row) or named count unit ("2 sticks
+      butter" -> the stick row); else the seeded unit weight; else a
+      derived one; else the "medium" portion row.
     """
     if quantity is None:
-        return None, None, None
+        return None, None, None, None
     if dimension == MASS:
-        return quantity, quantity_max, None
+        return quantity, quantity_max, None, None
     if dimension == VOLUME:
         name = singular(_UNIT_ALIASES.get(original_unit or "", original_unit or ""))
-        portion = _portion_for(portions, name, preparation)
-        if portion is not None and portion.amount:
-            factor = portion.gram_weight / portion.amount
-            grams_source = source
-        elif ingredient.density_g_per_ml is not None:
-            factor = ingredient.density_g_per_ml
-            grams_source = "seed"
+        portion = _portion_row(conversions, name, preparation)
+        if portion is not None:
+            factor, conversion_id, origin = (
+                portion.grams,
+                portion.id,
+                portion.origin,
+            )
         else:
-            implied = _portion_density(portions, preparation)
-            if implied is None:
-                return None, None, None
-            factor = implied
-            grams_source = source
+            density = _factor_row(conversions, "density")
+            if density is not None:
+                factor, conversion_id, origin = (
+                    density.grams,
+                    density.id,
+                    density.origin,
+                )
+            else:
+                implied = _portion_density(conversions, preparation)
+                if implied is None:
+                    return None, None, None, None
+                factor, row = implied
+                conversion_id, origin = row.id, row.origin
         grams_max = quantity_max * factor if quantity_max is not None else None
-        return quantity * factor, grams_max, grams_source
+        return quantity * factor, grams_max, origin, conversion_id
     if dimension == COUNT:
-        if base_unit != "piece":
-            # Named count units convert through a portion with that
-            # name ("stick", "slice") or the seeded weight.
-            portion = _portion_for(portions, base_unit)
-            source_name = source
-            weight = (
-                portion.gram_weight / portion.amount
-                if portion is not None and portion.amount
-                else None
+        # Named count units convert through a portion with that name
+        # ("stick", "slice"); bare pieces through the size's row.
+        if base_unit == "piece":
+            portion = _portion_row(conversions, size) if size is not None else None
+        else:
+            portion = _portion_row(conversions, base_unit)
+        if portion is not None:
+            weight, conversion_id, origin = (
+                portion.grams,
+                portion.id,
+                portion.origin,
             )
         else:
-            portion = _portion_for(portions, size) if size is not None else None
-            source_name = source
-            weight = (
-                portion.gram_weight / portion.amount
-                if portion is not None and portion.amount
-                else None
-            )
-        if weight is None and ingredient.unit_weight_g is not None:
-            weight = ingredient.unit_weight_g
-            source_name = "seed"
-        if weight is None and base_unit == "piece":
-            medium = _portion_for(portions, "medium")
-            if medium is not None and medium.amount:
-                weight = medium.gram_weight / medium.amount
-        if weight is None:
-            return None, None, None
+            unit_weight = _factor_row(conversions, "unit_weight")
+            if unit_weight is not None:
+                weight, conversion_id, origin = (
+                    unit_weight.grams,
+                    unit_weight.id,
+                    unit_weight.origin,
+                )
+            elif base_unit == "piece":
+                medium = _portion_row(conversions, "medium")
+                if medium is None:
+                    return None, None, None, None
+                weight, conversion_id, origin = (
+                    medium.grams,
+                    medium.id,
+                    medium.origin,
+                )
+            else:
+                return None, None, None, None
         grams_max = quantity_max * weight if quantity_max is not None else None
-        return quantity * weight, grams_max, source_name
-    return None, None, None
+        return quantity * weight, grams_max, origin, conversion_id
+    return None, None, None, None
 
 
-def _conversion_portions(
+def _ingredient_conversions(
     ingredient_id: int, session: Session
-) -> tuple[str, list[RefPortion]]:
-    """Portions of the ingredient's confirmed conversion reference,
-    with the source's name for grams provenance. Only confirmed
-    references feed conversion — candidates and rejected rows never
-    do."""
-    rows = session.execute(
-        select(FoodSource.name, RefPortion)
-        .join(RefFood, RefFood.source_id == FoodSource.id)
-        .join(IngredientFoodRef, IngredientFoodRef.ref_food_id == RefFood.id)
-        .join(RefPortion, RefPortion.ref_food_id == RefFood.id)
-        .where(
-            IngredientFoodRef.ingredient_id == ingredient_id,
-            IngredientFoodRef.role == "conversion",
-            IngredientFoodRef.status == "confirmed",
+) -> list[IngredientConversion]:
+    """All of the ingredient's conversion rows, created by seeding:
+    the hand seeds and the confirmed conversion reference's portions
+    side by side. Only confirmed references feed the derived rows —
+    candidates and rejected ones never do."""
+    return list(
+        session.scalars(
+            select(IngredientConversion).where(
+                IngredientConversion.ingredient_id == ingredient_id
+            )
         )
-    ).all()
-    by_source: dict[str, list[RefPortion]] = {}
-    for source_name, portion in rows:
-        by_source.setdefault(source_name, []).append(portion)
-    for source_name in sorted(by_source, key=conversion_rank):
-        return source_name, by_source[source_name]
-    return "", []
+    )
 
 
 def _line_grams(
@@ -471,13 +483,9 @@ def _line_grams(
     size: str | None,
     ingredient_id: int,
     session: Session,
-) -> tuple[float | None, float | None, str | None]:
-    """Grams for a line, from the columns the DB stores — so a
+) -> tuple[float | None, float | None, str | None, int | None]:
+    """Grams for a line, from the ingredient's conversion rows — so a
     re-resolve can re-run the conversion without the parser."""
-    record = session.get(Ingredient, ingredient_id)
-    if record is None:  # pragma: no cover - resolved just above
-        return None, None, None
-    source, portions = _conversion_portions(ingredient_id, session)
     return to_grams(
         quantity,
         quantity_max,
@@ -486,9 +494,7 @@ def _line_grams(
         original_unit,
         preparation,
         size,
-        repository.to_model(record),
-        portions,
-        source,
+        _ingredient_conversions(ingredient_id, session),
     )
 
 
@@ -756,46 +762,49 @@ def re_resolve() -> tuple[int, int, int]:
     transaction, with no parser: a seed change reaches every line by
     re-pointing its term. Every line's grams are recomputed from the
     stored columns — a seed change can move grams without moving the
-    ingredient (a density, a confirmed conversion reference) — with
-    the conversion inputs read once per ingredient. Orphans are pruned
-    last. Returns (terms changed, lines regrammed, concepts pruned)."""
+    ingredient (a conversion row, a confirmed conversion reference) —
+    with the conversion rows read once per ingredient. Orphans are
+    pruned last. Returns (terms changed, lines regrammed, concepts
+    pruned)."""
     with get_session() as session:
         seed_ingredient_data(session)
         terms_changed = _recompute_terms(session)
         session.flush()
-        inputs: dict[int, tuple[IngredientModel, str, list[RefPortion]] | None] = {}
+        inputs: dict[int, list[IngredientConversion]] = {}
         regrammed = 0
         for line, term in session.execute(repository.lines_with_terms_select()):
             effective = repository.effective_ingredient_id(line.needs_review, term)
-            grams: tuple[float | None, float | None, str | None] = (None, None, None)
+            grams: tuple[float | None, float | None, str | None, int | None] = (
+                None,
+                None,
+                None,
+                None,
+            )
             if effective is not None:
                 if effective not in inputs:
-                    record = session.get(Ingredient, effective)
-                    inputs[effective] = (
-                        None
-                        if record is None
-                        else (
-                            repository.to_model(record),
-                            *_conversion_portions(effective, session),
-                        )
-                    )
-                cached = inputs[effective]
-                if cached is not None:
-                    model, source, portions = cached
-                    grams = to_grams(
-                        line.quantity,
-                        line.quantity_max,
-                        line.dimension,
-                        line.base_unit,
-                        line.original_unit,
-                        line.preparation,
-                        line.size,
-                        model,
-                        portions,
-                        source,
-                    )
-            if grams != (line.grams, line.grams_max, line.grams_source):
-                line.grams, line.grams_max, line.grams_source = grams
+                    inputs[effective] = _ingredient_conversions(effective, session)
+                grams = to_grams(
+                    line.quantity,
+                    line.quantity_max,
+                    line.dimension,
+                    line.base_unit,
+                    line.original_unit,
+                    line.preparation,
+                    line.size,
+                    inputs[effective],
+                )
+            if grams != (
+                line.grams,
+                line.grams_max,
+                line.grams_source,
+                line.conversion_id,
+            ):
+                (
+                    line.grams,
+                    line.grams_max,
+                    line.grams_source,
+                    line.conversion_id,
+                ) = grams
                 regrammed += 1
         pruned = prune_orphan_ingredients(session)
     return terms_changed, regrammed, pruned
@@ -846,6 +855,15 @@ def aggregate(
         ingredients = {
             ingredient.id: repository.to_model(ingredient)
             for ingredient in session.scalars(select(Ingredient))
+        }
+        conversions: dict[int, list[IngredientConversion]] = {}
+        for conversion in session.scalars(select(IngredientConversion)):
+            conversions.setdefault(conversion.ingredient_id, []).append(conversion)
+        # Inside the session like every other read: the commit on exit
+        # expires the ORM instances.
+        factors = {
+            ingredient_id: repository.conversion_factors(rows)
+            for ingredient_id, rows in conversions.items()
         }
 
     shopping: list[ShoppingLine] = []
@@ -920,23 +938,16 @@ def aggregate(
 
         mass = sums.get(("mass", "g"))
         volume = sums.get(("volume", "ml"))
-        if (
-            mass is not None
-            and volume is not None
-            and ingredient.density_g_per_ml is not None
-        ):
-            sums[("mass", "g")] = mass + volume_to_mass(
-                volume, ingredient.density_g_per_ml
-            )
+        density, unit_weight = factors.get(ingredient.id, (None, None))
+        if mass is not None and volume is not None and density is not None:
+            sums[("mass", "g")] = mass + volume_to_mass(volume, density)
             del sums[("volume", "ml")]
         if (
             ("count", "piece") in sums
             and ("mass", "g") in sums
-            and ingredient.unit_weight_g is not None
+            and unit_weight is not None
         ):
-            sums[("mass", "g")] += count_to_mass(
-                sums[("count", "piece")], ingredient.unit_weight_g
-            )
+            sums[("mass", "g")] += count_to_mass(sums[("count", "piece")], unit_weight)
             del sums[("count", "piece")]
 
         for (dimension, base_unit), total in sorted(sums.items()):

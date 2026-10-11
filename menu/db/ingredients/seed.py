@@ -22,6 +22,7 @@ from sqlalchemy import select
 from menu.db.database import (
     FoodSource,
     Ingredient,
+    IngredientConversion,
     IngredientFoodRef,
     IngredientTerm,
     RefFood,
@@ -301,6 +302,50 @@ def _seed_term(
         existing.resolution = "seed"
 
 
+def _upsert_conversion(
+    ingredient_id: int,
+    kind: str,
+    unit: str | None,
+    modifier: str | None,
+    grams: float,
+    origin: str,
+    session: Session,
+    *,
+    ref_food_id: int | None = None,
+    ref_seq_num: int | None = None,
+) -> tuple[int, str, str, str | None, str | None]:
+    """Upsert one conversion row by its unique key — re-seeding keeps
+    ids stable, so lines can keep pointing at them — and return that
+    key, for the stale-row sweep at the end of seeding."""
+    row = session.scalar(
+        select(IngredientConversion).where(
+            IngredientConversion.ingredient_id == ingredient_id,
+            IngredientConversion.kind == kind,
+            IngredientConversion.origin == origin,
+            IngredientConversion.unit == unit,
+            IngredientConversion.modifier == modifier,
+        )
+    )
+    if row is None:
+        session.add(
+            IngredientConversion(
+                ingredient_id=ingredient_id,
+                kind=kind,
+                unit=unit,
+                modifier=modifier,
+                grams=grams,
+                origin=origin,
+                ref_food_id=ref_food_id,
+                ref_seq_num=ref_seq_num,
+            )
+        )
+    else:
+        row.grams = grams
+        row.ref_food_id = ref_food_id
+        row.ref_seq_num = ref_seq_num
+    return (ingredient_id, origin, kind, unit, modifier)
+
+
 def seed_ingredient_data(session: Session) -> None:
     """Create the seed rows; safe to rerun."""
     for alias, canonical, variant in ALIASES:
@@ -325,17 +370,30 @@ def seed_ingredient_data(session: Session) -> None:
             existing.variant = None
             existing.resolution = "not_food"
 
+    # Conversion factors live on ingredient_conversions rows; the set
+    # collects every key this run writes, so the sweep at the end can
+    # delete the rows nothing produced any more.
+    produced: set[tuple[int, str, str, str | None, str | None]] = set()
+
     # Density and unit-weight ingredients are created even when
     # nothing points at them yet: caster sugar is no alias target, so
     # a fresh crawl would otherwise meet it before the next startup
     # and miss its density for a run.
     for name, density in DENSITIES_G_PER_ML.items():
         ingredient = _canonical_ingredient(name, session)
-        ingredient.density_g_per_ml = density
+        produced.add(
+            _upsert_conversion(
+                ingredient.id, "density", None, None, density, "seed", session
+            )
+        )
 
     for name, weight in UNIT_WEIGHTS_G.items():
         ingredient = _canonical_ingredient(name, session)
-        ingredient.unit_weight_g = weight
+        produced.add(
+            _upsert_conversion(
+                ingredient.id, "unit_weight", None, None, weight, "seed", session
+            )
+        )
 
     # Reference-food mappings are hand-reviewed (the --ref-review
     # report shows what is left): only confirmed mappings feed
@@ -449,14 +507,17 @@ def seed_ingredient_data(session: Session) -> None:
         else:
             ref_row.status = "rejected"
 
-    # Derive density and unit weight from the confirmed conversion
-    # reference's portions when no seed override exists: the seeded
-    # values above are the curated layer, the reference fills the
-    # rest. Only size portions ("medium") imply a unit weight and
-    # volumetric portions (tsp, tbsp, cup) a density — a "pat" of
-    # butter implies nothing general.
+    # Conversion rows from the confirmed conversion reference's
+    # portions: every size and named unit becomes a `portion` row, so
+    # a line converts through its own size ("large" egg -> 50 g)
+    # instead of the one factor the old ingredient columns could
+    # hold. The medium portion also yields the unit_weight row and
+    # the first volumetric one (by seq_num) the density row — the
+    # same two factors the old derivation wrote. One source's
+    # portions only, so weights never mix sources; seeded rows win
+    # over these at read time.
     rows = session.execute(
-        select(Ingredient, FoodSource.name, RefPortion)
+        select(Ingredient.id, FoodSource.name, RefPortion)
         .join(IngredientFoodRef, IngredientFoodRef.ingredient_id == Ingredient.id)
         .join(RefFood, RefFood.id == IngredientFoodRef.ref_food_id)
         .join(FoodSource, FoodSource.id == RefFood.source_id)
@@ -466,34 +527,83 @@ def seed_ingredient_data(session: Session) -> None:
             IngredientFoodRef.status == "confirmed",
         )
     ).all()
-    by_ingredient: dict[int, tuple[Ingredient, dict[str, list[RefPortion]]]] = {}
-    for ingredient, source_name, portion in rows:
-        _, by_source = by_ingredient.setdefault(ingredient.id, (ingredient, {}))
+    by_ingredient: dict[int, dict[str, list[RefPortion]]] = {}
+    for ingredient_id, source_name, portion in rows:
+        by_source = by_ingredient.setdefault(ingredient_id, {})
         by_source.setdefault(source_name, []).append(portion)
     derived = 0
-    for ingredient, by_source in by_ingredient.values():
+    for ingredient_id, by_source in by_ingredient.items():
         # One source's portions only, so weights never mix sources.
-        portions = by_source[min(by_source, key=conversion_rank)]
-        if ingredient.unit_weight_g is None:
-            medium = next(
-                (p for p in portions if p.unit == "medium" and p.amount), None
-            )
-            if medium is not None and medium.amount:
-                ingredient.unit_weight_g = medium.gram_weight / medium.amount
-                derived += 1
-        if ingredient.density_g_per_ml is None:
-            for portion in sorted(portions, key=lambda p: p.seq_num):
-                if portion.unit is None or not portion.amount:
-                    continue
-                ml = unit_ml(singular(portion.unit))
-                if ml is None:
-                    continue
-                ingredient.density_g_per_ml = portion.gram_weight / (
-                    portion.amount * ml
+        best = min(by_source, key=conversion_rank)
+        for portion in by_source[best]:
+            if portion.unit is None or not portion.amount:
+                continue
+            produced.add(
+                _upsert_conversion(
+                    ingredient_id,
+                    "portion",
+                    portion.unit,
+                    portion.modifier,
+                    portion.gram_weight / portion.amount,
+                    best,
+                    session,
+                    ref_food_id=portion.ref_food_id,
+                    ref_seq_num=portion.seq_num,
                 )
-                derived += 1
-                break
-    if derived:
-        logger.info(
-            "Derived %d weights/densities from reference portions", derived
+            )
+            derived += 1
+        medium = next(
+            (p for p in by_source[best] if p.unit == "medium" and p.amount), None
         )
+        if medium is not None and medium.amount:
+            produced.add(
+                _upsert_conversion(
+                    ingredient_id,
+                    "unit_weight",
+                    None,
+                    None,
+                    medium.gram_weight / medium.amount,
+                    best,
+                    session,
+                    ref_food_id=medium.ref_food_id,
+                    ref_seq_num=medium.seq_num,
+                )
+            )
+            derived += 1
+        for portion in sorted(by_source[best], key=lambda p: p.seq_num):
+            if portion.unit is None or not portion.amount:
+                continue
+            ml = unit_ml(singular(portion.unit))
+            if ml is None:
+                continue
+            produced.add(
+                _upsert_conversion(
+                    ingredient_id,
+                    "density",
+                    None,
+                    None,
+                    portion.gram_weight / (portion.amount * ml),
+                    best,
+                    session,
+                    ref_food_id=portion.ref_food_id,
+                    ref_seq_num=portion.seq_num,
+                )
+            )
+            derived += 1
+            break
+    if derived:
+        logger.info("Derived %d conversion rows from reference portions", derived)
+
+    # A row whose key nothing produced any more — a seed entry removed
+    # from seed.py, a re-imported reference — is stale data: delete
+    # it. Upserts kept every surviving row's id, so lines pointing at
+    # them stay valid.
+    for row in session.scalars(select(IngredientConversion)):
+        if (
+            row.ingredient_id,
+            row.origin,
+            row.kind,
+            row.unit,
+            row.modifier,
+        ) not in produced:
+            session.delete(row)

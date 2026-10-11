@@ -8,6 +8,8 @@ from sqlalchemy import select
 
 from menu.db.database import (
     FoodSource,
+    Ingredient,
+    IngredientFoodRef,
     NutrientMap,
     RefFood,
     RefNutrient,
@@ -156,3 +158,34 @@ def test_reimport_is_idempotent(counts: dict[str, int], session: Session) -> Non
     again = import_fdc([FIXTURE_DIR / "sr", FIXTURE_DIR / "survey"], session)
     assert again == counts
     assert len(session.scalars(select(RefFood)).all()) == 3
+
+
+@pytest.mark.usefixtures("counts")
+def test_reimport_keeps_food_ids(session: Session) -> None:
+    """A confirmed mapping pins its food: the re-import upserts the
+    ref_food rows, so ids — and what the mapping points at — never
+    move."""
+    before = dict(session.execute(select(RefFood.source_food_id, RefFood.id)).all())
+    egg = Ingredient(name="egg")
+    session.add(egg)
+    session.flush()
+    mapping = IngredientFoodRef(
+        ingredient_id=egg.id,
+        ref_food_id=_ref_food(session, "171287").id,
+        role="nutrition",
+        confirmed=True,
+    )
+    session.add(mapping)
+    session.flush()
+
+    import_fdc([FIXTURE_DIR / "sr", FIXTURE_DIR / "survey"], session)
+
+    assert dict(
+        session.execute(select(RefFood.source_food_id, RefFood.id)).all()
+    ) == before
+    session.expire_all()
+    resolved = session.get(IngredientFoodRef, mapping.id)
+    assert resolved is not None
+    food = session.get(RefFood, resolved.ref_food_id)
+    assert food is not None
+    assert food.source_food_id == "171287"

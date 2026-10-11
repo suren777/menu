@@ -212,8 +212,9 @@ class IngredientFoodRef(Base):
     partial unique index makes the database enforce. 'candidate' rows
     are the parser's own suggestion (role NULL): they feed the
     --ref-review report, never conversion or nutrition. 'rejected'
-    rows were reviewed and turned down (rejected food_ref entries in suggestions.json), so they
-    leave the report too and a re-crawl cannot resurrect them.
+    rows were reviewed and turned down (rejected food_ref entries in
+    suggestions.json), so they leave the report too and a re-crawl
+    cannot resurrect them.
     `origin` records where the row came from.
     """
 

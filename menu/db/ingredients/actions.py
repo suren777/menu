@@ -18,7 +18,7 @@ from menu.db.database import (
     RefFood,
     RefPortion,
 )
-from menu.db.ingredients import repository
+from menu.db.ingredients import repository, seed
 from menu.db.ingredients.seed import (
     LINE_OVERRIDES,
     conversion_rank,
@@ -43,6 +43,7 @@ from menu.ingest.units import (
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
+    from menu.db.ingredients.repository import IngredientModel
     from menu.ingest.ingredients import ParsedLine
     from menu.ingest.registry import SiteConfig
 
@@ -123,11 +124,9 @@ def store_recipe_ingredients(
             parsed.fdc_id,
             session,
         )
-        # A seeded term wins over the line heuristic: the curated data
-        # has decided where this line belongs.
-        needs_review = line_review and not (
-            term is not None and term.resolution == "seed"
-        )
+        # Stored as the heuristic says; a seeded term overrides it in
+        # effective_ingredient_id, so a later seed still wins.
+        needs_review = line_review
         ingredient_id = repository.effective_ingredient_id(needs_review, term)
         grams = grams_max = None
         grams_source = None
@@ -718,12 +717,20 @@ def _recompute_terms(session: Session) -> int:
     """Re-apply the review heuristic to every non-seed term: a
     name_needs_review term goes back to 'review', everything else to
     'auto' pointing at the concept of the same name (created when
-    missing). Seed and not_food terms are curated decisions and stand.
-    Returns the number of terms changed."""
+    missing). Seed and not_food terms still in seed.py are curated
+    decisions and stand; one whose entry was removed from seed.py is
+    recomputed like any other term. Run after seeding. Returns the
+    number of terms changed."""
+    curated = {alias for alias, _, _ in seed.ALIASES} | set(seed.NOT_FOOD)
+    curated |= set(
+        session.scalars(select(Ingredient.name).where(Ingredient.origin == "seed"))
+    )
     changed = 0
-    terms = session.scalars(
-        select(IngredientTerm).where(IngredientTerm.resolution.in_(("auto", "review")))
-    ).all()
+    terms = [
+        term
+        for term in session.scalars(select(IngredientTerm))
+        if term.resolution in ("auto", "review") or term.term not in curated
+    ]
     for term in terms:
         if name_needs_review(term.term):
             resolution, ingredient_id = "review", None
@@ -747,40 +754,49 @@ def _recompute_terms(session: Session) -> int:
 def re_resolve() -> tuple[int, int, int]:
     """Re-apply the seeds and review heuristics to the terms, in one
     transaction, with no parser: a seed change reaches every line by
-    re-pointing its term. Lines whose effective ingredient changed get
-    their grams recomputed from the stored columns; orphans are pruned
+    re-pointing its term. Every line's grams are recomputed from the
+    stored columns — a seed change can move grams without moving the
+    ingredient (a density, a confirmed conversion reference) — with
+    the conversion inputs read once per ingredient. Orphans are pruned
     last. Returns (terms changed, lines regrammed, concepts pruned)."""
     with get_session() as session:
-        old_effective = {
-            line.id: repository.effective_ingredient_id(line.needs_review, term)
-            for line, term in session.execute(repository.lines_with_terms_select())
-        }
         seed_ingredient_data(session)
         terms_changed = _recompute_terms(session)
+        session.flush()
+        inputs: dict[int, tuple[IngredientModel, str, list[RefPortion]] | None] = {}
         regrammed = 0
         for line, term in session.execute(repository.lines_with_terms_select()):
             effective = repository.effective_ingredient_id(line.needs_review, term)
-            if effective == old_effective.get(line.id):
-                continue
-            regrammed += 1
-            if effective is None:
-                line.grams = line.grams_max = line.grams_source = None
-            else:
-                (
-                    line.grams,
-                    line.grams_max,
-                    line.grams_source,
-                ) = _line_grams(
-                    line.quantity,
-                    line.quantity_max,
-                    line.dimension,
-                    line.base_unit,
-                    line.original_unit,
-                    line.preparation,
-                    line.size,
-                    effective,
-                    session,
-                )
+            grams: tuple[float | None, float | None, str | None] = (None, None, None)
+            if effective is not None:
+                if effective not in inputs:
+                    record = session.get(Ingredient, effective)
+                    inputs[effective] = (
+                        None
+                        if record is None
+                        else (
+                            repository.to_model(record),
+                            *_conversion_portions(effective, session),
+                        )
+                    )
+                cached = inputs[effective]
+                if cached is not None:
+                    model, source, portions = cached
+                    grams = to_grams(
+                        line.quantity,
+                        line.quantity_max,
+                        line.dimension,
+                        line.base_unit,
+                        line.original_unit,
+                        line.preparation,
+                        line.size,
+                        model,
+                        portions,
+                        source,
+                    )
+            if grams != (line.grams, line.grams_max, line.grams_source):
+                line.grams, line.grams_max, line.grams_source = grams
+                regrammed += 1
         pruned = prune_orphan_ingredients(session)
     return terms_changed, regrammed, pruned
 

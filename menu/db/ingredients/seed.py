@@ -264,15 +264,24 @@ def _canonical_ingredient(name: str, session: Session) -> Ingredient:
         session.flush()
     elif ingredient.origin == "auto":
         ingredient.origin = "seed"
-    _seed_term(name, ingredient.id, None, session)
+    _seed_term(name, ingredient.id, None, session, repoint=False)
     return ingredient
 
 
 def _seed_term(
-    term: str, ingredient_id: int | None, variant: str | None, session: Session
+    term: str,
+    ingredient_id: int | None,
+    variant: str | None,
+    session: Session,
+    *,
+    repoint: bool = True,
 ) -> None:
     """Upsert one seed term, overriding an existing auto/review term
-    (a parser guess loses to curated data); a not_food term is a
+    (a parser guess loses to curated data) and re-pointing an existing
+    seed term whose target changed in seed.py — unless repoint is
+    False: a seed concept's self-term must not override an ALIASES
+    entry spelled the same ("warm milk" is an alias of milk even when
+    a density seeds a "warm milk" concept). A not_food term is a
     curated decision too and stands."""
     existing = session.scalar(select(IngredientTerm).where(IngredientTerm.term == term))
     if existing is None:
@@ -284,7 +293,9 @@ def _seed_term(
                 resolution="seed",
             )
         )
-    elif existing.resolution in ("auto", "review"):
+    elif existing.resolution in ("auto", "review") or (
+        repoint and existing.resolution == "seed"
+    ):
         existing.ingredient_id = ingredient_id
         existing.variant = variant
         existing.resolution = "seed"

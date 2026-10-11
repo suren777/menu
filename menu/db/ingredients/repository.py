@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, or_, select
 
 from menu.db.database import Ingredient, IngredientTerm, RecipeIngredient
 
@@ -59,7 +59,11 @@ def effective_ingredient_id(
     (review/not_food) or the line has no term. ONE definition of the
     rule — row readers go through this, SQL readers through
     effective_ingredient_predicates()."""
-    if needs_review or term is None or term.resolution not in RESOLVED_RESOLUTIONS:
+    if term is None or term.resolution not in RESOLVED_RESOLUTIONS:
+        return None
+    # A seeded term wins over the line heuristic: curated data has
+    # decided where the line belongs, whenever the seed was added.
+    if needs_review and term.resolution != "seed":
         return None
     return term.ingredient_id
 
@@ -67,7 +71,10 @@ def effective_ingredient_id(
 def effective_ingredient_predicates() -> tuple[ColumnElement[bool], ...]:
     """The same rule as SQL, for readers that aggregate in a query."""
     return (
-        RecipeIngredient.needs_review.is_(False),
+        or_(
+            RecipeIngredient.needs_review.is_(False),
+            IngredientTerm.resolution == "seed",
+        ),
         IngredientTerm.resolution.in_(RESOLVED_RESOLUTIONS),
     )
 

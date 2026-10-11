@@ -41,8 +41,9 @@ def test_find_ingredient_by_name(session: Session) -> None:
 
 
 def test_effective_ingredient_id_is_the_one_rule() -> None:
-    """The term's concept — unless the line is flagged or the term is
-    unresolved (review/not_food) or missing."""
+    """The term's concept — unless the term is unresolved
+    (review/not_food) or missing, or the line is flagged and the term
+    is not seeded."""
     seed_term = IngredientTerm(term="milk", ingredient_id=1, resolution="seed")
     auto_term = IngredientTerm(term="warm milk", ingredient_id=2, resolution="auto")
     review = IngredientTerm(term="junk food", resolution="review")
@@ -50,8 +51,9 @@ def test_effective_ingredient_id_is_the_one_rule() -> None:
 
     assert repository.effective_ingredient_id(False, seed_term) == 1
     assert repository.effective_ingredient_id(False, auto_term) == 2
-    # The line-level flag wins: the raw text is suspect, not the term.
-    assert repository.effective_ingredient_id(True, seed_term) is None
+    # A seeded term wins over the line flag; an auto term does not.
+    assert repository.effective_ingredient_id(True, seed_term) == 1
+    assert repository.effective_ingredient_id(True, auto_term) is None
     assert repository.effective_ingredient_id(False, review) is None
     assert repository.effective_ingredient_id(False, not_food) is None
     assert repository.effective_ingredient_id(False, None) is None
@@ -101,7 +103,10 @@ def test_get_unresolved(session: Session) -> None:
         term="milk", ingredient_id=milk.id, resolution="seed"
     )
     review_term = IngredientTerm(term="mystery powder", resolution="review")
-    session.add_all([resolved_term, review_term])
+    auto_term = IngredientTerm(
+        term="milk or something", ingredient_id=milk.id, resolution="auto"
+    )
+    session.add_all([resolved_term, review_term, auto_term])
     recipe = _add_recipe(session)
     session.add(
         RecipeIngredient(recipe_id=recipe.id, position=0, raw_text="mystery")
@@ -127,7 +132,7 @@ def test_get_unresolved(session: Session) -> None:
             recipe_id=recipe.id,
             position=3,
             raw_text="milk or something",
-            term_id=resolved_term.id,
+            term_id=auto_term.id,
             needs_review=True,
         )
     )

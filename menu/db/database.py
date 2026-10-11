@@ -18,7 +18,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from menu.db.engine import engine as default_engine
+from menu.db.connection import current_engine
 
 if TYPE_CHECKING:
     from sqlalchemy.engine import Engine
@@ -566,6 +566,7 @@ class NutrientMap(Base):
 
 
 def initialise(db_engine: Engine | None = None) -> None:
-    """Create the tables. The default engine is resolved at call time so
-    tests can patch it."""
-    Base.metadata.create_all(db_engine or default_engine)
+    """Create the tables. The engine is resolved at call time: explicit
+    argument, else any use_engine override, else the default — so tests
+    can patch the default."""
+    Base.metadata.create_all(current_engine(db_engine))

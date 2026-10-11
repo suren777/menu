@@ -10,15 +10,13 @@ warning naming its import command.
 
 import logging
 from argparse import ArgumentParser
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import create_engine, func, select
 
-import menu.db.connection
-from menu.db.connection import get_session
+from menu.db.connection import get_session, use_engine
 from menu.db.database import Page, Recipe, initialise
 from menu.db.engine import DB_PATH, configure_sqlite
 from menu.db.ingredients.seed import seed_ingredient_data
@@ -32,9 +30,6 @@ from menu.nutrition.sources.cofid import COFID_URL, import_cofid
 from menu.nutrition.sources.fdc import FNDDS_URL, SR_URL, import_fdc
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
-
-    from sqlalchemy.engine import Engine
     from sqlalchemy.orm import Session
 
     from menu.ingest.registry import SiteConfig
@@ -52,19 +47,6 @@ class SiteSummary:
 
     pages: dict[str, int] = field(default_factory=dict)
     recipes: int = 0
-
-
-@contextmanager
-def _default_engine(engine: Engine) -> Iterator[None]:
-    """Make `engine` the default for the run: get_session and every
-    action resolve menu.db.connection.default_engine at call time
-    precisely so this works."""
-    original = menu.db.connection.default_engine  # type: ignore[attr-defined]
-    menu.db.connection.default_engine = engine  # type: ignore[attr-defined]
-    try:
-        yield
-    finally:
-        menu.db.connection.default_engine = original  # type: ignore[attr-defined]
 
 
 def _skip_source(source: str, sources_dir: Path) -> None:
@@ -141,7 +123,7 @@ def rebuild(
     imported: list[str] = []
     skipped: list[str] = []
     summaries: dict[str, SiteSummary] = {}
-    with _default_engine(engine):
+    with use_engine(engine):
         initialise(engine)
         with get_session() as session:
             for source in ("fdc", "cofid", "cnf"):

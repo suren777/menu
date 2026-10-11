@@ -367,13 +367,10 @@ class IngredientConversion(Base):
     ref_food_id: Mapped[int | None]
     ref_seq_num: Mapped[int | None]
     """The ref portion a derived row was computed from; NULL for seed
-    rows. Composite FK below."""
+    rows. No FK: a re-import replaces ref_portion rows, and the next
+    seeding re-derives these rows anyway."""
 
     __table_args__ = (
-        ForeignKeyConstraint(
-            ["ref_food_id", "ref_seq_num"],
-            ["ref_portion.ref_food_id", "ref_portion.seq_num"],
-        ),
         # The upsert key: one factor per (ingredient, origin, kind,
         # unit, modifier), so re-seeding keeps ids stable and lines
         # can point at them.

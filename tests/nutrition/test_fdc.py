@@ -9,6 +9,7 @@ from sqlalchemy import select
 from menu.db.database import (
     FoodSource,
     Ingredient,
+    IngredientConversion,
     IngredientFoodRef,
     NutrientMap,
     RefFood,
@@ -192,3 +193,33 @@ def test_reimport_keeps_food_ids(session: Session) -> None:
     pinned = session.get(RefFood, resolved.ref_food_id)
     assert pinned is not None
     assert pinned.source_food_id == "171287"
+
+
+@pytest.mark.usefixtures("counts")
+def test_reimport_with_derived_conversions(session: Session) -> None:
+    """Derived conversion rows name the portion they came from, but a
+    re-import replaces portions, so that provenance must not block it."""
+    egg = Ingredient(name="egg")
+    session.add(egg)
+    session.flush()
+    portion = session.scalars(
+        select(RefPortion).where(
+            RefPortion.ref_food_id == _ref_food(session, "171287").id
+        )
+    ).first()
+    assert portion is not None
+    session.add(
+        IngredientConversion(
+            ingredient_id=egg.id,
+            kind="portion",
+            unit=portion.unit or "piece",
+            grams=portion.gram_weight,
+            origin="fdc",
+            ref_food_id=portion.ref_food_id,
+            ref_seq_num=portion.seq_num,
+        )
+    )
+    session.flush()
+
+    import_fdc([FIXTURE_DIR / "sr", FIXTURE_DIR / "survey"], session)
+    session.flush()

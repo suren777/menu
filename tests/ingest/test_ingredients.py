@@ -10,7 +10,7 @@ from typing import cast
 
 import pytest
 
-from menu.db.ingredients.actions import _split_or_alternative
+from menu.db.ingredients.lines import _split_or_alternative
 from menu.ingest.ingredients import (
     canonical_name,
     line_needs_review,

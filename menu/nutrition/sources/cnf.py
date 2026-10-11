@@ -69,7 +69,7 @@ CHUNK = 10_000
 _AMOUNT = re.compile(r"^\s*(\d+(?:\.\d+)?)(?:\s*/\s*(\d+(?:\.\d+)?))?\s*")
 
 # The household-unit aliases conversion applies to ingredient lines
-# (menu.db.ingredients.actions); portions must spell units the same
+# (menu.db.ingredients.grams); portions must spell units the same
 # way to be found.
 _UNIT_ALIASES = {
     "tablespoon": "tbsp",

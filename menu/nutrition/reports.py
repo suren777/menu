@@ -15,11 +15,13 @@ from menu.db.connection import get_session
 from menu.db.database import (
     Ingredient,
     IngredientFoodRef,
+    IngredientTerm,
     Page,
     Recipe,
     RecipeIngredient,
     RecipeNutrition,
 )
+from menu.db.ingredients import repository
 from menu.nutrition.derive import derive_nutrition, store_published_nutrition
 
 # The nutrients validation compares: the per-serving numbers sites
@@ -119,11 +121,14 @@ def validation_report(min_coverage: float = 0.9) -> None:
         high_ingredients = (
             session.execute(
                 select(Ingredient.name, func.count())
+                .join(IngredientTerm, IngredientTerm.ingredient_id == Ingredient.id)
                 .join(
-                    RecipeIngredient,
-                    RecipeIngredient.ingredient_id == Ingredient.id,
+                    RecipeIngredient, RecipeIngredient.term_id == IngredientTerm.id
                 )
-                .where(RecipeIngredient.recipe_id.in_(high_ids))
+                .where(
+                    RecipeIngredient.recipe_id.in_(high_ids),
+                    *repository.effective_ingredient_predicates(),
+                )
                 .group_by(Ingredient.name)
                 .order_by(func.count().desc(), Ingredient.name)
                 .limit(10)
@@ -171,9 +176,10 @@ def coverage_report(limit: int = 50) -> None:
         rows = session.execute(
             select(Page.site, Ingredient.name, func.count())
             .select_from(RecipeIngredient)
+            .join(IngredientTerm, IngredientTerm.id == RecipeIngredient.term_id)
+            .join(Ingredient, Ingredient.id == IngredientTerm.ingredient_id)
             .join(Recipe, Recipe.id == RecipeIngredient.recipe_id)
             .join(Page, Page.id == Recipe.page_id)
-            .join(Ingredient, Ingredient.id == RecipeIngredient.ingredient_id)
             .outerjoin(
                 IngredientFoodRef,
                 and_(
@@ -187,6 +193,7 @@ def coverage_report(limit: int = 50) -> None:
                 RecipeIngredient.optional.is_(False),
                 RecipeIngredient.quantity.is_not(None),
                 IngredientFoodRef.ref_food_id.is_(None),
+                *repository.effective_ingredient_predicates(),
             )
             .group_by(Page.site, Ingredient.name)
             .order_by(func.count().desc(), Ingredient.name)

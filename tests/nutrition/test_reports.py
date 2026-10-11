@@ -9,6 +9,7 @@ from menu.db.database import (
     FoodSource,
     Ingredient,
     IngredientFoodRef,
+    IngredientTerm,
     Page,
     Recipe,
     RecipeIngredient,
@@ -19,6 +20,16 @@ from menu.nutrition.reports import coverage_report, validation_report
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
+
+
+def add_term(session: Session, term: str, ingredient: Ingredient) -> IngredientTerm:
+    """A resolved term for a hand-built line to point at."""
+    row = IngredientTerm(
+        term=term, ingredient_id=ingredient.id, variant=None, resolution="seed"
+    )
+    session.add(row)
+    session.flush()
+    return row
 
 
 def _add_recipe(
@@ -157,17 +168,19 @@ def test_coverage_report_lists_unreferenced_ingredients(
                 origin="seed",
             )
         )
-        foods = ((egg, 2.0), (egg, 1.0), (water, 250.0))
-        for position, (ingredient, quantity) in enumerate(foods):
+        egg_term = add_term(session, "egg", egg)
+        water_term = add_term(session, "water", water)
+        foods = ((egg_term, 2.0), (egg_term, 1.0), (water_term, 250.0))
+        for position, (term, quantity) in enumerate(foods):
             session.add(
                 RecipeIngredient(
                     recipe_id=recipe.id,
                     position=position,
-                    raw_text=ingredient.name,
-                    ingredient_id=ingredient.id,
+                    raw_text=term.term,
+                    term_id=term.id,
                     quantity=quantity,
-                    dimension="count" if ingredient is egg else "volume",
-                    base_unit="piece" if ingredient is egg else "ml",
+                    dimension="count" if term is egg_term else "volume",
+                    base_unit="piece" if term is egg_term else "ml",
                 )
             )
 

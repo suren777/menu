@@ -2,7 +2,13 @@
 
 from typing import TYPE_CHECKING
 
-from menu.db.database import Ingredient, IngredientAlias, Page, Recipe, RecipeIngredient
+from menu.db.database import (
+    Ingredient,
+    IngredientTerm,
+    Page,
+    Recipe,
+    RecipeIngredient,
+)
 from menu.db.ingredients import repository
 
 if TYPE_CHECKING:
@@ -34,20 +40,21 @@ def test_find_ingredient_by_name(session: Session) -> None:
     assert missing is None
 
 
-def test_alias_target(session: Session) -> None:
-    ingredient = Ingredient(name="milk")
-    session.add(ingredient)
-    session.flush()
-    session.add(
-        IngredientAlias(
-            alias="warm milk", ingredient_id=ingredient.id, variant="warm"
-        )
-    )
+def test_effective_ingredient_id_is_the_one_rule() -> None:
+    """The term's concept — unless the line is flagged or the term is
+    unresolved (review/not_food) or missing."""
+    seed_term = IngredientTerm(term="milk", ingredient_id=1, resolution="seed")
+    auto_term = IngredientTerm(term="warm milk", ingredient_id=2, resolution="auto")
+    review = IngredientTerm(term="junk food", resolution="review")
+    not_food = IngredientTerm(term="bundt tin", resolution="not_food")
 
-    found = repository.alias_target("warm milk", session)
-    assert found is not None
-    assert (found[0].name, found[1]) == ("milk", "warm")
-    assert repository.alias_target("cold milk", session) is None
+    assert repository.effective_ingredient_id(False, seed_term) == 1
+    assert repository.effective_ingredient_id(False, auto_term) == 2
+    # The line-level flag wins: the raw text is suspect, not the term.
+    assert repository.effective_ingredient_id(True, seed_term) is None
+    assert repository.effective_ingredient_id(False, review) is None
+    assert repository.effective_ingredient_id(False, not_food) is None
+    assert repository.effective_ingredient_id(False, None) is None
 
 
 def test_get_recipe_ingredients_in_position_order(session: Session) -> None:
@@ -62,9 +69,39 @@ def test_get_recipe_ingredients_in_position_order(session: Session) -> None:
     assert [line.raw_text for line in lines] == ["milk", "butter"]
 
 
+def test_get_recipe_ingredients_carries_term_data(session: Session) -> None:
+    """The model reaches the variant and the effective ingredient
+    through the term."""
+    milk = Ingredient(name="milk")
+    session.add(milk)
+    session.flush()
+    term = IngredientTerm(
+        term="warm milk", ingredient_id=milk.id, variant="warm", resolution="seed"
+    )
+    session.add(term)
+    recipe = _add_recipe(session)
+    session.add(
+        RecipeIngredient(
+            recipe_id=recipe.id, position=0, raw_text="warm milk", term_id=term.id
+        )
+    )
+
+    (line,) = repository.get_recipe_ingredients(recipe.id, session)
+
+    assert (line.ingredient_id, line.variant) == (milk.id, "warm")
+
+
 def test_get_unresolved(session: Session) -> None:
-    ingredient = Ingredient(name="milk")
-    session.add(ingredient)
+    """A line is unresolved for review when it has no effective
+    ingredient: no term, a review term, or the line-level flag."""
+    milk = Ingredient(name="milk")
+    session.add(milk)
+    session.flush()
+    resolved_term = IngredientTerm(
+        term="milk", ingredient_id=milk.id, resolution="seed"
+    )
+    review_term = IngredientTerm(term="mystery powder", resolution="review")
+    session.add_all([resolved_term, review_term])
     recipe = _add_recipe(session)
     session.add(
         RecipeIngredient(recipe_id=recipe.id, position=0, raw_text="mystery")
@@ -74,10 +111,31 @@ def test_get_unresolved(session: Session) -> None:
             recipe_id=recipe.id,
             position=1,
             raw_text="milk",
-            ingredient_id=ingredient.id,
+            term_id=resolved_term.id,
+        )
+    )
+    session.add(
+        RecipeIngredient(
+            recipe_id=recipe.id,
+            position=2,
+            raw_text="mangled name",
+            term_id=review_term.id,
+        )
+    )
+    session.add(
+        RecipeIngredient(
+            recipe_id=recipe.id,
+            position=3,
+            raw_text="milk or something",
+            term_id=resolved_term.id,
+            needs_review=True,
         )
     )
 
     unresolved = repository.get_unresolved(session)
 
-    assert [line.raw_text for line in unresolved] == ["mystery"]
+    assert [line.raw_text for line in unresolved] == [
+        "mystery",
+        "mangled name",
+        "milk or something",
+    ]

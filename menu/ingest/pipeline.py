@@ -30,6 +30,7 @@ from menu.db.database import Page, Sitemap, initialise
 from menu.db.ingredients.actions import (
     fdc_id_conflicts,
     prune_orphan_ingredients,
+    re_resolve,
     ref_review,
     store_recipe_ingredients,
 )
@@ -358,9 +359,9 @@ def reparse_site(site: SiteConfig) -> None:
     one session per recipe. Per-recipe failures are counted and
     logged, like a crawl's bad URLs; store_recipe_ingredients replaces
     a recipe's previous rows, so reparsing is idempotent. Afterwards
-    ingredients no line and no alias points at are pruned: the reparse
-    re-resolves lines through the seeded aliases, stranding the junk
-    canonical ingredients the first pass created.
+    auto terms no line uses and auto concepts nothing points at are
+    pruned: the reparse re-resolves lines through the seeded terms,
+    stranding the junk auto concepts the first pass created.
     """
     with get_session() as session:
         recipes = pages.get_site_recipes(site.name, session)
@@ -395,6 +396,12 @@ def main() -> None:
         "--reparse",
         action="store_true",
         help="re-parse stored ingredient lines without re-fetching",
+    )
+    parser.add_argument(
+        "--re-resolve",
+        action="store_true",
+        help="re-apply the seeds and review heuristics to the terms "
+        "without re-running the parser, then exit",
     )
     parser.add_argument(
         "--fdc-report",
@@ -469,6 +476,13 @@ def main() -> None:
             json.dumps(collect_metrics(), indent=2, sort_keys=True) + "\n"
         )
         print(f"Metrics snapshot written to {path}")
+        return
+    if args.re_resolve:
+        terms_changed, regrammed, pruned = re_resolve()
+        print(
+            f"Re-resolved: {terms_changed} terms changed, "
+            f"{regrammed} lines regrammed, {pruned} concepts pruned"
+        )
         return
     if args.site is None:
         parser.error("a site is required unless a report flag is given")

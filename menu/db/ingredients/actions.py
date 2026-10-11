@@ -11,15 +11,19 @@ from menu.db.connection import get_session
 from menu.db.database import (
     FoodSource,
     Ingredient,
-    IngredientAlias,
     IngredientFoodRef,
+    IngredientTerm,
     Recipe,
     RecipeIngredient,
     RefFood,
     RefPortion,
 )
 from menu.db.ingredients import repository
-from menu.db.ingredients.seed import LINE_OVERRIDES, conversion_rank
+from menu.db.ingredients.seed import (
+    LINE_OVERRIDES,
+    conversion_rank,
+    seed_ingredient_data,
+)
 from menu.ingest.ingredients import (
     canonical_name,
     line_needs_review,
@@ -54,15 +58,16 @@ def store_recipe_ingredients(
     site: SiteConfig,
     session: Session,
 ) -> None:
-    """Parse a recipe's ingredient lines and store recipe_ingredient rows.
+    """Parse a recipe's ingredient lines and store recipe_ingredients rows.
 
     Runs in the caller's transaction: the pipeline writes the recipe
     and its lines in one commit, so a crash cannot leave a recipe
     without lines. Re-running a recipe replaces its previous rows, so
     reparsing is idempotent. The recipe's servings are parsed from
     recipeYield and the raw yield is kept as yield_text. A line that
-    fails to parse is logged and skipped: bad lines must not stop a
-    recipe (or a crawl), mirroring the pipeline's per-URL handling.
+    fails to parse is stored with parse_status 'failed' and no term:
+    bad lines must not stop a recipe (or a crawl), mirroring the
+    pipeline's per-URL handling, but they are data too.
     """
     lines = recipe_data.get("recipeIngredient", [])
     if not isinstance(lines, list):
@@ -91,36 +96,59 @@ def store_recipe_ingredients(
             parsed = parse_line(raw, site)
         except Exception as exc:  # noqa: BLE001 - a bad line must not stop the recipe
             logger.warning(
-                "Skipping ingredient line %r for recipe %s: %s: %s",
+                "Storing failed line %r for recipe %s: %s: %s",
                 raw,
                 recipe_id,
                 type(exc).__name__,
                 exc,
+            )
+            session.add(
+                RecipeIngredient(
+                    recipe_id=recipe_id,
+                    position=position,
+                    raw_text=raw,
+                    parse_status="failed",
+                )
             )
             continue
         override = LINE_OVERRIDES.get(" ".join(raw.lower().split()))
         alt_parsed = (
             None if parsed.alternatives else _split_or_alternative(raw, site)
         )
-        ingredient_id, variant = _resolve_ingredient(
+        line_review = (
+            override is None and line_needs_review(raw, parsed, alt_parsed)
+        )
+        term = _resolve_term(
             override if override is not None else parsed.name,
             parsed.fdc_id,
             session,
-            needs_review=override is None
-            and line_needs_review(raw, parsed, alt_parsed),
         )
+        # A seeded term wins over the line heuristic: the curated data
+        # has decided where this line belongs.
+        needs_review = line_review and not (
+            term is not None and term.resolution == "seed"
+        )
+        ingredient_id = repository.effective_ingredient_id(needs_review, term)
         grams = grams_max = None
         grams_source = None
         if ingredient_id is not None:
             grams, grams_max, grams_source = _line_grams(
-                parsed, ingredient_id, session
+                parsed.quantity,
+                parsed.quantity_max,
+                parsed.dimension,
+                parsed.base_unit,
+                parsed.original_unit,
+                parsed.preparation,
+                parsed.size,
+                ingredient_id,
+                session,
             )
         line = RecipeIngredient(
             recipe_id=recipe_id,
             position=position,
             raw_text=raw,
-            ingredient_id=ingredient_id,
-            variant=variant,
+            term_id=term.id if term is not None else None,
+            needs_review=needs_review,
             quantity=parsed.quantity,
             quantity_max=parsed.quantity_max,
             dimension=parsed.dimension,
@@ -139,18 +167,15 @@ def store_recipe_ingredients(
         session.add(line)
         session.flush()  # the row's id is needed by the alternative rows
         for alternative in parsed.alternatives:
-            alternative_id, _ = _resolve_ingredient(
-                alternative,
-                None,
-                session,
-                needs_review=name_needs_review(alternative),
-            )
+            alternative_term = _resolve_term(alternative, None, session)
             session.add(
                 RecipeIngredient(
                     recipe_id=recipe_id,
                     position=position,
                     raw_text=raw,
-                    ingredient_id=alternative_id,
+                    term_id=(
+                        alternative_term.id if alternative_term is not None else None
+                    ),
                     alternative_of=line.id,
                 )
             )
@@ -159,18 +184,17 @@ def store_recipe_ingredients(
         # essential oil" into the note. Split it off here so it is
         # still kept as an alternative row.
         if alt_parsed is not None:
-            alternative_id, _ = _resolve_ingredient(
-                alt_parsed.name,
-                alt_parsed.fdc_id,
-                session,
-                needs_review=name_needs_review(alt_parsed.name or ""),
+            alternative_term = _resolve_term(
+                alt_parsed.name, alt_parsed.fdc_id, session
             )
             session.add(
                 RecipeIngredient(
                     recipe_id=recipe_id,
                     position=position,
                     raw_text=raw,
-                    ingredient_id=alternative_id,
+                    term_id=(
+                        alternative_term.id if alternative_term is not None else None
+                    ),
                     quantity=alt_parsed.quantity,
                     quantity_max=alt_parsed.quantity_max,
                     dimension=alt_parsed.dimension,
@@ -204,48 +228,54 @@ def _split_or_alternative(raw: str, site: SiteConfig) -> ParsedLine | None:
     return alt
 
 
-def _resolve_ingredient(
-    name: str | None,
-    fdc_id: int | None,
-    session: Session,
-    needs_review: bool = False,
-) -> tuple[int | None, str | None]:
-    """Id and variant of the canonical ingredient a parsed name
-    resolves to, in the order trusted:
+def _resolve_term(
+    name: str | None, fdc_id: int | None, session: Session
+) -> IngredientTerm | None:
+    """The term a parsed name resolves to, in the order trusted:
 
     1. A curated line override already decided the name before this
-       call, so an alias match carries the variant ("whole milk" ->
-       milk, variant "whole").
-    2. A line flagged for review — a mangled name, or a conjunction
-       the parse dropped (line_needs_review) — stays unresolved (None)
-       for the review queue instead of becoming a junk canonical
-       ingredient.
-    3. Otherwise the ingredient is created, with a self-alias so later
-       variants ("warm milk") can attach to it.
+       call, so a seeded term match carries the variant ("whole milk"
+       -> milk, variant "whole").
+    2. An existing term is used as-is, whatever its resolution: a
+       seed, an auto guess, a review entry or not_food.
+    3. A new term: 'review' (no concept) when the name looks mangled
+       (name_needs_review); otherwise 'auto', pointing at the concept
+       of the same name — created here when missing, with the parser's
+       fdc candidate as a suggestion.
 
-    A line the parser could not name at all stays unresolved too: it
-    is stored anyway and reviewed later.
+    A line the parser could not name at all gets no term: it is
+    stored anyway and reviewed later.
     """
     if name is None:
-        return None, None
-    match = repository.alias_target(name, session)
-    if match is not None:
-        ingredient, variant = match
-        return ingredient.id, variant
-    if needs_review:
-        return None, None
-    by_name = repository.find_ingredient_by_name(name, session)
-    if by_name is not None:
-        return by_name.id, None
-    session.add(Ingredient(name=name))
+        return None
+    canonical = canonical_name(name)
+    term = session.scalar(
+        select(IngredientTerm).where(IngredientTerm.term == canonical)
+    )
+    if term is not None:
+        return term
+    if name_needs_review(name):
+        term = IngredientTerm(
+            term=canonical, ingredient_id=None, variant=None, resolution="review"
+        )
+        session.add(term)
+        session.flush()
+        return term
+    ingredient = session.scalar(
+        select(Ingredient).where(Ingredient.name == canonical)
+    )
+    if ingredient is None:
+        ingredient = Ingredient(name=canonical, origin="auto")
+        session.add(ingredient)
+        session.flush()
+        if fdc_id is not None:
+            _seed_candidate(ingredient.id, str(fdc_id), session)
+    term = IngredientTerm(
+        term=canonical, ingredient_id=ingredient.id, variant=None, resolution="auto"
+    )
+    session.add(term)
     session.flush()
-    created = repository.find_ingredient_by_name(name, session)
-    if created is None:  # pragma: no cover - inserted two lines above
-        return None, None
-    session.add(IngredientAlias(alias=canonical_name(name), ingredient_id=created.id))
-    if fdc_id is not None:
-        _seed_candidate(created.id, str(fdc_id), session)
-    return created.id, None
+    return term
 
 
 def _seed_candidate(
@@ -433,20 +463,30 @@ def _conversion_portions(
 
 
 def _line_grams(
-    parsed: ParsedLine, ingredient_id: int, session: Session
+    quantity: float | None,
+    quantity_max: float | None,
+    dimension: str | None,
+    base_unit: str | None,
+    original_unit: str | None,
+    preparation: str | None,
+    size: str | None,
+    ingredient_id: int,
+    session: Session,
 ) -> tuple[float | None, float | None, str | None]:
+    """Grams for a line, from the columns the DB stores — so a
+    re-resolve can re-run the conversion without the parser."""
     record = session.get(Ingredient, ingredient_id)
     if record is None:  # pragma: no cover - resolved just above
         return None, None, None
     source, portions = _conversion_portions(ingredient_id, session)
     return to_grams(
-        parsed.quantity,
-        parsed.quantity_max,
-        parsed.dimension,
-        parsed.base_unit,
-        parsed.original_unit,
-        parsed.preparation,
-        parsed.size,
+        quantity,
+        quantity_max,
+        dimension,
+        base_unit,
+        original_unit,
+        preparation,
+        size,
         repository.to_model(record),
         portions,
         source,
@@ -480,7 +520,7 @@ def _servings_from_yield(value: Any) -> int | None:
 
 def fdc_id_conflicts() -> list[tuple[str, list[str]]]:
     """Canonical ingredients sharing an unconfirmed candidate
-    reference food with no alias between them, as candidates to
+    reference food with no seed term linking them, as candidates to
     hand-seed into seed.FOOD_REFS — a report, never an auto-merge.
     Shared USDA ids catch real variants (milk / warm milk) but also
     lump distinct ingredients (almond / vanilla / rosewater)."""
@@ -490,8 +530,9 @@ def fdc_id_conflicts() -> list[tuple[str, list[str]]]:
             for record in session.scalars(select(Ingredient))
         }
         links = {
-            (alias.alias, alias.ingredient_id)
-            for alias in session.scalars(select(IngredientAlias))
+            (term.term, term.ingredient_id)
+            for term in session.scalars(select(IngredientTerm))
+            if term.resolution == "seed" and term.ingredient_id is not None
         }
         candidates = session.execute(
             select(
@@ -533,13 +574,13 @@ def ref_review(
     imported source, for hand-seeding into seed.FOOD_REFS. Candidates
     that REJECTED_REFS turned down — and their foods as text matches —
     stay out. Needs the reference import; a report, never an
-    auto-merge."""
+    auto-merge. Lines count through their terms' effective ingredient
+    (repository.effective_ingredient_predicates)."""
     with get_session() as session:
         rows = session.execute(
             select(func.count(RecipeIngredient.id), Ingredient.id, Ingredient.name)
-            .outerjoin(
-                RecipeIngredient, RecipeIngredient.ingredient_id == Ingredient.id
-            )
+            .join(IngredientTerm, IngredientTerm.ingredient_id == Ingredient.id)
+            .join(RecipeIngredient, RecipeIngredient.term_id == IngredientTerm.id)
             .outerjoin(
                 IngredientFoodRef,
                 and_(
@@ -547,7 +588,10 @@ def ref_review(
                     IngredientFoodRef.status == "confirmed",
                 ),
             )
-            .where(IngredientFoodRef.id.is_(None))
+            .where(
+                IngredientFoodRef.id.is_(None),
+                *repository.effective_ingredient_predicates(),
+            )
             .group_by(Ingredient.id)
             .order_by(func.count(RecipeIngredient.id).desc())
             .limit(limit)
@@ -620,15 +664,25 @@ class ShoppingLine:
 
 
 def prune_orphan_ingredients(session: Session) -> int:
-    """Delete ingredients no line and no inbound alias points at.
+    """Delete `auto` terms no line uses, then `auto` concepts no term
+    points at and no curated reference (confirmed or rejected — a
+    decision in seed.py) keeps: a concept's parser candidate rows go
+    with it. Seed concepts are never pruned. Used after a re-resolve
+    or reparse, which re-resolves lines through the seeded terms and
+    strands the junk auto concepts the first pass created. Returns the
+    number of concepts pruned."""
+    used = set(session.scalars(select(RecipeIngredient.term_id)))
+    unused_terms = [
+        term
+        for term in session.scalars(
+            select(IngredientTerm).where(IngredientTerm.resolution == "auto")
+        )
+        if term.id not in used
+    ]
+    for term in unused_terms:
+        session.delete(term)
+    session.flush()  # the concepts lose their pointers before the count
 
-    A parse-time self-alias does not keep an ingredient alive, nor
-    does a parser candidate reference: both are removed with the
-    orphan. A curated reference (confirmed or rejected) does — it is a
-    decision in seed.py. Used after a reparse, which re-resolves lines
-    through the seeded aliases and strands the junk canonical
-    ingredients the first pass created. Returns the number pruned.
-    """
     curated = set(
         session.scalars(
             select(IngredientFoodRef.ingredient_id).where(
@@ -636,27 +690,21 @@ def prune_orphan_ingredients(session: Session) -> int:
             )
         )
     )
-    orphans = []
-    for ingredient in session.scalars(select(Ingredient)):
-        if ingredient.id in curated:
-            continue
-        lines = session.scalar(
-            select(func.count()).select_from(RecipeIngredient).where(
-                RecipeIngredient.ingredient_id == ingredient.id
+    pointed = set(
+        session.scalars(
+            select(IngredientTerm.ingredient_id).where(
+                IngredientTerm.ingredient_id.is_not(None)
             )
         )
-        inbound = session.scalar(
-            select(func.count()).select_from(IngredientAlias).where(
-                IngredientAlias.ingredient_id == ingredient.id,
-                IngredientAlias.alias != ingredient.name,
-            )
+    )
+    orphans = [
+        ingredient
+        for ingredient in session.scalars(
+            select(Ingredient).where(Ingredient.origin == "auto")
         )
-        if not lines and not inbound:
-            orphans.append(ingredient)
+        if ingredient.id not in curated and ingredient.id not in pointed
+    ]
     for ingredient in orphans:
-        session.execute(
-            delete(IngredientAlias).where(IngredientAlias.alias == ingredient.name)
-        )
         session.execute(
             delete(IngredientFoodRef).where(
                 IngredientFoodRef.ingredient_id == ingredient.id
@@ -664,6 +712,77 @@ def prune_orphan_ingredients(session: Session) -> int:
         )
         session.delete(ingredient)
     return len(orphans)
+
+
+def _recompute_terms(session: Session) -> int:
+    """Re-apply the review heuristic to every non-seed term: a
+    name_needs_review term goes back to 'review', everything else to
+    'auto' pointing at the concept of the same name (created when
+    missing). Seed and not_food terms are curated decisions and stand.
+    Returns the number of terms changed."""
+    changed = 0
+    terms = session.scalars(
+        select(IngredientTerm).where(IngredientTerm.resolution.in_(("auto", "review")))
+    ).all()
+    for term in terms:
+        if name_needs_review(term.term):
+            resolution, ingredient_id = "review", None
+        else:
+            ingredient = session.scalar(
+                select(Ingredient).where(Ingredient.name == term.term)
+            )
+            if ingredient is None:
+                ingredient = Ingredient(name=term.term, origin="auto")
+                session.add(ingredient)
+                session.flush()
+            resolution, ingredient_id = "auto", ingredient.id
+        if (term.resolution, term.ingredient_id) != (resolution, ingredient_id):
+            term.resolution = resolution
+            term.ingredient_id = ingredient_id
+            term.variant = None
+            changed += 1
+    return changed
+
+
+def re_resolve() -> tuple[int, int, int]:
+    """Re-apply the seeds and review heuristics to the terms, in one
+    transaction, with no parser: a seed change reaches every line by
+    re-pointing its term. Lines whose effective ingredient changed get
+    their grams recomputed from the stored columns; orphans are pruned
+    last. Returns (terms changed, lines regrammed, concepts pruned)."""
+    with get_session() as session:
+        old_effective = {
+            line.id: repository.effective_ingredient_id(line.needs_review, term)
+            for line, term in session.execute(repository.lines_with_terms_select())
+        }
+        seed_ingredient_data(session)
+        terms_changed = _recompute_terms(session)
+        regrammed = 0
+        for line, term in session.execute(repository.lines_with_terms_select()):
+            effective = repository.effective_ingredient_id(line.needs_review, term)
+            if effective == old_effective.get(line.id):
+                continue
+            regrammed += 1
+            if effective is None:
+                line.grams = line.grams_max = line.grams_source = None
+            else:
+                (
+                    line.grams,
+                    line.grams_max,
+                    line.grams_source,
+                ) = _line_grams(
+                    line.quantity,
+                    line.quantity_max,
+                    line.dimension,
+                    line.base_unit,
+                    line.original_unit,
+                    line.preparation,
+                    line.size,
+                    effective,
+                    session,
+                )
+        pruned = prune_orphan_ingredients(session)
+    return terms_changed, regrammed, pruned
 
 
 def aggregate(
@@ -696,14 +815,18 @@ def aggregate(
     with get_session() as session:
         # Convert inside the session: the commit on exit expires the
         # ORM instances, so attributes are unreadable after it.
-        records = [
-            repository.to_recipe_ingredient_model(record)
-            for record in session.scalars(
-                select(RecipeIngredient).where(
-                    RecipeIngredient.recipe_id.in_(recipe_ids)
-                )
+        records = []
+        for line, term in session.execute(
+            repository.lines_with_terms_select(
+                RecipeIngredient.recipe_id.in_(recipe_ids)
             )
-        ]
+        ).all():
+            model = repository.to_recipe_ingredient_model(line, term)
+            # Failed parses and not_food equipment stay stored but are
+            # not shopping.
+            if model.parse_status == "failed" or model.term_resolution == "not_food":
+                continue
+            records.append(model)
         ingredients = {
             ingredient.id: repository.to_model(ingredient)
             for ingredient in session.scalars(select(Ingredient))

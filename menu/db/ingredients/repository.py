@@ -3,12 +3,16 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import Select, select
 
-from menu.db.database import Ingredient, IngredientAlias, RecipeIngredient
+from menu.db.database import Ingredient, IngredientTerm, RecipeIngredient
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
+    from sqlalchemy.sql.expression import ColumnElement
+
+RESOLVED_RESOLUTIONS = ("seed", "auto")
+"""Term resolutions that point at a concept. review/not_food do not."""
 
 
 @dataclass
@@ -33,20 +37,39 @@ def find_ingredient_by_name(name: str, session: Session) -> IngredientModel | No
     return to_model(record) if record is not None else None
 
 
-def alias_target(
-    alias: str, session: Session
-) -> tuple[IngredientModel, str | None] | None:
-    """The canonical ingredient an alias resolves to, with the variant
-    the alias carries ("whole" for whole milk), if any."""
-    row = session.execute(
-        select(Ingredient, IngredientAlias.variant).join(
-            IngredientAlias, IngredientAlias.ingredient_id == Ingredient.id
-        ).where(IngredientAlias.alias == alias)
-    ).first()
-    if row is None:
+def lines_with_terms_select(
+    *criteria: ColumnElement[bool],
+) -> Select[RecipeIngredient, IngredientTerm | None]:
+    """`recipe_ingredients` outer-joined to `ingredient_terms`: the one
+    join every effective-ingredient reader goes through (aggregation,
+    derivation, reports, metrics, review lists)."""
+    stmt: Select[RecipeIngredient, IngredientTerm | None] = select(
+        RecipeIngredient, IngredientTerm
+    ).outerjoin(IngredientTerm, IngredientTerm.id == RecipeIngredient.term_id)
+    if criteria:
+        return stmt.where(*criteria)
+    return stmt
+
+
+def effective_ingredient_id(
+    needs_review: bool, term: IngredientTerm | None
+) -> int | None:
+    """A line's effective ingredient: its term's concept, or NULL when
+    the line is flagged for review, the term is unresolved
+    (review/not_food) or the line has no term. ONE definition of the
+    rule — row readers go through this, SQL readers through
+    effective_ingredient_predicates()."""
+    if needs_review or term is None or term.resolution not in RESOLVED_RESOLUTIONS:
         return None
-    record, variant = row
-    return to_model(record), variant
+    return term.ingredient_id
+
+
+def effective_ingredient_predicates() -> tuple[ColumnElement[bool], ...]:
+    """The same rule as SQL, for readers that aggregate in a query."""
+    return (
+        RecipeIngredient.needs_review.is_(False),
+        IngredientTerm.resolution.in_(RESOLVED_RESOLUTIONS),
+    )
 
 
 @dataclass
@@ -56,7 +79,15 @@ class RecipeIngredientModel:
     position: int
     section: str | None
     raw_text: str
+    term_id: int | None
     ingredient_id: int | None
+    """The EFFECTIVE ingredient (effective_ingredient_id), not a
+    column: reached through the term, NULL when unresolved."""
+    variant: str | None
+    """The term's variant; reached through the term."""
+    term_resolution: str | None
+    needs_review: bool
+    parse_status: str
     quantity: float | None
     quantity_max: float | None
     dimension: str | None
@@ -67,7 +98,6 @@ class RecipeIngredientModel:
     size: str | None
     note: str | None
     optional: bool
-    variant: str | None
     alternative_of: int | None
     parse_confidence: float | None
     grams: float | None
@@ -75,15 +105,21 @@ class RecipeIngredientModel:
     grams_source: str | None
 
 
-def to_recipe_ingredient_model(record: RecipeIngredient) -> RecipeIngredientModel:
+def to_recipe_ingredient_model(
+    record: RecipeIngredient, term: IngredientTerm | None
+) -> RecipeIngredientModel:
     return RecipeIngredientModel(
         id=record.id,
         recipe_id=record.recipe_id,
         position=record.position,
         section=record.section,
         raw_text=record.raw_text,
-        ingredient_id=record.ingredient_id,
-        variant=record.variant,
+        term_id=record.term_id,
+        ingredient_id=effective_ingredient_id(record.needs_review, term),
+        variant=term.variant if term is not None else None,
+        term_resolution=term.resolution if term is not None else None,
+        needs_review=record.needs_review,
+        parse_status=record.parse_status,
         quantity=record.quantity,
         quantity_max=record.quantity_max,
         dimension=record.dimension,
@@ -107,22 +143,22 @@ def get_recipe_ingredients(
 ) -> list[RecipeIngredientModel]:
     """A recipe's ingredient lines, in their original order."""
     return [
-        to_recipe_ingredient_model(record)
-        for record in session.scalars(
-            select(RecipeIngredient)
-            .where(RecipeIngredient.recipe_id == recipe_id)
-            .order_by(RecipeIngredient.position)
-        )
+        to_recipe_ingredient_model(line, term)
+        for line, term in session.execute(
+            lines_with_terms_select(RecipeIngredient.recipe_id == recipe_id).order_by(
+                RecipeIngredient.position
+            )
+        ).all()
     ]
 
 
 def get_unresolved(session: Session) -> list[RecipeIngredientModel]:
-    """Lines whose ingredient_id is NULL, for review."""
+    """Lines with no effective ingredient — no term, a review/not_food
+    term, or a line-level review flag — for review."""
     return [
-        to_recipe_ingredient_model(record)
-        for record in session.scalars(
-            select(RecipeIngredient)
-            .where(RecipeIngredient.ingredient_id.is_(None))
-            .order_by(RecipeIngredient.id)
-        )
+        model
+        for line, term in session.execute(
+            lines_with_terms_select().order_by(RecipeIngredient.id)
+        ).all()
+        if (model := to_recipe_ingredient_model(line, term)).ingredient_id is None
     ]

@@ -9,50 +9,73 @@ from sqlalchemy import select
 from menu.db.database import (
     FoodSource,
     Ingredient,
-    IngredientAlias,
     IngredientFoodRef,
+    IngredientTerm,
     RefFood,
     RefPortion,
 )
 from menu.db.ingredients import repository
 from menu.db.ingredients import seed as seed_module
-from menu.db.ingredients.seed import ALIASES, seed_ingredient_data
+from menu.db.ingredients.seed import ALIASES, NOT_FOOD, seed_ingredient_data
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 
-def test_seed_creates_aliases_and_canonicals(session: Session) -> None:
+def term_row(term: str, session: Session) -> IngredientTerm:
+    row = session.scalars(
+        select(IngredientTerm).where(IngredientTerm.term == term)
+    ).one()
+    assert isinstance(row, IngredientTerm)
+    return row
+
+
+def test_seed_creates_terms_and_canonicals(session: Session) -> None:
     seed_ingredient_data(session)
 
     milk = repository.find_ingredient_by_name("milk", session)
     assert milk is not None
-    warm = repository.alias_target("warm milk", session)
-    assert warm is not None
-    assert warm[0].id == milk.id
+    warm = term_row("warm milk", session)
+    assert (warm.ingredient_id, warm.variant, warm.resolution) == (
+        milk.id,
+        "warm",
+        "seed",
+    )
 
     flour = repository.find_ingredient_by_name("flour", session)
     assert flour is not None
     assert flour.density_g_per_ml == 0.55
 
 
+def test_seed_creates_a_self_term_for_every_concept(session: Session) -> None:
+    """"milk" resolves through its own seed term, not only through
+    variant aliases."""
+    seed_ingredient_data(session)
+
+    milk = repository.find_ingredient_by_name("milk", session)
+    self_term = term_row("milk", session)
+    assert milk is not None
+    assert (self_term.ingredient_id, self_term.variant) == (milk.id, None)
+    assert self_term.resolution == "seed"
+
+
 def test_seed_king_arthur_aliases_are_brand_free(session: Session) -> None:
     """King Arthur's brand prefix is stripped from ingredient lines at
-    parse time (ingredient_strip_patterns), so the seeded aliases match
+    parse time (ingredient_strip_patterns), so the seeded terms match
     the brand-free names the parser sees."""
     seed_ingredient_data(session)
 
-    for alias in (
+    for term in (
         "unbleached all-purpose flour",
         "unbleached bread flour",
         "baker's special dry milk",
         "artisan bread topping",
         "the works bread topping",
     ):
-        found = session.query(IngredientAlias).where(IngredientAlias.alias == alias)
-        assert found.count() == 1, alias
+        found = session.query(IngredientTerm).where(IngredientTerm.term == term)
+        assert found.count() == 1, term
 
-    assert all("king arthur" not in alias for alias, _, _ in ALIASES)
+    assert all("king arthur" not in term for term, _, _ in ALIASES)
 
 
 def test_seed_is_idempotent(session: Session) -> None:
@@ -61,25 +84,54 @@ def test_seed_is_idempotent(session: Session) -> None:
 
     milk = repository.find_ingredient_by_name("milk", session)
     assert milk is not None
-    aliases = session.query(IngredientAlias).where(IngredientAlias.alias == "warm milk")
-    assert aliases.count() == 1
+    terms = session.query(IngredientTerm).where(IngredientTerm.term == "warm milk")
+    assert terms.count() == 1
 
 
-def test_seed_repoints_parse_time_self_aliases(session: Session) -> None:
-    """A stored self-alias ("warm milk" -> "warm milk") must end up
-    pointing at the canonical ingredient, not be left alone."""
+def test_seed_repoints_parse_time_self_terms(session: Session) -> None:
+    """A stored auto term ("warm milk" -> the "warm milk" concept the
+    parser created) must end up pointing at the canonical ingredient,
+    not be left alone."""
     stale = Ingredient(name="warm milk")
     session.add(stale)
     session.flush()
-    session.add(IngredientAlias(alias="warm milk", ingredient_id=stale.id))
+    session.add(
+        IngredientTerm(
+            term="warm milk", ingredient_id=stale.id, resolution="auto"
+        )
+    )
 
     seed_ingredient_data(session)
 
     milk = repository.find_ingredient_by_name("milk", session)
-    repointed = repository.alias_target("warm milk", session)
+    repointed = term_row("warm milk", session)
     assert milk is not None
-    assert repointed is not None
-    assert repointed[0].id == milk.id
+    assert repointed.ingredient_id == milk.id
+    assert repointed.resolution == "seed"
+
+
+def test_seed_marks_equipment_not_food(session: Session) -> None:
+    """Equipment the parser calls an ingredient ("12-hole mini bundt
+    tin") is seeded as a not_food term with no concept: its lines stay
+    stored but are excluded from aggregation and nutrition. A
+    parse-time auto term for the same name is flipped."""
+    stale = Ingredient(name="12-hole mini bundt tin")
+    session.add(stale)
+    session.flush()
+    session.add(
+        IngredientTerm(
+            term=NOT_FOOD[0], ingredient_id=stale.id, resolution="auto"
+        )
+    )
+
+    seed_ingredient_data(session)
+
+    row = term_row(NOT_FOOD[0], session)
+    assert (row.resolution, row.ingredient_id, row.variant) == (
+        "not_food",
+        None,
+        None,
+    )
 
 
 def test_seed_sets_densities_and_weights_on_existing(session: Session) -> None:

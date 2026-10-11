@@ -184,18 +184,26 @@ class RecipeNutrition(Base):
 
 
 class Ingredient(Base):
-    """Canonical ingredient, shared by aliases and recipe lines."""
+    """Canonical ingredient concept, shared by terms and recipe lines."""
 
-    __tablename__ = "ingredient"
+    __tablename__ = "ingredients"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(nullable=False, unique=True)
     """Canonical, singular, lowercase: "milk"."""
+    origin: Mapped[str] = mapped_column(nullable=False, default="auto")
+    """'seed' (curated in seed.py) | 'auto' (a parser name the
+    heuristics let through). Seeding a name that exists as auto flips
+    it to seed; auto concepts are what pruning cleans up."""
     density_g_per_ml: Mapped[float | None]
     """Enables volume<->mass conversion. Hand-seeded; derived from the
     reference data when no seed exists."""
     unit_weight_g: Mapped[float | None]
     """Per-item weight for count->mass conversion (egg ~= 50 g)."""
+
+    __table_args__ = (
+        CheckConstraint("origin IN ('seed', 'auto')", "ck_ingredients_origin"),
+    )
 
 
 class IngredientFoodRef(Base):
@@ -218,7 +226,7 @@ class IngredientFoodRef(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     ingredient_id: Mapped[int] = mapped_column(
-        ForeignKey("ingredient.id"), nullable=False
+        ForeignKey("ingredients.id"), nullable=False
     )
     ref_food_id: Mapped[int] = mapped_column(nullable=False)
     source_id: Mapped[int] = mapped_column(nullable=False)
@@ -281,31 +289,61 @@ class IngredientFoodRef(Base):
     )
 
 
-class IngredientAlias(Base):
-    """Maps a line's parsed name to its canonical ingredient.
+class IngredientTerm(Base):
+    """One parsed name (a term) and the concept it resolves to.
 
-    Variants ("whole", "unsalted") are kept so a shopping list can
-    roll them up to the parent by default, or keep them apart.
+    Every parsed name is a term; recipe lines point at terms, not
+    concepts, so re-pointing a term re-resolves every line that uses
+    it with no reparse. `resolution` says how the term was decided:
+    'seed' (curated in seed.py), 'auto' (the parser name the
+    heuristics let through), 'review' (the review queue — a name the
+    parser likely mangled) or 'not_food' (equipment and other
+    non-ingredients; their lines stay stored but are excluded from
+    aggregation and nutrition). A term resolves exactly when its
+    resolution is seed/auto, which the CHECK enforces.
     """
 
-    __tablename__ = "ingredient_alias"
+    __tablename__ = "ingredient_terms"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    alias: Mapped[str] = mapped_column(nullable=False, unique=True)
-    ingredient_id: Mapped[int] = mapped_column(
-        ForeignKey("ingredient.id"), nullable=False
+    term: Mapped[str] = mapped_column(nullable=False, unique=True)
+    """The canonical_name of a parsed name: "warm milk"."""
+    ingredient_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ingredients.id")
     )
+    """The concept the term resolves to; NULL exactly when the term is
+    unresolved (review/not_food)."""
     variant: Mapped[str | None]
+    """Which variant the term carries ("whole", "warm"); lets a
+    shopping list keep variants apart."""
+    resolution: Mapped[str] = mapped_column(nullable=False)
+    """'seed' | 'auto' | 'review' | 'not_food'."""
+
+    __table_args__ = (
+        Index("ix_ingredient_terms_ingredient_id", "ingredient_id"),
+        CheckConstraint(
+            "resolution IN ('seed', 'auto', 'review', 'not_food')",
+            "ck_ingredient_terms_resolution",
+        ),
+        CheckConstraint(
+            "(resolution IN ('review', 'not_food') AND ingredient_id IS NULL) "
+            "OR (resolution NOT IN ('review', 'not_food') "
+            "AND ingredient_id IS NOT NULL)",
+            "ck_ingredient_terms_resolution_ingredient",
+        ),
+    )
 
 
 class RecipeIngredient(Base):
     """One parsed ingredient line of one recipe.
 
-    ingredient_id NULL means unresolved: the raw text is always kept,
-    so the row can be reviewed and matched later.
+    The line points at its term; the effective ingredient is reached
+    through the term (see repository.effective_ingredient_*). The raw
+    text is always kept, so an unresolved or failed line can be
+    reviewed and matched later.
     """
 
-    __tablename__ = "recipe_ingredient"
+    __tablename__ = "recipe_ingredients"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     recipe_id: Mapped[int] = mapped_column(ForeignKey("recipes.id"))
@@ -314,11 +352,16 @@ class RecipeIngredient(Base):
     """BBC publishes a flat ingredient list, so NULL today; populated
     for sites with sectioned ingredient groups."""
     raw_text: Mapped[str] = mapped_column(nullable=False)
-    ingredient_id: Mapped[int | None] = mapped_column(ForeignKey("ingredient.id"))
-    variant: Mapped[str | None]
-    """Which alias variant the line resolved through ("whole",
-    "unsalted"); lets a shopping list keep variants apart. Set only
-    when an alias row carried a variant."""
+    term_id: Mapped[int | None] = mapped_column(ForeignKey("ingredient_terms.id"))
+    """The term the line's parsed name resolved to; NULL when the
+    parse failed outright."""
+    needs_review: Mapped[bool] = mapped_column(nullable=False, default=False)
+    """The line-level review flag (line_needs_review): it is about the
+    line's raw text, not the term, so it must not taint the term for
+    other lines. A seeded term clears it."""
+    parse_status: Mapped[str] = mapped_column(nullable=False, default="ok")
+    """'ok' | 'failed' — a parse that raised is stored with 'failed'
+    and no term instead of being dropped."""
     quantity: Mapped[float | None]
     """Base units (g / ml / piece)."""
     quantity_max: Mapped[float | None]
@@ -334,7 +377,7 @@ class RecipeIngredient(Base):
     note: Mapped[str | None]
     optional: Mapped[bool] = mapped_column(default=False)
     alternative_of: Mapped[int | None] = mapped_column(
-        ForeignKey("recipe_ingredient.id")
+        ForeignKey("recipe_ingredients.id", ondelete="CASCADE")
     )
     """Set on the non-counted options of "rosewater or vanilla"."""
     parse_confidence: Mapped[float | None]
@@ -350,11 +393,15 @@ class RecipeIngredient(Base):
     unconverted lines."""
 
     __table_args__ = (
-        Index("ix_recipe_ingredient_ingredient_id", "ingredient_id"),
-        Index("ix_recipe_ingredient_recipe_id_position", "recipe_id", "position"),
+        Index("ix_recipe_ingredients_term_id", "term_id"),
+        Index("ix_recipe_ingredients_recipe_id_position", "recipe_id", "position"),
         CheckConstraint(
             "dimension IS NULL OR dimension IN ('mass', 'volume', 'count')",
-            "ck_recipe_ingredient_dimension",
+            "ck_recipe_ingredients_dimension",
+        ),
+        CheckConstraint(
+            "parse_status IN ('ok', 'failed')",
+            "ck_recipe_ingredients_parse_status",
         ),
     )
 

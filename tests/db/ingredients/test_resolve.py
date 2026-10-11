@@ -21,7 +21,7 @@ from menu.db.ingredients import repository, resolve
 from menu.db.ingredients import seed as seed_module
 from menu.db.ingredients.seed import seed_ingredient_data
 
-from .conftest import add_recipe, add_term, store_lines
+from .helpers import add_recipe, add_term, store_lines
 
 if TYPE_CHECKING:
     from menu.ingest.ingredients import ParsedLine

@@ -15,7 +15,7 @@ from menu.db.database import (
 )
 from menu.db.ingredients import reports
 
-from .conftest import add_recipe, add_term
+from .helpers import add_recipe, add_term
 
 
 @pytest.mark.usefixtures("db_engine")

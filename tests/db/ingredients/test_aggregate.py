@@ -16,7 +16,7 @@ from menu.db.database import (
 from menu.db.ingredients import aggregate
 from menu.db.ingredients.seed import seed_ingredient_data
 
-from .conftest import add_recipe, add_recipe_row, add_term, store_lines
+from .helpers import add_recipe, add_recipe_row, add_term, store_lines
 
 FIXTURE = Path(__file__).parents[2] / "ingest" / "fixtures" / "bbc_lines.json"
 

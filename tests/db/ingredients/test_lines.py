@@ -23,7 +23,7 @@ from menu.db.ingredients import seed as seed_module
 from menu.db.ingredients.seed import seed_ingredient_data
 from menu.ingest.ingredients import parse_line
 
-from .conftest import add_recipe, store_lines
+from .helpers import add_recipe, store_lines
 
 if TYPE_CHECKING:
     from menu.ingest.ingredients import ParsedLine

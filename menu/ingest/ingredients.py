@@ -11,6 +11,7 @@ extract" -> rosewater extract, then vanilla extract). The first option
 is the one a shopping list counts; the rest are kept as alternatives.
 """
 
+import functools
 import re
 from dataclasses import dataclass
 from fractions import Fraction
@@ -75,6 +76,20 @@ _INFLECT = inflect.engine()
 # singular or uncountable, so leave them exactly as parsed.
 _LEAVE_ALONE = frozenset({"molasses", "cassis"})
 
+# Sites publish typographic punctuation and non-breaking spaces; the
+# parser and the alias table work on the ASCII forms, so fold before
+# anything else sees the text.
+_TYPOGRAPHY = str.maketrans(
+    {
+        "\u2019": "'",
+        "\u2018": "'",
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u00a0": " ",
+        "\u202f": " ",
+    }
+)
+
 
 def canonical_name(text: str) -> str:
     """Lowercase and properly singularise a parsed name: "cherry
@@ -87,7 +102,7 @@ def canonical_name(text: str) -> str:
     couscous, hummus, molasses) and inflect strips them to junk
     ("asparagu", "molass").
     """
-    name = " ".join(text.lower().split())
+    name = " ".join(text.translate(_TYPOGRAPHY).lower().split())
     if not name:
         return name
     *lead, last = name.split()
@@ -163,10 +178,24 @@ def _primary_amount(parsed: ParsedIngredient) -> IngredientAmount | None:
     return options[0]
 
 
+@functools.cache
+def _strip_res(patterns: tuple[str, ...]) -> tuple[re.Pattern[str], ...]:
+    """Compile a site's strip patterns once per site, not once per line."""
+    return tuple(re.compile(p, re.IGNORECASE) for p in patterns)
+
+
 def parse_line(text: str, site: SiteConfig) -> ParsedLine:
     """Parse one ingredient line under the site's unit system."""
+    # Fold typographic quotes/NBSPs to ASCII and remove the site's
+    # boilerplate (King Arthur's brand) before parsing; raw_text below
+    # stays the verbatim line.
+    parser_text = text.translate(_TYPOGRAPHY)
+    if site.ingredient_strip_patterns:
+        for pattern in _strip_res(site.ingredient_strip_patterns):
+            parser_text = pattern.sub("", parser_text)
+        parser_text = " ".join(parser_text.split())
     parsed = parse_ingredient(
-        text,
+        parser_text,
         volumetric_units_system=_VOLUMETRIC_SYSTEMS[site.unit_system],
         foundation_foods=True,
     )

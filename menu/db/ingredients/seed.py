@@ -55,20 +55,17 @@ ALIASES: list[tuple[str, str, str | None]] = [
         "blanched almond",
         "whole, roughly chopped",
     ),
-    # King Arthur recipes carry the brand in the ingredient name;
-    # the 5-word names would otherwise all land in review. Bread
-    # flour folds into the existing "flour" canonical rather than
-    # fragmenting a second one.
-    (
-        "king arthur unbleached all-purpose flour",
-        "all-purpose flour",
-        None,
-    ),
-    ("king arthur unbleached bread flour", "flour", "bread"),
-    ("king arthur semolina flour", "semolina flour", None),
-    ("king arthur baker's special dry milk", "nonfat dry milk", None),
-    ("king arthur artisan bread topping", "bread topping", "artisan"),
-    ("king arthur the works bread topping", "bread topping", "the works"),
+    # The King Arthur site strips its "King Arthur " brand prefix at
+    # parse time (ingredient_strip_patterns), so the aliases below are
+    # the brand-free names the parser sees. Bread flour folds into the
+    # existing "flour" canonical rather than fragmenting a second one.
+    # "semolina flour" needs no alias: the stripped name already parses
+    # to its own canonical.
+    ("unbleached all-purpose flour", "all-purpose flour", None),
+    ("unbleached bread flour", "flour", "bread"),
+    ("baker's special dry milk", "nonfat dry milk", None),
+    ("artisan bread topping", "bread topping", "artisan"),
+    ("the works bread topping", "bread topping", "the works"),
 ]
 
 # Whitespace-normalised raw line -> canonical ingredient, for lines the

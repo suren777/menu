@@ -272,10 +272,10 @@ def _crawl_pages(
 
     blocked = 0
     for page in queue:
-        report.fetched += 1
         try:
             status = process_url(page, site, offline=offline)
         except BlockedError as exc:
+            report.fetched += 1
             blocked += 1
             logger.warning("Blocked on %s: %s", page.url, exc)
             if blocked >= _BLOCK_LIMIT:
@@ -283,6 +283,9 @@ def _crawl_pages(
                     f"{site.name}: {blocked} pages blocked in a row"
                 ) from exc
             continue
+        if status == "queued":  # offline and not cached: not an attempt
+            continue
+        report.fetched += 1
         blocked = 0
         if status == "fetched":
             report.stored += 1

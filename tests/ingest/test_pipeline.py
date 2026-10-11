@@ -721,7 +721,7 @@ def test_offline_crawl_leaves_an_uncached_page_queued(mock_get: MagicMock) -> No
 
     report = crawl_sitemap(SITE, offline=True)
 
-    assert report == CrawlReport(fetched=1)
+    assert report == CrawlReport()  # not cached: no attempt counted
     mock_get.assert_not_called()
     with get_session() as session:
         record = get_page_record(session, "https://test.com/recipes/cake")

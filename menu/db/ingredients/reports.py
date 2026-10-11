@@ -73,8 +73,8 @@ def ref_review(
     """Top ingredients without a confirmed reference by line count,
     with the parser's candidate and the best text matches from each
     imported source, for hand-seeding into seed.FOOD_REFS. Candidates
-    that REJECTED_REFS turned down — and their foods as text matches —
-    stay out. Needs the reference import; a report, never an
+    a rejected food_ref suggestion turned down — and their foods as
+    text matches — stay out. Needs the reference import; a report, never an
     auto-merge. Lines count through their terms' effective ingredient
     (repository.effective_ingredient_predicates). With an embedder, a
     fifth element carries the embedding neighbours per row — the top 3
@@ -143,7 +143,7 @@ def ref_review(
             )
             # Text match: descriptions containing every word of the
             # name, one candidate per source. A food this ingredient's
-            # REJECTED_REFS entry turned down is not offered again.
+            # rejected suggestion turned down is not offered again.
             words = name.lower().split()
             rejected_foods = rejected.get(ingredient_id, set())
             matches = []

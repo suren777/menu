@@ -1,22 +1,33 @@
 """Pipeline tests: the crawl ledger and the atomic recipe write."""
 
 import hashlib
+import json
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
 from sqlalchemy import select
 
 from menu.db.connection import get_session
-from menu.db.database import Page, Recipe, Sitemap
+from menu.db.database import (
+    IngredientTerm,
+    Page,
+    Recipe,
+    RecipeIngredient,
+    Sitemap,
+)
+from menu.db.ingredients import suggestions
 from menu.db.pages import repository as pages_repository
 from menu.db.sitemaps import actions as sitemap_actions
+from menu.ingest import pipeline
 from menu.ingest.discover import SitemapEntry
 from menu.ingest.errors import (
     BlockedError,
     DisallowedError,
     FetchError,
 )
+from menu.ingest.llm_review import Usage
 from menu.ingest.pipeline import (
     CrawlReport,
     crawl_sitemap,
@@ -816,3 +827,120 @@ def test_reparse_site_only_touches_its_recipes(
 
 def test_bbc_site_registered() -> None:
     assert get_site("bbc_good_food").name == BBC_GOOD_FOOD.name
+
+
+class _HashEmbedder:
+    model_id = "fake/hash"
+
+    def embed(self, texts: list[str]) -> Any:
+        rows = []
+        for text in texts:
+            seed = int.from_bytes(hashlib.sha256(text.encode()).digest()[:4])
+            rows.append(np.random.default_rng(seed).standard_normal(8))
+        return np.array(rows, dtype=np.float32)
+
+
+class _NotFoodClient:
+    """Calls every item not_food; records what it was sent."""
+
+    model_id = "fake/llm"
+
+    def __init__(self) -> None:
+        self.users: list[str] = []
+
+    def complete(
+        self, system: str, user: str, schema: dict[str, Any], *, max_tokens: int
+    ) -> Any:
+        del system, schema, max_tokens
+        self.users.append(user)
+        count = sum(1 for line in user.splitlines() if not line.startswith(" "))
+        verdicts = [
+            {
+                "index": index,
+                "kind": "not_food",
+                "target": None,
+                "variant": None,
+                "new": None,
+                "line": None,
+                "name": None,
+                "reason": "equipment",
+            }
+            for index in range(count)
+        ]
+        return json.dumps({"items": verdicts}), Usage(10, 5)
+
+
+def _queue_terms() -> None:
+    with get_session() as session:
+        page = Page(url="https://x/r", site="bbc_good_food")
+        session.add(page)
+        session.flush()
+        recipe = Recipe(
+            page_id=page.id, name="R", data={}, data_sha256="r", extractor="json_ld"
+        )
+        session.add(recipe)
+        session.flush()
+        for position, term in enumerate(("bundt tin and tray", "cake tin or tray")):
+            row = IngredientTerm(term=term, resolution="review")
+            session.add(row)
+            session.flush()
+            session.add(
+                RecipeIngredient(
+                    recipe_id=recipe.id,
+                    position=position,
+                    raw_text=f"1 {term}",
+                    term_id=row.id,
+                )
+            )
+
+
+@pytest.mark.usefixtures("db_engine")
+def test_suggest_appends_new_verdicts_and_skips_reviewed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _queue_terms()
+    reviewed = suggestions.Suggestion(
+        input="queue",
+        kind="ok",
+        subject="cake tin or tray",
+        proposal={},
+        evidence={"reason": "earlier"},
+        model={"llm": "human"},
+        status="rejected",
+    )
+    suggestions.save([reviewed])
+    client = _NotFoodClient()
+    monkeypatch.setattr(pipeline, "suggest_embedder", _HashEmbedder)
+    monkeypatch.setattr(pipeline, "suggest_client", lambda: client)
+
+    pipeline.suggest_command(["queue"])
+
+    assert len(client.users) == 1
+    assert "bundt tin and tray" in client.users[0]
+    assert "cake tin or tray" not in client.users[0]
+    ledger = suggestions.load()
+    assert [(s.subject, s.kind, s.status) for s in ledger] == [
+        ("bundt tin and tray", "not_food", "pending"),
+        ("cake tin or tray", "ok", "rejected"),
+    ]
+    assert ledger[0].model == {"llm": "fake/llm", "embedding": "fake/hash"}
+
+
+@pytest.mark.usefixtures("db_engine")
+def test_suggest_dry_run_calls_no_llm_and_writes_nothing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _queue_terms()
+
+    def no_client() -> Any:
+        raise AssertionError("dry run must not build an LLM client")
+
+    monkeypatch.setattr(pipeline, "suggest_embedder", _HashEmbedder)
+    monkeypatch.setattr(pipeline, "suggest_client", no_client)
+
+    pipeline.suggest_command(["queue"], dry_run=True)
+
+    out = capsys.readouterr().out
+    assert "queue: 2 items" in out
+    assert "Estimated token budget: 1300 tokens" in out
+    assert suggestions.load() == []

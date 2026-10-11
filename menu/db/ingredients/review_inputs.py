@@ -324,12 +324,12 @@ def ref_neighbours(
         )
     }
     rejected: dict[int, set[int]] = {}
-    for ingredient_id, ref_food_id in session.execute(
+    for owner_id, ref_food_id in session.execute(
         select(IngredientFoodRef.ingredient_id, IngredientFoodRef.ref_food_id).where(
             IngredientFoodRef.status == "rejected"
         )
     ).all():
-        rejected.setdefault(ingredient_id, set()).add(ref_food_id)
+        rejected.setdefault(owner_id, set()).add(ref_food_id)
     foods = list(
         session.scalars(
             select(RefFood)
@@ -352,9 +352,11 @@ def ref_neighbours(
         embed(queries, embedder=embedder, cache_dir=EMBEDDINGS_DIR),
         embed(
             [
-                f"{food.description} ({food.category})"
-                if food.category is not None
-                else food.description
+                (
+                    f"{food.description} ({food.category})"
+                    if food.category is not None
+                    else food.description
+                )
                 for food in foods
             ],
             embedder=embedder,

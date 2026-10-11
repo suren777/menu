@@ -31,6 +31,8 @@ MODELS_DIR = DEFAULT_CACHE_DIR / "models"
 EMBEDDINGS_DIR = DEFAULT_CACHE_DIR / "embeddings"
 """Where per-model vector caches live, next to the page cache."""
 
+_BLOCK_ROWS = 512
+
 
 class Embedder(Protocol):
     """Anything that turns texts into vectors, one row per text."""
@@ -142,16 +144,18 @@ def nearest(
     product is the cosine similarity. Scores below `floor` are
     dropped; no vector store, one matrix product and an argsort.
     """
-    scores = (
-        np.asarray(queries, dtype=np.float32) @ np.asarray(corpus, dtype=np.float32).T
-    )
+    query_rows = np.asarray(queries, dtype=np.float32)
+    corpus_t = np.asarray(corpus, dtype=np.float32).T
     results: list[list[tuple[int, float]]] = []
-    for row in scores:
-        # Stable sort on the negated scores: ties keep the lower
-        # corpus index first.
-        order = np.argsort(-row, kind="stable")[:k]
-        hits = [(int(index), float(row[index])) for index in order]
-        if floor is not None:
-            hits = [hit for hit in hits if hit[1] >= floor]
-        results.append(hits)
+    # Score in row blocks: 8k concepts against 22k reference foods
+    # would otherwise be a ~700 MB matrix in one go.
+    for start in range(0, len(query_rows), _BLOCK_ROWS):
+        for row in query_rows[start : start + _BLOCK_ROWS] @ corpus_t:
+            # Stable sort on the negated scores: ties keep the lower
+            # corpus index first.
+            order = np.argsort(-row, kind="stable")[:k]
+            hits = [(int(index), float(row[index])) for index in order]
+            if floor is not None:
+                hits = [hit for hit in hits if hit[1] >= floor]
+            results.append(hits)
     return results

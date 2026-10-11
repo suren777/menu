@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 import menu.db.connection
 from menu.db.database import initialise
 from menu.db.engine import configure_sqlite
-from menu.db.ingredients import suggestions
+from menu.db.ingredients import review_inputs, suggestions
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -23,6 +23,12 @@ def empty_suggestions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Seeding reads suggestions.json; tests start from an empty ledger
     so accepted entries committed to the real file can't change them."""
     monkeypatch.setattr(suggestions, "SUGGESTIONS_PATH", tmp_path / "suggestions.json")
+
+
+@pytest.fixture(autouse=True)
+def temp_embeddings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Embedding caches written by tests stay out of the real .cache."""
+    monkeypatch.setattr(review_inputs, "EMBEDDINGS_DIR", tmp_path / "embeddings")
 
 
 @pytest.fixture

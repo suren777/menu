@@ -1,5 +1,7 @@
 """Nutrition report tests."""
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 from menu.db.connection import get_session
@@ -7,12 +9,36 @@ from menu.db.database import (
     FoodSource,
     Ingredient,
     IngredientFoodRef,
+    Page,
+    Recipe,
     RecipeIngredient,
     RecipeNutrition,
-    RecipeUrls,
     RefFood,
 )
 from menu.nutrition.reports import coverage_report, validation_report
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
+
+def _add_recipe(
+    session: Session, url: str, name: str, servings: int | None = None
+) -> Recipe:
+    """A bare recipe row, reached through its page (the ledger)."""
+    page = Page(url=url, site="bbc_good_food")
+    session.add(page)
+    session.flush()
+    recipe = Recipe(
+        page_id=page.id,
+        name=name,
+        data={},
+        data_sha256=url,
+        extractor="json_ld",
+        servings=servings,
+    )
+    session.add(recipe)
+    session.flush()
+    return recipe
 
 
 @pytest.mark.usefixtures("db_engine")
@@ -22,15 +48,7 @@ def test_validation_report_compares_per_serving(
     """Derived totals are divided by servings before comparing with
     the published per-serving values."""
     with get_session() as session:
-        recipe = RecipeUrls(
-            url="https://x/omelette",
-            name="Omelette",
-            data={},
-            site="bbc_good_food",
-            servings=2,
-        )
-        session.add(recipe)
-        session.flush()
+        recipe = _add_recipe(session, "https://x/omelette", "Omelette", servings=2)
         session.add(
             RecipeNutrition(
                 recipe_id=recipe.id, source="published", energy_kcal=100.0
@@ -60,15 +78,7 @@ def test_validation_report_skips_low_coverage(
     """A derivation covering under 90% of the grams is not compared —
     low coverage is marked, not trusted."""
     with get_session() as session:
-        recipe = RecipeUrls(
-            url="https://x/soup",
-            name="Soup",
-            data={},
-            site="bbc_good_food",
-            servings=2,
-        )
-        session.add(recipe)
-        session.flush()
+        recipe = _add_recipe(session, "https://x/soup", "Soup", servings=2)
         session.add(
             RecipeNutrition(
                 recipe_id=recipe.id, source="published", energy_kcal=100.0
@@ -94,15 +104,7 @@ def test_validation_report_skips_zero_servings(
     """Some BBC recipes publish a yield of 0; there is no per-serving
     value to compare, so they are skipped rather than divided by."""
     with get_session() as session:
-        recipe = RecipeUrls(
-            url="https://x/stock",
-            name="Stock",
-            data={},
-            site="bbc_good_food",
-            servings=0,
-        )
-        session.add(recipe)
-        session.flush()
+        recipe = _add_recipe(session, "https://x/stock", "Stock", servings=0)
         session.add(
             RecipeNutrition(
                 recipe_id=recipe.id, source="published", energy_kcal=100.0
@@ -143,11 +145,8 @@ def test_coverage_report_lists_unreferenced_ingredients(
         session.flush()
         egg = Ingredient(name="egg")
         water = Ingredient(name="water")
-        recipe = RecipeUrls(
-            url="https://x/x", name="X", data={}, site="bbc_good_food"
-        )
-        session.add_all([egg, water, recipe])
-        session.flush()
+        session.add_all([egg, water])
+        recipe = _add_recipe(session, "https://x/x", "X")
         session.add(
             IngredientFoodRef(
                 ingredient_id=egg.id,

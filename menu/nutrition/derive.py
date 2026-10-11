@@ -17,9 +17,10 @@ from menu.db.database import (
     FoodSource,
     Ingredient,
     IngredientFoodRef,
+    Page,
+    Recipe,
     RecipeIngredient,
     RecipeNutrition,
-    RecipeUrls,
     RefFood,
     RefNutrient,
 )
@@ -131,12 +132,15 @@ def derive_nutrition(recipe_id: int) -> RecipeNutrition:
     nothing and are counted.
     """
     with get_session() as session:
-        recipe = session.get(RecipeUrls, recipe_id)
+        recipe = session.get(Recipe, recipe_id)
         if recipe is None:
             raise ValueError(f"no recipe {recipe_id}")
+        # The recipe's site is its page's site (recipes have none of
+        # their own).
+        page = session.get(Page, recipe.page_id)
         preference = (
-            get_site(recipe.site).nutrition_sources
-            if recipe.site is not None
+            get_site(page.site).nutrition_sources
+            if page is not None
             else ("fdc",)
         )
         lines = session.scalars(
@@ -234,7 +238,7 @@ def store_published_nutrition(recipe_id: int) -> None:
     JSON-LD block) as its "published" row. A recipe that publishes
     nothing gets no row."""
     with get_session() as session:
-        recipe = session.get(RecipeUrls, recipe_id)
+        recipe = session.get(Recipe, recipe_id)
         if recipe is None:
             return
         values = parse_published_nutrition(recipe.data)

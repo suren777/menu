@@ -15,9 +15,10 @@ from menu.db.connection import get_session
 from menu.db.database import (
     Ingredient,
     IngredientFoodRef,
+    Page,
+    Recipe,
     RecipeIngredient,
     RecipeNutrition,
-    RecipeUrls,
 )
 from menu.nutrition.derive import derive_nutrition, store_published_nutrition
 
@@ -34,7 +35,7 @@ def derive_all_nutrition() -> int:
     from the ingredient lines, a "published" row from the JSON-LD
     block. Returns the recipe count."""
     with get_session() as session:
-        recipe_ids = list(session.scalars(select(RecipeUrls.id)))
+        recipe_ids = list(session.scalars(select(Recipe.id)))
     for recipe_id in recipe_ids:
         derive_nutrition(recipe_id)
         store_published_nutrition(recipe_id)
@@ -53,8 +54,13 @@ def validation_comparisons(
         tuple[int, str | None, str | None, str, dict[str, float]]
     ] = []
     with get_session() as session:
+        # The recipe's site is its page's site (recipes have none of
+        # their own).
         recipes = {
-            recipe.id: recipe for recipe in session.scalars(select(RecipeUrls))
+            recipe.id: (recipe, site)
+            for recipe, site in session.execute(
+                select(Recipe, Page.site).join(Page, Page.id == Recipe.page_id)
+            ).all()
         }
         published = {
             row.recipe_id: row
@@ -65,16 +71,17 @@ def validation_comparisons(
         for row in session.scalars(
             select(RecipeNutrition).where(RecipeNutrition.source == "derived")
         ):
-            recipe = recipes.get(row.recipe_id)
+            match = recipes.get(row.recipe_id)
             pub = published.get(row.recipe_id)
             if (
-                recipe is None
+                match is None
                 or pub is None
                 or row.coverage is None
                 or row.coverage < min_coverage
-                or not recipe.servings
+                or not match[0].servings
             ):
                 continue
+            recipe, site = match
             # Published values are per serving; derived totals are per
             # recipe, so they are divided by servings first.
             servings = recipe.servings
@@ -91,7 +98,7 @@ def validation_comparisons(
             if not errors:
                 continue
             comparisons.append(
-                (row.recipe_id, recipe.site, row.sources, recipe.name, errors)
+                (row.recipe_id, site, row.sources, recipe.name, errors)
             )
     return comparisons
 
@@ -162,9 +169,10 @@ def coverage_report(limit: int = 50) -> None:
     reference, grouped by site."""
     with get_session() as session:
         rows = session.execute(
-            select(RecipeUrls.site, Ingredient.name, func.count())
+            select(Page.site, Ingredient.name, func.count())
             .select_from(RecipeIngredient)
-            .join(RecipeUrls, RecipeUrls.id == RecipeIngredient.recipe_id)
+            .join(Recipe, Recipe.id == RecipeIngredient.recipe_id)
+            .join(Page, Page.id == Recipe.page_id)
             .join(Ingredient, Ingredient.id == RecipeIngredient.ingredient_id)
             .outerjoin(
                 IngredientFoodRef,
@@ -180,12 +188,12 @@ def coverage_report(limit: int = 50) -> None:
                 RecipeIngredient.quantity.is_not(None),
                 IngredientFoodRef.ref_food_id.is_(None),
             )
-            .group_by(RecipeUrls.site, Ingredient.name)
+            .group_by(Page.site, Ingredient.name)
             .order_by(func.count().desc(), Ingredient.name)
             .limit(limit)
         ).all()
 
-    by_site: dict[str | None, list[tuple[str, int]]] = defaultdict(list)
+    by_site: dict[str, list[tuple[str, int]]] = defaultdict(list)
     for site, name, count in rows:
         by_site[site].append((name, int(count)))
     for site in sorted(by_site, key=lambda s: s or ""):

@@ -5,7 +5,7 @@ import pytest
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import RetryError
 
-from menu.ingest.errors import BlockedError, DisallowedError
+from menu.ingest.errors import BlockedError, DisallowedError, FetchError
 from menu.ingest.fetch import _cache_path, _robots, fetch_page, fetch_recipe
 from menu.ingest.registry import SiteConfig
 
@@ -70,6 +70,26 @@ def test_fetch_page_bypasses_cache_when_disabled(
     mock_get.assert_called_with("https://test.com/x", timeout=10)
 
 
+@patch("menu.ingest.fetch.session.get")
+def test_fetch_page_bypass_still_writes_the_cache(
+    mock_get: MagicMock, tmp_path: Path
+) -> None:
+    """A fresh fetch (sitemaps change) is still cached, so a later
+    rebuild can replay the crawl."""
+    mock_response = MagicMock()
+    mock_response.ok = True
+    mock_response.status_code = 200
+    mock_response.text = ""
+    mock_response.content = b"fresh"
+    mock_get.return_value = mock_response
+
+    fetch_page("https://test.com/x", SITE, cache_dir=tmp_path, use_cache=False)
+
+    cached = _cache_path("https://test.com/x", tmp_path)
+    assert cached.exists()
+    assert cached.read_bytes() == b"fresh"
+
+
 @patch("menu.ingest.fetch._politeness.wait")
 @patch("menu.ingest.fetch.session.get")
 def test_fetch_recipe_parses_html(
@@ -111,8 +131,28 @@ def test_fetch_page_403_is_a_block(mock_get: MagicMock, tmp_path: Path) -> None:
     blocked.status_code = 403
     mock_get.side_effect = [robots, blocked]
 
-    with pytest.raises(BlockedError, match=r"HTTP 403"):
+    with pytest.raises(BlockedError, match=r"HTTP 403") as excinfo:
         fetch_page("https://test.com/recipes/cake", SITE, cache_dir=tmp_path)
+    assert excinfo.value.status_code == 403
+
+
+@patch("menu.ingest.fetch.session.get")
+def test_fetch_page_404_is_a_fetch_error_with_status(
+    mock_get: MagicMock, tmp_path: Path
+) -> None:
+    """A dead link is a FetchError carrying the HTTP status, so the
+    crawl ledger can record it."""
+    robots = MagicMock()
+    robots.status_code = 200
+    robots.text = ""
+    missing = MagicMock()
+    missing.ok = False
+    missing.status_code = 404
+    mock_get.side_effect = [robots, missing]
+
+    with pytest.raises(FetchError, match="Can't fetch") as excinfo:
+        fetch_page("https://test.com/recipes/cake", SITE, cache_dir=tmp_path)
+    assert excinfo.value.status_code == 404
 
 
 @patch("menu.ingest.fetch.time.sleep")

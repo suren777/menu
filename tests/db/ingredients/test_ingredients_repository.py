@@ -2,11 +2,24 @@
 
 from typing import TYPE_CHECKING
 
-from menu.db.database import Ingredient, IngredientAlias, RecipeIngredient, RecipeUrls
+from menu.db.database import Ingredient, IngredientAlias, Page, Recipe, RecipeIngredient
 from menu.db.ingredients import repository
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
+
+
+def _add_recipe(session: Session) -> Recipe:
+    """A bare recipe row, reached through its page (the ledger)."""
+    page = Page(url="https://x/1", site="bbc_good_food")
+    session.add(page)
+    session.flush()
+    recipe = Recipe(
+        page_id=page.id, name="X", data={}, data_sha256="x", extractor="json_ld"
+    )
+    session.add(recipe)
+    session.flush()
+    return recipe
 
 
 def test_find_ingredient_by_name(session: Session) -> None:
@@ -38,9 +51,7 @@ def test_alias_target(session: Session) -> None:
 
 
 def test_get_recipe_ingredients_in_position_order(session: Session) -> None:
-    recipe = RecipeUrls(url="https://x/1", name="X", data={})
-    session.add(recipe)
-    session.flush()
+    recipe = _add_recipe(session)
     session.add(
         RecipeIngredient(recipe_id=recipe.id, position=1, raw_text="butter")
     )
@@ -53,9 +64,8 @@ def test_get_recipe_ingredients_in_position_order(session: Session) -> None:
 
 def test_get_unresolved(session: Session) -> None:
     ingredient = Ingredient(name="milk")
-    recipe = RecipeUrls(url="https://x/1", name="X", data={})
-    session.add_all([ingredient, recipe])
-    session.flush()
+    session.add(ingredient)
+    recipe = _add_recipe(session)
     session.add(
         RecipeIngredient(recipe_id=recipe.id, position=0, raw_text="mystery")
     )

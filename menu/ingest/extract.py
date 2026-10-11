@@ -114,11 +114,14 @@ def extract_microdata_recipe(soup: BeautifulSoup) -> dict[str, Any] | None:
     return recipe
 
 
-def extract_recipe_data(site: SiteConfig, soup: BeautifulSoup) -> dict[str, Any] | None:
-    """Recipe JSON for a page: the site's test-id script if it declares
-    one, then standard JSON-LD, then schema.org microdata, then None.
-    Doubles as the recipe check: a page is a recipe iff it yields a
-    Recipe object."""
+def extract_recipe(
+    site: SiteConfig, soup: BeautifulSoup
+) -> tuple[dict[str, Any], str] | None:
+    """Recipe data for a page with the extractor that found it: the
+    site's test-id script if it declares one ("test_id"), then
+    standard JSON-LD ("json_ld"), then schema.org microdata
+    ("microdata"), then None. Doubles as the recipe check: a page is
+    a recipe iff it yields a Recipe object."""
     if site.json_ld_test_id:
         script = soup.find("script", {"data-testid": site.json_ld_test_id})
         if script and script.contents:
@@ -127,6 +130,19 @@ def extract_recipe_data(site: SiteConfig, soup: BeautifulSoup) -> dict[str, Any]
             except json.JSONDecodeError:
                 data = None
             if isinstance(data, dict) and _is_recipe(data):
-                return data
+                return data, "test_id"
 
-    return extract_json_ld_recipe(soup) or extract_microdata_recipe(soup)
+    json_ld = extract_json_ld_recipe(soup)
+    if json_ld is not None:
+        return json_ld, "json_ld"
+
+    microdata = extract_microdata_recipe(soup)
+    if microdata is not None:
+        return microdata, "microdata"
+    return None
+
+
+def extract_recipe_data(site: SiteConfig, soup: BeautifulSoup) -> dict[str, Any] | None:
+    """The recipe data only: extract_recipe without the extractor name."""
+    recipe = extract_recipe(site, soup)
+    return recipe[0] if recipe is not None else None

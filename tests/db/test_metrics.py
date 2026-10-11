@@ -5,9 +5,10 @@ from typing import TYPE_CHECKING
 
 from menu.db.database import (
     Ingredient,
+    Page,
+    Recipe,
     RecipeIngredient,
     RecipeNutrition,
-    RecipeUrls,
 )
 from menu.db.metrics import collect_metrics
 
@@ -16,11 +17,15 @@ if TYPE_CHECKING:
 
 
 def test_collect_metrics_snapshot(session: Session) -> None:
-    recipe = RecipeUrls(
-        url="https://x/1",
+    page = Page(url="https://x/1", site="bbc_good_food")
+    session.add(page)
+    session.flush()
+    recipe = Recipe(
+        page_id=page.id,
         name="Test",
         data={},
-        site="bbc_good_food",
+        data_sha256="x",
+        extractor="json_ld",
         servings=2,
     )
     ingredient = Ingredient(name="milk")
@@ -48,7 +53,8 @@ def test_collect_metrics_snapshot(session: Session) -> None:
 
     metrics = collect_metrics()
 
-    assert metrics["row_counts"]["recipe_urls"] == 1
+    assert metrics["row_counts"]["pages"] == 1
+    assert metrics["row_counts"]["recipes"] == 1
     assert metrics["lines_with_grams_by_source"] == {"seed": 1}
     assert metrics["lines_with_ingredient_id_null"] == 0
     assert metrics["distinct_ingredients"] == 1

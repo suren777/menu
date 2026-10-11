@@ -21,7 +21,7 @@ The DB stays scratch storage (AGENTS.md). The point of the moonshot is not durab
   - `add_recipe` ignores a conflict, so a recipe that changed upstream is never updated.
   - `name` is the page `<title>`, not the recipe name.
 - **The DB can't be rebuilt from raw data.** The page cache is keyed by `sha256(url)` and sitemap XML isn't cached. The URL list lives only in `recipe_urls`, so deleting `database.db` means re-fetching every sitemap.
-- **The DB is the only raw copy (checked 2026-10-11).** `.cache/` is empty: the HTML of all 7,689 stored recipes and the `.cache/sources/` reference downloads are gone. `recipe_urls.data` is the only surviving capture of the JSON-LD, so a rebuild that needs the HTML cache would lose every recipe.
+- **The DB is the only raw copy (checked 2026-10-11).** `.cache/` is empty: the HTML of all 7,689 stored recipes and the `.cache/sources/` reference downloads are gone. `recipe_urls.data` is the only surviving capture of the JSON-LD, so a rebuild that needs the HTML cache would lose every recipe. **Decision (2026-10-11): recrawling is acceptable.** No bootstrap from the old DB: phase 1 starts a fresh DB and recrawls, which refills the cache.
 - **The crawl writes are not atomic.** `add_recipe` and `store_recipe_ingredients` are separate transactions, so a crash between them leaves a recipe with no lines.
 - **Conversion factors lose their origin:**
   - `seed.py:271`/`:351` write `density_g_per_ml` and `unit_weight_g` onto `ingredient` whether they came from the hand seed, FDC or CNF.
@@ -155,7 +155,7 @@ Shipped in `77b72a2`, `74e3e01`, `cb18ecd`. The baseline is `metrics/baseline-20
 
 ### Phase 1: crawl ledger and recipes (raw layer)
 - Add `sitemaps`, `pages` and `recipes` as above.
-- One-off bootstrap: `ATTACH` the old `database.db` and copy `sitemap` → `sitemaps` and `recipe_urls` → `pages` (status `fetched`, `fetched_at` = cache file mtime) + `recipes`. The 9 rows with no site go to `bbc_good_food`, as `reparse_site` already assumes. **This is the only step that can't be redone from raw data, so it runs first**, before anything is dropped.
+- ~~One-off bootstrap from the old DB~~ — dropped: the old DB is retired and the sites are recrawled into a fresh one (see Findings).
 - Pipeline changes:
   - `process_url` records every outcome on its page.
   - `import_sitemap` inserts queued pages with `lastmod`.
@@ -163,9 +163,8 @@ Shipped in `77b72a2`, `74e3e01`, `cb18ecd`. The baseline is `metrics/baseline-20
   - The recipe and its lines are written in **one transaction**.
   - `name` comes from JSON-LD.
   - Sitemap XML goes through the disk cache like pages.
-- **Raw recipe archive.** `.cache/` is disposable by contract, so it can't be the only raw store. The bootstrap also writes every recipe's captured JSON-LD to `raw/recipes.jsonl` (one `{url, site, extractor, data}` object per line, gitignored, *not* safe to delete). `process_url` appends to it whenever it stores or changes a recipe.
-- `menu-rebuild`: new DB file → initialise → seed → import refs from `.cache/sources/` (skipped with a warning when a release isn't downloaded) → replay every `fetched` page from the HTML cache, falling back to `raw/recipes.jsonl` when the HTML is missing (no network; only a page in neither becomes `queued`) → reparse → derive.
-- Check: the metrics diff should show identical recipe and line counts, with `name` the only intended change. The bootstrap is verified by row counts before the old tables go: 7,689 recipes, 274 sitemaps (123 done).
+- `menu-rebuild`: new DB file → initialise → seed → import refs from `.cache/sources/` (skipped with a warning when a release isn't downloaded) → replay the cached sitemaps and pages (no network; a page whose HTML isn't cached stays `queued` for the next live crawl) → derive.
+- Check: the metrics diff should show identical recipe and line counts, with `name` the only intended change. Counts come from a fresh recrawl, so they differ from the baseline by whatever changed upstream; the per-site line and grams *ratios* are what should hold.
 
 ### Phase 2: reference stability
 - `ref_foods` natural-key upsert in all three importers (`fdc.py`, `cofid.py`, `cnf.py`). Portions, nutrients and maps are still replaced per source.

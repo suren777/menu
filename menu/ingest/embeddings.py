@@ -58,7 +58,7 @@ class FastEmbedder:
 
     def _load(self) -> TextEmbedding:
         if self._model is None:
-            # ponytail: no lock — menu's ingest is single-process and
+            # No lock — menu's ingest is single-process and
             # single-threaded; add one if that ever changes.
             self._model = TextEmbedding(
                 model_name=self.model_id, cache_dir=str(self._cache_dir)

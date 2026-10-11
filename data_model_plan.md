@@ -224,6 +224,7 @@ These four steps run in order. After each one, the metrics snapshot records revi
     | caster sugar / icing sugar | different |
 
   - Compare `bge-small` with one larger local model, and record both scores here. Keep the small one unless the larger is clearly better.
+  - **Result, `bge-small-en-v1.5` (2026-10-11, 31 labelled pairs):** the best threshold is 0.476 at 61.3% accuracy, which is what calling every pair positive scores (19 of 31). So similarity alone does **not** separate these pairs. The near-miss "different" pairs score 0.71–0.86, inside the same/variant band (0.48–0.90), and coriander / ground coriander scores highest of all at 0.859. Embeddings are therefore a recall tool here (candidates for 4c), never a classifier, and the concept-pair floor has to be low. Recall@5 on `FOOD_REFS` hasn't run yet because the ref tables are empty; run `uv run menu-embed-eval` after the reference imports. The larger-model comparison is still to do.
 
 **4c. LLM review (Gemini 3.8 Flash)**
 - `menu/ingest/llm_review.py::suggest(items) -> list[Suggestion]`, with the provider and model as config. Before building, confirm the model offers schema-constrained JSON output and a discounted batch mode; neither has been checked yet.

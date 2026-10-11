@@ -239,6 +239,10 @@ These four steps run in order. After each one, the metrics snapshot records revi
   - an alias target is an existing concept or marked `new`;
   - pair and food-ref proposals carry no numbers at all.
 - Measure the real token cost on the first batch and record it here.
+- **Provider, checked live 2026-10-11:** the user's Fireworks deployment (GLM-5.3 Flash, a reasoning model) through its OpenAI-compatible endpoint, configured by `MENU_LLM_BASE_URL` / `MENU_LLM_MODEL` / `FIREWORKS_API_KEY`. Strict `json_schema` output works, but the deployment does not enforce key order and there is no batch mode, so chunks go out synchronously. Findings:
+  - `max_tokens` must scale with the chunk (1,000 + 150 per item). A flat 16k ceiling let one 1-item request pad its reply for 8 minutes.
+  - "ok" on a food-ref item was read as "this candidate is fine", so the no-match answer is `none` on the wire.
+  - Smoke run, 7 items across all four sets: about 1,150 prompt and 400–540 completion tokens, 5–19 s. Every verdict was right, including coriander / ground coriander (different), whole milk (variant of milk), aubergine (alias of eggplant), icing sugar (FDC "Sugars, powdered") and rapeseed oil (no candidate). The first batch over real data is still to be measured.
 
 **4d. Accept**
 - Review the `suggestions.json` diff and set `status`. Seeding loads accepted entries, and `--re-resolve` applies them without reparsing.

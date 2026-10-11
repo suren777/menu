@@ -16,6 +16,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from menu.db.connection import current_engine
@@ -120,7 +121,9 @@ class Recipe(Base):
     )
     name: Mapped[str] = mapped_column(nullable=False)
     """The JSON-LD name; the page <title> when the data names nothing."""
-    data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    data: Mapped[dict[str, Any]] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=False
+    )
     data_sha256: Mapped[str] = mapped_column(nullable=False)
     extractor: Mapped[str] = mapped_column(nullable=False)
     """'json_ld' | 'test_id' | 'microdata' — what found the recipe."""
@@ -264,6 +267,7 @@ class IngredientFoodRef(Base):
             "source_id",
             unique=True,
             sqlite_where=text("status = 'confirmed'"),
+            postgresql_where=text("status = 'confirmed'"),
         ),
         Index("ix_ingredient_food_refs_ingredient", "ingredient_id"),
         CheckConstraint(

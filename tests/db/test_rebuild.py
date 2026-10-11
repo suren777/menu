@@ -6,15 +6,19 @@ session's get raises, so any network call fails the test.
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 from menu.db.database import Page, Recipe, RecipeIngredient
 from menu.db.rebuild import rebuild
 from menu.ingest.fetch import _cache_path
 from menu.ingest.registry import SiteConfig
+
+if TYPE_CHECKING:
+    from sqlalchemy.engine import Engine
 
 SITE = SiteConfig(
     name="testsite",
@@ -114,3 +118,24 @@ def test_rebuild_refuses_an_existing_target(tmp_path: Path) -> None:
 
     with pytest.raises(FileExistsError, match="already exists"):
         rebuild(target, sources_dir=tmp_path / "sources")
+
+
+@pytest.mark.usefixtures("cache", "test_registry", "no_network")
+def test_rebuild_writes_to_its_target_not_the_default(
+    tmp_path: Path, db_engine: Engine
+) -> None:
+    """The rebuild's engine override scopes its writes to the target:
+    the default engine (patched here, as the conftest does) sees none
+    of them."""
+    target = tmp_path / "rebuilt.db"
+    rebuild(target, sources_dir=tmp_path / "sources")
+
+    with Session(db_engine) as session:
+        assert session.scalar(select(func.count()).select_from(Page)) == 0
+
+    rebuilt = create_engine(f"sqlite:///{target}")
+    try:
+        with Session(rebuilt) as session:
+            assert session.scalar(select(func.count()).select_from(Page)) == 2
+    finally:
+        rebuilt.dispose()

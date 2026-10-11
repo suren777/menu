@@ -144,9 +144,7 @@ def test_import_sitemap_rerun_adds_new_children(mock_request_xml: MagicMock) -> 
     import_sitemap(SITE)
 
     with get_session() as session:
-        status = {
-            row.url: row.status for row in session.scalars(select(Sitemap)).all()
-        }
+        status = {row.url: row.status for row in session.scalars(select(Sitemap)).all()}
     assert status == {
         "https://test.com/sitemap.xml": "done",
         "https://test.com/old.xml": "done",
@@ -304,9 +302,7 @@ def test_crawl_sitemap_marks_failed_sitemap_and_moves_on(
     mock_process_url.assert_not_called()
 
     with get_session() as session:
-        failed = session.scalars(
-            select(Sitemap).where(Sitemap.id == dead)
-        ).first()
+        failed = session.scalars(select(Sitemap).where(Sitemap.id == dead)).first()
         assert failed is not None
         assert failed.status == "failed"
         assert failed.error == "ValueError: junk"
@@ -803,14 +799,14 @@ def test_reparse_site_only_touches_its_recipes(
 
     with get_session() as session:
         bbc_id = session.scalars(
-            select(Recipe.id).join(Page, Page.id == Recipe.page_id).where(
-                Page.url == "https://x/bbc"
-            )
+            select(Recipe.id)
+            .join(Page, Page.id == Recipe.page_id)
+            .where(Page.url == "https://x/bbc")
         ).first()
         other_id = session.scalars(
-            select(Recipe.id).join(Page, Page.id == Recipe.page_id).where(
-                Page.url == "https://x/other"
-            )
+            select(Recipe.id)
+            .join(Page, Page.id == Recipe.page_id)
+            .where(Page.url == "https://x/other")
         ).first()
     assert bbc_id is not None
     assert other_id is not None

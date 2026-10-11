@@ -20,18 +20,26 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import requests
+from requests import Session
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
 
 from menu.db.ingredients.suggestions import Suggestion
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
 
+    from urllib3 import BaseHTTPResponse
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "https://api.fireworks.ai/inference/v1"
 DEFAULT_MODEL = "accounts/revolut-non-coding/deployments/revolut-non-coding-flash"
 
-_TIMEOUT_SECONDS = 120
+# Connect/read timeout: fail fast on a dead connection, wait out a
+# slow completion.
+_TIMEOUT: tuple[int, int] = (10, 120)
+_MAX_RETRY_AFTER_SECONDS = 60
 # Sized to the chunk: under a strict grammar the model can pad its
 # reply with whitespace up to the ceiling, and a flat 16k ceiling
 # turned one 1-item request into an 8-minute hang (2026-10-11).
@@ -43,6 +51,52 @@ InputSet = Literal["queue", "audit", "pair", "food_ref"]
 SuggestionKind = Literal[
     "alias", "variant", "line_override", "not_food", "food_ref", "ok"
 ]
+
+
+class _CappedRetry(Retry):
+    """Retry whose server-sent Retry-After never exceeds the cap.
+
+    A rate limit that says "wait 10 minutes" would otherwise freeze a
+    100-chunk run for hours; waiting past a minute is the crawl's
+    choice to make (fetch.py waits out Retry-After once, its pacing),
+    not a blind per-request retry's.
+    """
+
+    def get_retry_after(self, response: BaseHTTPResponse) -> float | None:
+        retry_after = super().get_retry_after(response)
+        if retry_after is None:
+            return None
+        return min(retry_after, float(_MAX_RETRY_AFTER_SECONDS))
+
+
+_RETRIES = _CappedRetry(
+    total=4,
+    backoff_factor=2,
+    backoff_max=_MAX_RETRY_AFTER_SECONDS,
+    status_forcelist=(429, 500, 502, 503, 504),
+    allowed_methods=frozenset({"POST"}),
+    respect_retry_after_header=True,
+    raise_on_status=False,
+)
+
+
+def _new_session() -> Session:
+    """Own session for the LLM endpoint, separate from the crawl's.
+
+    The crawl session (menu.ingest.http) carries the crawler's
+    User-Agent and GET-only retry policy and must not be reused here.
+    """
+    session = Session()
+    adapter = HTTPAdapter(max_retries=_RETRIES)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
+class _PostSession(Protocol):
+    """The one method a chat completion needs; test fakes satisfy it."""
+
+    def post(self, url: str, **kwargs: Any) -> Any: ...
 
 
 class LLMError(RuntimeError):
@@ -92,26 +146,35 @@ class FireworksClient:
     so chunks go out synchronously, and the reasoning model can hit
     the token ceiling and return empty content, which `suggest`
     treats as a failed chunk.
+
+    Transient failures (429, 5xx, connection errors) are retried with
+    exponential backoff, honouring Retry-After up to the 60 s cap; a
+    chat completion has no side effects beyond billing, so the retry
+    cannot double-apply anything. When retries are exhausted a
+    non-200 still raises LLMError with the status and body excerpt.
     """
 
     model_id: str
 
     def __init__(
-        self, *, base_url: str | None = None, model_id: str | None = None
+        self,
+        *,
+        base_url: str | None = None,
+        model_id: str | None = None,
+        session: _PostSession | None = None,
     ) -> None:
         self._base_url = (
             base_url or os.environ.get("MENU_LLM_BASE_URL") or DEFAULT_BASE_URL
         )
         self.model_id = model_id or os.environ.get("MENU_LLM_MODEL") or DEFAULT_MODEL
+        self._session = session or _new_session()
 
     def complete(
         self, system: str, user: str, schema: dict[str, Any], *, max_tokens: int
     ) -> tuple[str, Usage]:
         api_key = os.environ.get("FIREWORKS_API_KEY")
         if not api_key:
-            raise LLMError(
-                "FIREWORKS_API_KEY is not set — export it before suggesting"
-            )
+            raise LLMError("FIREWORKS_API_KEY is not set — export it before suggesting")
         body = {
             "model": self.model_id,
             "messages": [
@@ -131,11 +194,11 @@ class FireworksClient:
             },
         }
         try:
-            response = requests.post(
+            response = self._session.post(
                 f"{self._base_url}/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}"},
                 json=body,
-                timeout=_TIMEOUT_SECONDS,
+                timeout=_TIMEOUT,
             )
         except requests.RequestException as exc:
             raise LLMError(f"LLM request failed: {exc}") from exc
@@ -243,6 +306,7 @@ def _from_wire(input_set: InputSet, kind: str) -> str:
         if kind == wire:
             return ours
     return kind
+
 
 # Strict schema mode wants every property required, so fields a kind
 # doesn't use are nullable instead of absent.
@@ -551,7 +615,5 @@ def suggest(
         suggestions=suggestions,
         dropped=dict(dropped),
         failed_chunks=failed_chunks,
-        usage=Usage(
-            prompt_tokens=prompt_tokens, completion_tokens=completion_tokens
-        ),
+        usage=Usage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens),
     )

@@ -184,9 +184,10 @@ def test_reimport_keeps_food_ids(session: Session) -> None:
 
     import_fdc([FIXTURE_DIR / "sr", FIXTURE_DIR / "survey"], session)
 
-    assert dict(
-        session.execute(select(RefFood.source_food_id, RefFood.id)).all()
-    ) == before
+    assert (
+        dict(session.execute(select(RefFood.source_food_id, RefFood.id)).all())
+        == before
+    )
     session.expire_all()
     resolved = session.get(IngredientFoodRef, mapping.id)
     assert resolved is not None

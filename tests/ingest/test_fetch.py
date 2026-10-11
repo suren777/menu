@@ -115,9 +115,7 @@ def test_fetch_recipe_parses_html(
 
 
 @patch("menu.ingest.fetch.session.get")
-def test_fetch_page_raises_when_disallowed(
-    mock_get: MagicMock, tmp_path: Path
-) -> None:
+def test_fetch_page_raises_when_disallowed(mock_get: MagicMock, tmp_path: Path) -> None:
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.text = "User-agent: *\nDisallow: /"

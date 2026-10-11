@@ -64,7 +64,7 @@ def test_seed_creates_terms_and_canonicals(session: Session) -> None:
 
 
 def test_seed_creates_a_self_term_for_every_concept(session: Session) -> None:
-    """"milk" resolves through its own seed term, not only through
+    """ "milk" resolves through its own seed term, not only through
     variant aliases."""
     seed_ingredient_data(session)
 
@@ -112,9 +112,7 @@ def test_seed_repoints_parse_time_self_terms(session: Session) -> None:
     session.add(stale)
     session.flush()
     session.add(
-        IngredientTerm(
-            term="warm milk", ingredient_id=stale.id, resolution="auto"
-        )
+        IngredientTerm(term="warm milk", ingredient_id=stale.id, resolution="auto")
     )
 
     seed_ingredient_data(session)
@@ -135,9 +133,7 @@ def test_seed_marks_equipment_not_food(session: Session) -> None:
     session.add(stale)
     session.flush()
     session.add(
-        IngredientTerm(
-            term=NOT_FOOD[0], ingredient_id=stale.id, resolution="auto"
-        )
+        IngredientTerm(term=NOT_FOOD[0], ingredient_id=stale.id, resolution="auto")
     )
 
     seed_ingredient_data(session)
@@ -279,9 +275,7 @@ def test_seed_overrides_stale_parser_candidates(session: Session) -> None:
         select(IngredientFoodRef).where(IngredientFoodRef.ingredient_id == powder.id)
     ).all()
     assert {ref.ref_food_id for ref in refs if ref.status == "confirmed"} == {baking}
-    assert any(
-        ref.ref_food_id == stale and ref.status == "candidate" for ref in refs
-    )
+    assert any(ref.ref_food_id == stale and ref.status == "candidate" for ref in refs)
 
 
 def test_seed_rejects_candidate_from_rejected_refs(

@@ -155,9 +155,11 @@ def _portions(
         yield {
             "fdc_id": int(row["fdc_id"]),
             "seq_num": int(row["seq_num"]),
-            "amount": float(row["amount"])
-            if row["amount"]
-            else (float(match.group()) if match else None),
+            "amount": (
+                float(row["amount"])
+                if row["amount"]
+                else (float(match.group()) if match else None)
+            ),
             "unit": unit,
             "modifier": row["modifier"] or None,
             "gram_weight": float(row["gram_weight"]),
@@ -198,8 +200,7 @@ def import_fdc(dataset_dirs: list[Path], session: Session) -> dict[str, int]:
         ],
     )
     by_code = {
-        code: (nutrient, definition)
-        for code, nutrient, definition in NUTRIENT_MAP
+        code: (nutrient, definition) for code, nutrient, definition in NUTRIENT_MAP
     }
 
     ref_food_ids = select(RefFood.id).where(RefFood.source_id == source.id)
@@ -231,11 +232,7 @@ def import_fdc(dataset_dirs: list[Path], session: Session) -> dict[str, int]:
             code = str(int(row["nutrient_id"] or 0))
             lookup = by_code.get(code)
             source_food_id = row["fdc_id"]
-            if (
-                lookup is None
-                or not row["amount"]
-                or (source_food_id, code) in seen
-            ):
+            if lookup is None or not row["amount"] or (source_food_id, code) in seen:
                 continue
             seen.add((source_food_id, code))
             nutrients.append(
@@ -251,12 +248,10 @@ def import_fdc(dataset_dirs: list[Path], session: Session) -> dict[str, int]:
     # The bulk inserts need ref_food_id in place of the source's own
     # id; rebuild the rows rather than mutate the typed dicts in place.
     portion_rows: list[dict[str, Any]] = [
-        {"ref_food_id": ref_ids[str(row.pop("fdc_id"))], **row}
-        for row in portions
+        {"ref_food_id": ref_ids[str(row.pop("fdc_id"))], **row} for row in portions
     ]
     nutrient_rows: list[dict[str, Any]] = [
-        {"ref_food_id": ref_ids[row.pop("source_food_id")], **row}
-        for row in nutrients
+        {"ref_food_id": ref_ids[row.pop("source_food_id")], **row} for row in nutrients
     ]
 
     for model, rows in ((RefPortion, portion_rows), (RefNutrient, nutrient_rows)):

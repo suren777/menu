@@ -61,9 +61,7 @@ def test_effective_ingredient_id_is_the_one_rule() -> None:
 
 def test_get_recipe_ingredients_in_position_order(session: Session) -> None:
     recipe = _add_recipe(session)
-    session.add(
-        RecipeIngredient(recipe_id=recipe.id, position=1, raw_text="butter")
-    )
+    session.add(RecipeIngredient(recipe_id=recipe.id, position=1, raw_text="butter"))
     session.add(RecipeIngredient(recipe_id=recipe.id, position=0, raw_text="milk"))
 
     lines = repository.get_recipe_ingredients(recipe.id, session)
@@ -108,9 +106,7 @@ def test_get_unresolved(session: Session) -> None:
     )
     session.add_all([resolved_term, review_term, auto_term])
     recipe = _add_recipe(session)
-    session.add(
-        RecipeIngredient(recipe_id=recipe.id, position=0, raw_text="mystery")
-    )
+    session.add(RecipeIngredient(recipe_id=recipe.id, position=0, raw_text="mystery"))
     session.add(
         RecipeIngredient(
             recipe_id=recipe.id,

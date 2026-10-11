@@ -35,8 +35,7 @@ if TYPE_CHECKING:
     from typing import Any
 
 FIXTURE_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "tests/ingest/fixtures/synonym_pairs.json"
+    Path(__file__).resolve().parents[2] / "tests/ingest/fixtures/synonym_pairs.json"
 )
 K = 5
 POSITIVE_LABELS = frozenset({"same", "variant"})

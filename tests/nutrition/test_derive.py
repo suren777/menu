@@ -423,9 +423,7 @@ def test_derive_nutrition_uses_prepared_form() -> None:
         row = session.scalars(
             select(RecipeNutrition).where(RecipeNutrition.recipe_id == recipe_id)
         ).one()
-        assert row.protein_g == pytest.approx(
-            34.0 / 100 * 15.86 + 50.0 / 100 * 12.56
-        )
+        assert row.protein_g == pytest.approx(34.0 / 100 * 15.86 + 50.0 / 100 * 12.56)
         assert row.sources == "fdc"
 
 
@@ -455,9 +453,7 @@ def test_derive_nutrition_skips_not_food_lines() -> None:
                 origin="seed",
             )
         )
-        tin_term = IngredientTerm(
-            term="12-hole mini bundt tin", resolution="not_food"
-        )
+        tin_term = IngredientTerm(term="12-hole mini bundt tin", resolution="not_food")
         session.add(tin_term)
         egg_term = _add_term(session, "egg", egg)
         session.flush()

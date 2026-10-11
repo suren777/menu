@@ -1,7 +1,8 @@
 """LLM review tests: never touch the network.
 
 The fake client returns canned JSON; FireworksClient is exercised
-through a monkeypatched requests.post, so nothing leaves the process.
+through an injected fake session (its real one retries transient
+failures), so nothing leaves the process.
 """
 
 import json
@@ -9,6 +10,8 @@ from typing import Any
 
 import pytest
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3 import HTTPResponse
 
 from menu.ingest import llm_review
 from menu.ingest.llm_review import (
@@ -52,6 +55,21 @@ class FakeResponse:
 
     def json(self) -> dict[str, Any]:
         return self._payload
+
+
+class FakeSession:
+    """One canned response (or exception) per post; records every call."""
+
+    def __init__(self, response: FakeResponse | Exception) -> None:
+        self.response: FakeResponse | Exception = response
+        self.calls: list[dict[str, Any]] = []
+
+    def post(self, url: str, **kwargs: Any) -> FakeResponse:
+        self.calls.append({"url": url, **kwargs})
+        if isinstance(self.response, Exception):
+            raise self.response
+        assert isinstance(self.response, FakeResponse)
+        return self.response
 
 
 def _payload(verdicts: list[Any]) -> str:
@@ -384,26 +402,22 @@ def _reply(content: str) -> FakeResponse:
 
 
 def test_fireworks_client_builds_the_request(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, Any] = {}
-
-    def fake_post(url: str, **kwargs: Any) -> FakeResponse:
-        captured.update(url=url, headers=kwargs["headers"], body=kwargs["json"])
-        return _reply('{"items": []}')
-
+    session = FakeSession(_reply('{"items": []}'))
     monkeypatch.delenv("MENU_LLM_BASE_URL", raising=False)
     monkeypatch.delenv("MENU_LLM_MODEL", raising=False)
     monkeypatch.setenv("FIREWORKS_API_KEY", "key-123")
-    monkeypatch.setattr(requests, "post", fake_post)
 
-    content, usage = FireworksClient().complete(
+    content, usage = FireworksClient(session=session).complete(
         "system text", "user text", {"type": "object"}, max_tokens=4000
     )
 
     assert content == '{"items": []}'
     assert usage == Usage(prompt_tokens=11, completion_tokens=7)
-    assert captured["url"] == f"{llm_review.DEFAULT_BASE_URL}/chat/completions"
-    assert captured["headers"] == {"Authorization": "Bearer key-123"}
-    assert captured["body"] == {
+    call = session.calls[0]
+    assert call["url"] == f"{llm_review.DEFAULT_BASE_URL}/chat/completions"
+    assert call["headers"] == {"Authorization": "Bearer key-123"}
+    assert call["timeout"] == (10, 120)
+    assert call["json"] == {
         "model": llm_review.DEFAULT_MODEL,
         "messages": [
             {"role": "system", "content": "system text"},
@@ -426,20 +440,15 @@ def test_fireworks_client_builds_the_request(monkeypatch: pytest.MonkeyPatch) ->
 def test_fireworks_client_honours_env_overrides(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, Any] = {}
-
-    def fake_post(url: str, **kwargs: Any) -> FakeResponse:
-        captured.update(url=url, body=kwargs["json"])
-        return _reply("{}")
-
+    session = FakeSession(_reply("{}"))
     monkeypatch.setenv("MENU_LLM_BASE_URL", "http://127.0.0.1:8000/v1")
     monkeypatch.setenv("MENU_LLM_MODEL", "local/model")
     monkeypatch.setenv("FIREWORKS_API_KEY", "key")
-    monkeypatch.setattr(requests, "post", fake_post)
 
-    FireworksClient().complete("s", "u", {}, max_tokens=4000)
-    assert captured["url"] == "http://127.0.0.1:8000/v1/chat/completions"
-    assert captured["body"]["model"] == "local/model"
+    FireworksClient(session=session).complete("s", "u", {}, max_tokens=4000)
+    call = session.calls[0]
+    assert call["url"] == "http://127.0.0.1:8000/v1/chat/completions"
+    assert call["json"]["model"] == "local/model"
 
 
 def test_fireworks_client_without_api_key_raises_clearly(
@@ -453,27 +462,58 @@ def test_fireworks_client_without_api_key_raises_clearly(
 def test_fireworks_client_reports_http_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Exhausted retries: the session hands over its final response."""
     monkeypatch.setenv("FIREWORKS_API_KEY", "key")
-    def refusing_post(*_args: Any, **_kwargs: Any) -> FakeResponse:
-        return FakeResponse({}, status_code=503)
-
-    monkeypatch.setattr(requests, "post", refusing_post)
+    session = FakeSession(FakeResponse({}, status_code=503))
     with pytest.raises(LLMError, match="503"):
-        FireworksClient().complete("s", "u", {}, max_tokens=4000)
+        FireworksClient(session=session).complete("s", "u", {}, max_tokens=4000)
+
+
+def test_fireworks_client_maps_connection_errors_to_llm_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FIREWORKS_API_KEY", "key")
+    session = FakeSession(requests.ConnectionError("connection aborted"))
+    with pytest.raises(LLMError, match="LLM request failed"):
+        FireworksClient(session=session).complete("s", "u", {}, max_tokens=4000)
 
 
 def test_fireworks_client_maps_missing_content_to_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("FIREWORKS_API_KEY", "key")
-    payload = {"choices": [{"message": {"content": None}}], "usage": {}}
-    def length_post(*_args: Any, **_kwargs: Any) -> FakeResponse:
-        return FakeResponse(payload)
-
-    monkeypatch.setattr(requests, "post", length_post)
-    content, usage = FireworksClient().complete("s", "u", {}, max_tokens=4000)
+    session = FakeSession(
+        FakeResponse({"choices": [{"message": {"content": None}}], "usage": {}})
+    )
+    content, usage = FireworksClient(session=session).complete(
+        "s", "u", {}, max_tokens=4000
+    )
     assert content == ""
     assert usage == Usage(0, 0)
+
+
+def test_session_retries_transient_statuses_with_backoff() -> None:
+    session = llm_review._new_session()
+    adapter = session.get_adapter("https://api.fireworks.ai/inference/v1")
+    assert isinstance(adapter, HTTPAdapter)
+    retry = adapter.max_retries
+    assert isinstance(retry, llm_review._CappedRetry)
+    assert retry.total == 4
+    assert retry.backoff_factor == 2
+    assert retry.backoff_max == 60
+    assert retry.status_forcelist == (429, 500, 502, 503, 504)
+    assert retry.allowed_methods == frozenset({"POST"})
+    assert retry.respect_retry_after_header is True
+    assert retry.raise_on_status is False
+
+
+def test_retry_after_is_capped_at_sixty_seconds() -> None:
+    retry = llm_review._CappedRetry()
+    hour_later = retry.get_retry_after(HTTPResponse(headers={"Retry-After": "600"}))
+    assert hour_later == 60.0
+    soon = retry.get_retry_after(HTTPResponse(headers={"Retry-After": "30"}))
+    assert soon == 30.0
+    assert retry.get_retry_after(HTTPResponse()) is None
 
 
 def test_max_tokens_scale_with_the_chunk() -> None:

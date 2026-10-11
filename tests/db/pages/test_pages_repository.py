@@ -92,9 +92,10 @@ def test_get_unfinished_takes_queued_and_blocked_in_id_order(session: Session) -
 
 
 def test_data_sha256_is_canonical_json() -> None:
-    assert repository.data_sha256({"b": 2, "a": 1}) == hashlib.sha256(
-        b'{"a": 1, "b": 2}'
-    ).hexdigest()
+    assert (
+        repository.data_sha256({"b": 2, "a": 1})
+        == hashlib.sha256(b'{"a": 1, "b": 2}').hexdigest()
+    )
 
 
 def test_upsert_recipe_inserts(session: Session) -> None:
@@ -131,9 +132,7 @@ def test_upsert_recipe_unchanged_data_does_nothing(session: Session) -> None:
     )
 
     assert second is None
-    current = session.scalars(
-        select(Recipe).where(Recipe.page_id == page.id)
-    ).first()
+    current = session.scalars(select(Recipe).where(Recipe.page_id == page.id)).first()
     assert current is not None
     assert current.name == "Test Recipe"
     assert current.extractor == "json_ld"

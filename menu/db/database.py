@@ -18,7 +18,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from menu.db.engine import engine as default_engine
+from menu.db.connection import current_engine
 
 if TYPE_CHECKING:
     from sqlalchemy.engine import Engine
@@ -303,9 +303,7 @@ class IngredientTerm(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     term: Mapped[str] = mapped_column(nullable=False, unique=True)
     """The canonical_name of a parsed name: "warm milk"."""
-    ingredient_id: Mapped[int | None] = mapped_column(
-        ForeignKey("ingredients.id")
-    )
+    ingredient_id: Mapped[int | None] = mapped_column(ForeignKey("ingredients.id"))
     """The concept the term resolves to; NULL exactly when the term is
     unresolved (review/not_food)."""
     variant: Mapped[str | None]
@@ -498,9 +496,7 @@ class RefFood(Base):
     __tablename__ = "ref_food"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    source_id: Mapped[int] = mapped_column(
-        ForeignKey("food_source.id"), nullable=False
-    )
+    source_id: Mapped[int] = mapped_column(ForeignKey("food_source.id"), nullable=False)
     source_food_id: Mapped[str] = mapped_column(nullable=False)
     description: Mapped[str] = mapped_column(nullable=False)
     category: Mapped[str | None]
@@ -570,6 +566,7 @@ class NutrientMap(Base):
 
 
 def initialise(db_engine: Engine | None = None) -> None:
-    """Create the tables. The default engine is resolved at call time so
-    tests can patch it."""
-    Base.metadata.create_all(db_engine or default_engine)
+    """Create the tables. The engine is resolved at call time: explicit
+    argument, else any use_engine override, else the default — so tests
+    can patch the default."""
+    Base.metadata.create_all(current_engine(db_engine))

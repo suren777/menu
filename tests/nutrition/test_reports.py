@@ -61,9 +61,7 @@ def test_validation_report_compares_per_serving(
     with get_session() as session:
         recipe = _add_recipe(session, "https://x/omelette", "Omelette", servings=2)
         session.add(
-            RecipeNutrition(
-                recipe_id=recipe.id, source="published", energy_kcal=100.0
-            )
+            RecipeNutrition(recipe_id=recipe.id, source="published", energy_kcal=100.0)
         )
         session.add(
             RecipeNutrition(
@@ -91,9 +89,7 @@ def test_validation_report_skips_low_coverage(
     with get_session() as session:
         recipe = _add_recipe(session, "https://x/soup", "Soup", servings=2)
         session.add(
-            RecipeNutrition(
-                recipe_id=recipe.id, source="published", energy_kcal=100.0
-            )
+            RecipeNutrition(recipe_id=recipe.id, source="published", energy_kcal=100.0)
         )
         session.add(
             RecipeNutrition(
@@ -117,9 +113,7 @@ def test_validation_report_skips_zero_servings(
     with get_session() as session:
         recipe = _add_recipe(session, "https://x/stock", "Stock", servings=0)
         session.add(
-            RecipeNutrition(
-                recipe_id=recipe.id, source="published", energy_kcal=100.0
-            )
+            RecipeNutrition(recipe_id=recipe.id, source="published", energy_kcal=100.0)
         )
         session.add(
             RecipeNutrition(
@@ -149,9 +143,7 @@ def test_coverage_report_lists_unreferenced_ingredients(
         )
         session.add(source)
         session.flush()
-        food = RefFood(
-            source_id=source.id, source_food_id="171287", description="Egg"
-        )
+        food = RefFood(source_id=source.id, source_food_id="171287", description="Egg")
         session.add(food)
         session.flush()
         egg = Ingredient(name="egg")

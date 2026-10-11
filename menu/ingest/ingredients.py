@@ -214,15 +214,16 @@ def parse_line(text: str, site: SiteConfig) -> ParsedLine:
             if qmax != quantity:
                 quantity_max = qmax
 
-    note = "; ".join(
-        part.text for part in (parsed.comment, parsed.purpose) if part is not None
-    ) or None
+    note = (
+        "; ".join(
+            part.text for part in (parsed.comment, parsed.purpose) if part is not None
+        )
+        or None
+    )
     confidence = (
         amount.confidence
         if amount is not None
-        else names[0].confidence
-        if names
-        else 0.0
+        else names[0].confidence if names else 0.0
     )
 
     return ParsedLine(
@@ -240,7 +241,5 @@ def parse_line(text: str, site: SiteConfig) -> ParsedLine:
         original_quantity_text=amount.text if amount is not None else None,
         original_unit=(str(amount.unit) or None) if amount is not None else None,
         parse_confidence=confidence,
-        fdc_id=(
-            parsed.foundation_foods[0].fdc_id if parsed.foundation_foods else None
-        ),
+        fdc_id=(parsed.foundation_foods[0].fdc_id if parsed.foundation_foods else None),
     )

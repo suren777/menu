@@ -109,9 +109,7 @@ class FireworksClient:
     ) -> tuple[str, Usage]:
         api_key = os.environ.get("FIREWORKS_API_KEY")
         if not api_key:
-            raise LLMError(
-                "FIREWORKS_API_KEY is not set — export it before suggesting"
-            )
+            raise LLMError("FIREWORKS_API_KEY is not set — export it before suggesting")
         body = {
             "model": self.model_id,
             "messages": [
@@ -243,6 +241,7 @@ def _from_wire(input_set: InputSet, kind: str) -> str:
         if kind == wire:
             return ours
     return kind
+
 
 # Strict schema mode wants every property required, so fields a kind
 # doesn't use are nullable instead of absent.
@@ -551,7 +550,5 @@ def suggest(
         suggestions=suggestions,
         dropped=dict(dropped),
         failed_chunks=failed_chunks,
-        usage=Usage(
-            prompt_tokens=prompt_tokens, completion_tokens=completion_tokens
-        ),
+        usage=Usage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens),
     )

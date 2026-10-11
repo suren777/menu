@@ -454,6 +454,7 @@ def test_fireworks_client_reports_http_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("FIREWORKS_API_KEY", "key")
+
     def refusing_post(*_args: Any, **_kwargs: Any) -> FakeResponse:
         return FakeResponse({}, status_code=503)
 
@@ -467,6 +468,7 @@ def test_fireworks_client_maps_missing_content_to_empty(
 ) -> None:
     monkeypatch.setenv("FIREWORKS_API_KEY", "key")
     payload = {"choices": [{"message": {"content": None}}], "usage": {}}
+
     def length_post(*_args: Any, **_kwargs: Any) -> FakeResponse:
         return FakeResponse(payload)
 

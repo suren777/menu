@@ -20,6 +20,9 @@ uv sync                    # install/refresh dependencies
 uv run pytest              # tests
 uv run mypy menu tests     # type check (strict)
 uv run ruff check .        # lint (rule set matches food-guru's)
+uv run black --check .     # formatting — CI runs this and isort too
+uv run isort --check-only .
+uv run pytest --cov=menu --cov-report=term-missing  # coverage, on demand
 ```
 
 ## Scraping rules

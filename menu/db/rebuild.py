@@ -106,9 +106,9 @@ def _import_source(source: str, sources_dir: Path, session: Session) -> bool:
 def _site_summary(site: SiteConfig, session: Session) -> SiteSummary:
     """The site's replay outcome from the rebuilt database."""
     status_rows = session.execute(
-        select(Page.status, func.count()).where(Page.site == site.name).group_by(
-            Page.status
-        )
+        select(Page.status, func.count())
+        .where(Page.site == site.name)
+        .group_by(Page.status)
     ).all()
     recipes = session.scalar(
         select(func.count())
@@ -134,9 +134,7 @@ def rebuild(
     """
     target = Path(target)
     if target.exists():
-        raise FileExistsError(
-            f"{target} already exists — delete it or pass --force"
-        )
+        raise FileExistsError(f"{target} already exists — delete it or pass --force")
 
     engine = create_engine(f"sqlite:///{target}")
     configure_sqlite(engine)

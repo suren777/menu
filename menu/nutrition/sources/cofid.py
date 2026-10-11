@@ -156,8 +156,7 @@ def import_cofid(path: Path, session: Session) -> dict[str, int]:
         ],
     )
     by_code = {
-        code: (nutrient, definition)
-        for code, nutrient, definition in NUTRIENT_MAP
+        code: (nutrient, definition) for code, nutrient, definition in NUTRIENT_MAP
     }
 
     ref_food_ids = select(RefFood.id).where(RefFood.source_id == source.id)
@@ -219,8 +218,7 @@ def import_cofid(path: Path, session: Session) -> dict[str, int]:
 
     ref_ids, kept_missing = upsert_foods(session, source.id, foods)
     nutrient_rows: list[dict[str, Any]] = [
-        {"ref_food_id": ref_ids[row.pop("source_food_id")], **row}
-        for row in nutrients
+        {"ref_food_id": ref_ids[row.pop("source_food_id")], **row} for row in nutrients
     ]
 
     for start in range(0, len(nutrient_rows), CHUNK):

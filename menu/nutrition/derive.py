@@ -112,9 +112,7 @@ def _prepared_nutrition(
     if food is None:
         return None
     nutrients = list(
-        session.scalars(
-            select(RefNutrient).where(RefNutrient.ref_food_id == food.id)
-        )
+        session.scalars(select(RefNutrient).where(RefNutrient.ref_food_id == food.id))
     )
     if not nutrients:
         return None
@@ -141,9 +139,7 @@ def derive_nutrition(recipe_id: int) -> RecipeNutrition:
         # their own).
         page = session.get(Page, recipe.page_id)
         preference = (
-            get_site(page.site).nutrition_sources
-            if page is not None
-            else ("fdc",)
+            get_site(page.site).nutrition_sources if page is not None else ("fdc",)
         )
         lines = session.execute(
             repository.lines_with_terms_select(
@@ -156,9 +152,7 @@ def derive_nutrition(recipe_id: int) -> RecipeNutrition:
             effective
             for line, term in lines
             if (
-                effective := repository.effective_ingredient_id(
-                    line.needs_review, term
-                )
+                effective := repository.effective_ingredient_id(line.needs_review, term)
             )
             is not None
             and line.parse_status == "ok"

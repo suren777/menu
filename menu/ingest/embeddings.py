@@ -68,9 +68,9 @@ class FastEmbedder:
     def embed(self, texts: list[str]) -> np.ndarray:
         if not texts:
             return np.zeros((0, 0), np.float32)
-        vectors = np.asarray(
-            list(self._load().embed(texts)), dtype=np.float32
-        ).reshape(len(texts), -1)
+        vectors = np.asarray(list(self._load().embed(texts)), dtype=np.float32).reshape(
+            len(texts), -1
+        )
         return vectors
 
 
@@ -109,13 +109,9 @@ def embed(
         with np.load(path) as data:
             cached_texts = [str(text) for text in data["texts"].tolist()]
             cached_vectors = data["vectors"]
-            vectors_by_text = dict(
-                zip(cached_texts, cached_vectors, strict=True)
-            )
+            vectors_by_text = dict(zip(cached_texts, cached_vectors, strict=True))
 
-    missing = list(
-        dict.fromkeys(text for text in texts if text not in vectors_by_text)
-    )
+    missing = list(dict.fromkeys(text for text in texts if text not in vectors_by_text))
     if missing:
         new_vectors = _normalised(worker.embed(missing))
         vectors_by_text.update(zip(missing, new_vectors, strict=True))
@@ -134,9 +130,7 @@ def embed(
             )
         tmp.replace(path)
 
-    return np.stack([vectors_by_text[text] for text in texts]).astype(
-        np.float32
-    )
+    return np.stack([vectors_by_text[text] for text in texts]).astype(np.float32)
 
 
 def nearest(
@@ -148,9 +142,9 @@ def nearest(
     product is the cosine similarity. Scores below `floor` are
     dropped; no vector store, one matrix product and an argsort.
     """
-    scores = np.asarray(queries, dtype=np.float32) @ np.asarray(
-        corpus, dtype=np.float32
-    ).T
+    scores = (
+        np.asarray(queries, dtype=np.float32) @ np.asarray(corpus, dtype=np.float32).T
+    )
     results: list[list[tuple[int, float]]] = []
     for row in scores:
         # Stable sort on the negated scores: ties keep the lower

@@ -52,9 +52,7 @@ def validation_comparisons(
     min_coverage of their grams: (recipe_id, site, sources, name,
     {nutrient: relative error}). Shared by the printed report and the
     metrics snapshot."""
-    comparisons: list[
-        tuple[int, str | None, str | None, str, dict[str, float]]
-    ] = []
+    comparisons: list[tuple[int, str | None, str | None, str, dict[str, float]]] = []
     with get_session() as session:
         # The recipe's site is its page's site (recipes have none of
         # their own).
@@ -94,14 +92,11 @@ def validation_comparisons(
                 if derived_value is None or published_value in (None, 0):
                     continue
                 errors[nutrient] = (
-                    abs(derived_value / servings - published_value)
-                    / published_value
+                    abs(derived_value / servings - published_value) / published_value
                 )
             if not errors:
                 continue
-            comparisons.append(
-                (row.recipe_id, site, row.sources, recipe.name, errors)
-            )
+            comparisons.append((row.recipe_id, site, row.sources, recipe.name, errors))
     return comparisons
 
 
@@ -122,9 +117,7 @@ def validation_report(min_coverage: float = 0.9) -> None:
             session.execute(
                 select(Ingredient.name, func.count())
                 .join(IngredientTerm, IngredientTerm.ingredient_id == Ingredient.id)
-                .join(
-                    RecipeIngredient, RecipeIngredient.term_id == IngredientTerm.id
-                )
+                .join(RecipeIngredient, RecipeIngredient.term_id == IngredientTerm.id)
                 .where(
                     RecipeIngredient.recipe_id.in_(high_ids),
                     *repository.effective_ingredient_predicates(),

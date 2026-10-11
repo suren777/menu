@@ -95,9 +95,7 @@ def test_cache_is_per_model(tmp_path: Path) -> None:
 def test_nearest_topk_and_floor() -> None:
     # Unit vectors at 0, 60 and 90 degrees from the query axis; the
     # dot products below are exact in float32.
-    corpus = np.array(
-        [[1.0, 0.0], [0.5, 3**0.5 / 2], [0.0, 1.0]], dtype=np.float32
-    )
+    corpus = np.array([[1.0, 0.0], [0.5, 3**0.5 / 2], [0.0, 1.0]], dtype=np.float32)
     query = np.array([[1.0, 0.0]], dtype=np.float32)
 
     hits = nearest(query, corpus, k=2)

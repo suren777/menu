@@ -254,9 +254,7 @@ def process_url(page: PageModel, site: SiteConfig, offline: bool = False) -> str
     return status
 
 
-def _crawl_pages(
-    site: SiteConfig, report: CrawlReport, offline: bool = False
-) -> None:
+def _crawl_pages(site: SiteConfig, report: CrawlReport, offline: bool = False) -> None:
     """Fetch the site's queued and blocked pages in id order, counting
     the outcomes into the report.
 
@@ -330,7 +328,8 @@ def crawl_sitemap(site: SiteConfig, *, offline: bool = False) -> CrawlReport:
         except NotCachedError:
             logger.info("Offline: sitemap %s not cached, stays pending", sitemap.url)
             continue
-        except Exception as exc:  # noqa: BLE001 - a dead sitemap must not stop the crawl
+        # A dead sitemap must not stop the crawl.
+        except Exception as exc:  # noqa: BLE001
             sitemap_actions.set_status(
                 sitemap.url, site.name, "failed", error=_exc_text(exc)
             )
@@ -373,7 +372,8 @@ def reparse_site(site: SiteConfig) -> None:
             with get_session() as session:
                 store_recipe_ingredients(recipe.id, recipe.data, site, session)
             stored += 1
-        except Exception as exc:  # noqa: BLE001 - a bad recipe must not stop the backfill
+        # A bad recipe must not stop the backfill.
+        except Exception as exc:  # noqa: BLE001
             failed += 1
             logger.warning(
                 "Reparse failed for %s: %s: %s", url, type(exc).__name__, exc
@@ -389,8 +389,7 @@ def main() -> None:
     parser.add_argument(
         "site",
         nargs="?",
-        help="site name from the registry (not needed for the "
-        "nutrition reports)",
+        help="site name from the registry (not needed for the " "nutrition reports)",
     )
     parser.add_argument(
         "--reparse",
@@ -424,8 +423,7 @@ def main() -> None:
     parser.add_argument(
         "--validate-nutrition",
         action="store_true",
-        help="compare derived vs published nutrition per serving, "
-        "then exit",
+        help="compare derived vs published nutrition per serving, " "then exit",
     )
     parser.add_argument(
         "--coverage-report",
@@ -472,9 +470,7 @@ def main() -> None:
     if args.metrics:
         path = Path(args.metrics)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(collect_metrics(), indent=2, sort_keys=True) + "\n"
-        )
+        path.write_text(json.dumps(collect_metrics(), indent=2, sort_keys=True) + "\n")
         print(f"Metrics snapshot written to {path}")
         return
     if args.re_resolve:

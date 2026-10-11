@@ -81,9 +81,7 @@ def test_unknown_page_status_is_refused(session: Session) -> None:
 
 
 def test_unknown_sitemap_kind_is_refused(session: Session) -> None:
-    session.add(
-        Sitemap(url="https://x/sitemap.xml", site="bbc_good_food", kind="feed")
-    )
+    session.add(Sitemap(url="https://x/sitemap.xml", site="bbc_good_food", kind="feed"))
     with pytest.raises(IntegrityError):
         session.flush()
 
@@ -111,21 +109,15 @@ def _add_ref_fixture(session: Session) -> tuple[Ingredient, RefFood, RefFood]:
     """An ingredient and two foods, each from its own source: the
     minimum real parents so a refusal below means the constraint, not
     a missing foreign key."""
-    fdc = FoodSource(
-        name="fdc", version="1", licence="public domain", citation="FDC"
-    )
+    fdc = FoodSource(name="fdc", version="1", licence="public domain", citation="FDC")
     cnf = FoodSource(name="cnf", version="1", licence="test", citation="CNF")
     session.add_all([fdc, cnf])
     session.flush()
     ingredient = Ingredient(name="milk")
     session.add(ingredient)
     session.flush()
-    fdc_food = RefFood(
-        source_id=fdc.id, source_food_id="1", description="Milk, whole"
-    )
-    cnf_food = RefFood(
-        source_id=cnf.id, source_food_id="1", description="Lait, entier"
-    )
+    fdc_food = RefFood(source_id=fdc.id, source_food_id="1", description="Milk, whole")
+    cnf_food = RefFood(source_id=cnf.id, source_food_id="1", description="Lait, entier")
     session.add_all([fdc_food, cnf_food])
     session.flush()
     return ingredient, fdc_food, cnf_food
@@ -336,9 +328,7 @@ def test_unknown_term_resolution_is_refused(session: Session) -> None:
     session.add(ingredient)
     session.flush()
     session.add(
-        IngredientTerm(
-            term="milk", ingredient_id=ingredient.id, resolution="guessed"
-        )
+        IngredientTerm(term="milk", ingredient_id=ingredient.id, resolution="guessed")
     )
     with pytest.raises(IntegrityError):
         session.flush()
@@ -349,9 +339,7 @@ def test_deleting_a_line_cascades_to_alternatives(session: Session) -> None:
     the primary deletes the alternatives (ondelete CASCADE)."""
     recipe = _add_recipe(session)
     session.flush()
-    primary = RecipeIngredient(
-        recipe_id=recipe.id, position=0, raw_text="rosewater"
-    )
+    primary = RecipeIngredient(recipe_id=recipe.id, position=0, raw_text="rosewater")
     session.add(primary)
     session.flush()
     session.add(

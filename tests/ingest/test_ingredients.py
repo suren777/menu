@@ -292,9 +292,7 @@ def test_parse_line_prefers_metric_amount_in_dual_units() -> None:
     """Dual-unit lines ("3 cups (360g) flour") parse to parallel
     amounts, not composites; the gram figure doesn't depend on how a
     cup is interpreted."""
-    parsed = parse_line(
-        "3 cups (360g) King Arthur Unbleached All-Purpose Flour", US
-    )
+    parsed = parse_line("3 cups (360g) King Arthur Unbleached All-Purpose Flour", US)
     assert parsed.quantity == 360.0
     assert parsed.base_unit == "g"
     assert parsed.original_quantity_text == "360 g"
@@ -350,9 +348,7 @@ OTTOLENGHI_FIXTURE = Path(__file__).parent / "fixtures" / "ottolenghi_lines.json
 
 
 def _ottolenghi_cases() -> list[dict[str, object]]:
-    return cast(
-        "list[dict[str, object]]", json.loads(OTTOLENGHI_FIXTURE.read_text())
-    )
+    return cast("list[dict[str, object]]", json.loads(OTTOLENGHI_FIXTURE.read_text()))
 
 
 @pytest.mark.parametrize(

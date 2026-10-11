@@ -157,38 +157,26 @@ def test_to_grams_count_uses_size_matched_portion() -> None:
     """1 large egg -> 50 g, 2 medium eggs -> 88 g: the portion
     matching the line's size beats the seeded default."""
     conversions = _egg_conversions()
-    assert (
-        actions.to_grams(
-            1.0, None, "count", "piece", None, None, "large", conversions
-        )
-        == (50.0, None, "fdc", 4)
-    )
-    assert (
-        actions.to_grams(
-            2.0, None, "count", "piece", None, None, "medium", conversions
-        )
-        == (88.0, None, "fdc", 3)
-    )
+    assert actions.to_grams(
+        1.0, None, "count", "piece", None, None, "large", conversions
+    ) == (50.0, None, "fdc", 4)
+    assert actions.to_grams(
+        2.0, None, "count", "piece", None, None, "medium", conversions
+    ) == (88.0, None, "fdc", 3)
 
 
 def test_to_grams_count_falls_back_to_seed_weight() -> None:
     """No size: the seeded unit weight converts ("2 eggs" -> 100 g)."""
-    assert (
-        actions.to_grams(
-            2.0, None, "count", "piece", None, None, None, _egg_conversions()
-        )
-        == (100.0, None, "seed", 1)
-    )
+    assert actions.to_grams(
+        2.0, None, "count", "piece", None, None, None, _egg_conversions()
+    ) == (100.0, None, "seed", 1)
 
 
 def test_to_grams_volume_uses_unit_portion() -> None:
     """1 cup egg -> 243 g through the "cup (4.86 large eggs)" row."""
-    assert (
-        actions.to_grams(
-            1.0, None, "volume", "ml", "cup", None, None, _egg_conversions()
-        )
-        == (243.0, None, "fdc", 5)
-    )
+    assert actions.to_grams(
+        1.0, None, "volume", "ml", "cup", None, None, _egg_conversions()
+    ) == (243.0, None, "fdc", 5)
 
 
 def test_to_grams_volume_seed_density_beats_derived() -> None:
@@ -230,9 +218,11 @@ def test_to_grams_volume_seed_density_beats_derived() -> None:
     ]
     # The line's unit (ml) has no portion row, so the seeded density
     # wins over the derived one and the cup row's implication.
-    assert (
-        actions.to_grams(100.0, None, "volume", "ml", "ml", None, None, rows)
-        == (200.0, None, "seed", 8)
+    assert actions.to_grams(100.0, None, "volume", "ml", "ml", None, None, rows) == (
+        200.0,
+        None,
+        "seed",
+        8,
     )
 
 
@@ -275,19 +265,18 @@ def test_to_grams_named_count_unit() -> None:
         ref_food_id=4,
         ref_seq_num=1,
     )
-    assert (
-        actions.to_grams(
-            2.0, None, "count", "stick", "sticks", None, None, [stick]
-        )
-        == (226.0, None, "fdc", 6)
-    )
+    assert actions.to_grams(
+        2.0, None, "count", "stick", "sticks", None, None, [stick]
+    ) == (226.0, None, "fdc", 6)
 
 
 def test_to_grams_never_guesses() -> None:
     """No conversion rows: grams stays NULL."""
-    assert (
-        actions.to_grams(2.0, None, "count", "piece", None, None, None, [])
-        == (None, None, None, None)
+    assert actions.to_grams(2.0, None, "count", "piece", None, None, None, []) == (
+        None,
+        None,
+        None,
+        None,
     )
 
 
@@ -304,15 +293,17 @@ def test_to_grams_ranges_and_mass() -> None:
         ref_food_id=7,
         ref_seq_num=1,
     )
-    assert (
-        actions.to_grams(
-            2.0, 3.0, "volume", "ml", "cups", None, None, [cup]
-        )
-        == (250.0, 375.0, "fdc", 10)
+    assert actions.to_grams(2.0, 3.0, "volume", "ml", "cups", None, None, [cup]) == (
+        250.0,
+        375.0,
+        "fdc",
+        10,
     )
-    assert (
-        actions.to_grams(100.0, 120.0, "mass", "g", "g", None, None, [])
-        == (100.0, 120.0, None, None)
+    assert actions.to_grams(100.0, 120.0, "mass", "g", "g", None, None, []) == (
+        100.0,
+        120.0,
+        None,
+        None,
     )
 
 
@@ -516,9 +507,7 @@ def test_removing_a_density_seed_regrams_the_line(
     actions.re_resolve()
 
     with get_session() as session:
-        milk_id = session.scalar(
-            select(Ingredient.id).where(Ingredient.name == "milk")
-        )
+        milk_id = session.scalar(select(Ingredient.id).where(Ingredient.name == "milk"))
         assert milk_id is not None
         rows = session.scalars(
             select(IngredientConversion).where(
@@ -580,9 +569,7 @@ def test_store_recipe_ingredients() -> None:
 @pytest.mark.usefixtures("db_engine")
 def test_reparse_replaces_rows() -> None:
     recipe_id = add_recipe("https://x/pancakes")
-    store_lines(
-        recipe_id, {"recipeIngredient": ["240ml warm milk", "100g butter"]}
-    )
+    store_lines(recipe_id, {"recipeIngredient": ["240ml warm milk", "100g butter"]})
 
     store_lines(recipe_id, {"recipeIngredient": ["2 eggs"]})
 
@@ -616,6 +603,7 @@ def test_bad_line_stored_as_failed_not_dropped(
     """A parse that raises is data too: stored with parse_status
     'failed' and no term. A bad line must not stop the recipe (or the
     crawl), mirroring the pipeline's per-URL handling."""
+
     def flaky(text: str, site: SiteConfig) -> ParsedLine:
         if "bad" in text:
             raise ValueError("nope")
@@ -750,9 +738,7 @@ def test_aggregate_skips_optional_and_alternative_lines() -> None:
             )
         )
         session.add(
-            RecipeIngredient(
-                recipe_id=recipe_id, position=3, raw_text="salt to taste"
-            )
+            RecipeIngredient(recipe_id=recipe_id, position=3, raw_text="salt to taste")
         )
         session.add(
             RecipeIngredient(
@@ -852,7 +838,7 @@ def test_review_queue_catches_mangled_names() -> None:
 
 @pytest.mark.usefixtures("db_engine")
 def test_lost_conjunction_goes_to_review_queue() -> None:
-    """"pink and yellow food colouring gels" parses as "pink food
+    """ "pink and yellow food colouring gels" parses as "pink food
     colouring gel" with "yellow food colouring gel" as an alternative —
     but a shopping list needs both gels, so the line carries the
     line-level review flag and resolves to nothing."""
@@ -994,9 +980,7 @@ def test_fdc_id_conflicts_reported_not_merged() -> None:
         assert record is not None
         # The curated seed term "vanilla" -> almond links the pair.
         session.add(
-            IngredientTerm(
-                term="vanilla", ingredient_id=record.id, resolution="seed"
-            )
+            IngredientTerm(term="vanilla", ingredient_id=record.id, resolution="seed")
         )
 
     # The curated seed links the pair, so the group is no longer a conflict.
@@ -1163,7 +1147,7 @@ def test_seeded_alias_rescues_mangled_name() -> None:
 
 @pytest.mark.usefixtures("db_engine")
 def test_line_override_fixes_wrong_merge() -> None:
-    """"70g  milk or dark chocolate roughly chopped (optional)" — the
+    """ "70g  milk or dark chocolate roughly chopped (optional)" — the
     real cached line, double space and all — parses as name "milk"
     with confidence 1.0. No threshold catches it, only the curated
     line override does, and the override matches the squashed line."""
@@ -1196,7 +1180,7 @@ def test_line_override_fixes_wrong_merge() -> None:
 
 @pytest.mark.usefixtures("db_engine")
 def test_quantity_level_or_alternative_kept() -> None:
-    """"2 tsp vanilla or 1 tsp essential oil": the parser drops the
+    """ "2 tsp vanilla or 1 tsp essential oil": the parser drops the
     second option into the note; splitting on "or" keeps it as an
     alternative row with its own quantity."""
     recipe_id = add_recipe("https://x/cake")
@@ -1271,7 +1255,7 @@ def test_variant_recorded_and_keep_variants_splits() -> None:
 
 @pytest.mark.usefixtures("db_engine")
 def test_aggregate_uses_range_upper_end() -> None:
-    """"2-3 onions" buys 3: under-buying a shopping list is worse
+    """ "2-3 onions" buys 3: under-buying a shopping list is worse
     than over-buying it."""
     recipe_id = add_recipe("https://x/curry")
 
@@ -1379,9 +1363,7 @@ def test_re_resolve_repoints_terms_without_reparse(
     with get_session() as session:
         lines = session.scalars(select(RecipeIngredient)).all()
         assert len(lines) == 2
-        terms = {
-            session.get(IngredientTerm, line.term_id) for line in lines
-        }
+        terms = {session.get(IngredientTerm, line.term_id) for line in lines}
         assert len(terms) == 1  # both lines share one term
         (term,) = terms
         assert term is not None
@@ -1667,16 +1649,14 @@ def test_re_resolve_lets_a_later_seed_rescue_a_flagged_line(
 
 @pytest.mark.usefixtures("db_engine")
 def test_alias_beats_a_same_named_seed_concept() -> None:
-    """"warm milk" is an ALIASES entry for milk; seeding a density for
+    """ "warm milk" is an ALIASES entry for milk; seeding a density for
     a "warm milk" concept must not steal the term."""
     with get_session() as session:
         seed_ingredient_data(session)
         concept = Ingredient(name="warm milk", origin="seed")
         session.add(concept)
         session.flush()
-        seed_module._seed_term(
-            "warm milk", concept.id, None, session, repoint=False
-        )
+        seed_module._seed_term("warm milk", concept.id, None, session, repoint=False)
         term = session.scalars(
             select(IngredientTerm).where(IngredientTerm.term == "warm milk")
         ).one()

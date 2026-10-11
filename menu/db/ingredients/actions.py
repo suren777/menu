@@ -108,12 +108,8 @@ def store_recipe_ingredients(
             )
             continue
         override = LINE_OVERRIDES.get(" ".join(raw.lower().split()))
-        alt_parsed = (
-            None if parsed.alternatives else _split_or_alternative(raw, site)
-        )
-        line_review = (
-            override is None and line_needs_review(raw, parsed, alt_parsed)
-        )
+        alt_parsed = None if parsed.alternatives else _split_or_alternative(raw, site)
+        line_review = override is None and line_needs_review(raw, parsed, alt_parsed)
         term = _resolve_term(
             override if override is not None else parsed.name,
             parsed.fdc_id,
@@ -257,9 +253,7 @@ def _resolve_term(
         session.add(term)
         session.flush()
         return term
-    ingredient = session.scalar(
-        select(Ingredient).where(Ingredient.name == canonical)
-    )
+    ingredient = session.scalar(select(Ingredient).where(Ingredient.name == canonical))
     if ingredient is None:
         ingredient = Ingredient(name=canonical, origin="auto")
         session.add(ingredient)
@@ -274,9 +268,7 @@ def _resolve_term(
     return term
 
 
-def _seed_candidate(
-    ingredient_id: int, source_food_id: str, session: Session
-) -> None:
+def _seed_candidate(ingredient_id: int, source_food_id: str, session: Session) -> None:
     """The parser's fdc_id as a candidate row (role NULL, status
     'candidate'): a suggestion for the --ref-review report, never used
     for conversion or nutrition. Only called for an ingredient created
@@ -531,8 +523,7 @@ def fdc_id_conflicts() -> list[tuple[str, list[str]]]:
     lump distinct ingredients (almond / vanilla / rosewater)."""
     with get_session() as session:
         names = {
-            record.id: record.name
-            for record in session.scalars(select(Ingredient))
+            record.id: record.name for record in session.scalars(select(Ingredient))
         }
         links = {
             (term.term, term.ingredient_id)
@@ -603,8 +594,9 @@ def ref_review(
         ).all()
         rejected: dict[int, set[int]] = {}
         for owner_id, food_id in session.execute(
-            select(IngredientFoodRef.ingredient_id, IngredientFoodRef.ref_food_id)
-            .where(IngredientFoodRef.status == "rejected")
+            select(
+                IngredientFoodRef.ingredient_id, IngredientFoodRef.ref_food_id
+            ).where(IngredientFoodRef.status == "rejected")
         ).all():
             rejected.setdefault(owner_id, set()).add(food_id)
         sources = list(session.scalars(select(FoodSource)))
@@ -638,16 +630,12 @@ def ref_review(
             rejected_foods = rejected.get(ingredient_id, set())
             matches = []
             for source in sources:
-                for ref_food_id, source_food_id, description in descriptions[
-                    source.id
-                ]:
+                for ref_food_id, source_food_id, description in descriptions[source.id]:
                     if ref_food_id in rejected_foods:
                         continue
                     text = description.lower()
                     if all(word in text for word in words):
-                        matches.append(
-                            f"{source.name} {source_food_id}: {description}"
-                        )
+                        matches.append(f"{source.name} {source_food_id}: {description}")
                         break
             results.append((count, name, candidate, tuple(matches)))
     return results
@@ -899,9 +887,7 @@ def aggregate(
             continue
         variant = group_key[1]
         label = f"{ingredient.name} ({variant})" if variant else ingredient.name
-        quantified = [
-            row for row in grouped[group_key] if row.quantity is not None
-        ]
+        quantified = [row for row in grouped[group_key] if row.quantity is not None]
         if quantified and all(row.grams is not None for row in quantified):
             # Every line converted: one gram line replaces the
             # per-dimension fold.
@@ -963,8 +949,12 @@ def aggregate(
         if not has_quantity and has_unquantified:
             shopping.append(
                 ShoppingLine(
-                    label=label, dimension=None, total=None, base_unit=None,
-                    variant=variant, as_needed=True,
+                    label=label,
+                    dimension=None,
+                    total=None,
+                    base_unit=None,
+                    variant=variant,
+                    as_needed=True,
                 )
             )
 

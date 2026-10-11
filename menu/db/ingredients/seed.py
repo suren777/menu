@@ -237,9 +237,7 @@ PREPARED_FORMS: dict[tuple[str, str], tuple[str, str]] = {
 }
 
 
-def prepared_form(
-    ingredient_name: str, *texts: str | None
-) -> tuple[str, str] | None:
+def prepared_form(ingredient_name: str, *texts: str | None) -> tuple[str, str] | None:
     """The prepared form whose keyword appears in one of the line's
     texts (parsed name, preparation, stored variant).
 
@@ -361,7 +359,9 @@ def seed_ingredient_data(session: Session) -> None:
         if existing is None:
             session.add(
                 IngredientTerm(
-                    term=name, ingredient_id=None, variant=None,
+                    term=name,
+                    ingredient_id=None,
+                    variant=None,
                     resolution="not_food",
                 )
             )
@@ -463,9 +463,7 @@ def seed_ingredient_data(session: Session) -> None:
     # created yet is skipped — there is nothing to reject — and the
     # next startup applies the rejection once a line resolves to it.
     for name, source_name, source_food_id in REJECTED_REFS:
-        named = session.scalar(
-            select(Ingredient).where(Ingredient.name == name)
-        )
+        named = session.scalar(select(Ingredient).where(Ingredient.name == name))
         if named is None:
             continue
         ref_food = session.execute(

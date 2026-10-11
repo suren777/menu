@@ -35,9 +35,7 @@ def collect_metrics() -> dict[str, Any]:
                 .group_by(RecipeIngredient.grams_source)
             ).all()
         }
-        total_lines = session.scalar(
-            select(func.count()).select_from(RecipeIngredient)
-        )
+        total_lines = session.scalar(select(func.count()).select_from(RecipeIngredient))
         resolved_lines = session.scalar(
             select(func.count())
             .select_from(RecipeIngredient)

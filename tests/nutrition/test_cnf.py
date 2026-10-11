@@ -131,7 +131,7 @@ def test_ml_portion(session: Session) -> None:
 
 @pytest.mark.usefixtures("counts")
 def test_count_portion(session: Session) -> None:
-    """"1 medium egg" is a medium (unit) egg (modifier); "2 large
+    """ "1 medium egg" is a medium (unit) egg (modifier); "2 large
     eggs" keeps its amount."""
     egg = _ref_food(session, "125")
     rows = _portions_of(session, egg)
@@ -147,7 +147,7 @@ def test_count_portion(session: Session) -> None:
 
 @pytest.mark.usefixtures("counts")
 def test_fraction_portion(session: Session) -> None:
-    """"1/2 back" parses the fraction into the amount."""
+    """ "1/2 back" parses the fraction into the amount."""
     chicken = _ref_food(session, "600")
     row = _portions_of(session, chicken)[1]
     assert row.amount == 0.5
@@ -209,9 +209,10 @@ def test_reimport_keeps_food_ids(session: Session) -> None:
 
     import_cnf(FIXTURE_DIR, session)
 
-    assert dict(
-        session.execute(select(RefFood.source_food_id, RefFood.id)).all()
-    ) == before
+    assert (
+        dict(session.execute(select(RefFood.source_food_id, RefFood.id)).all())
+        == before
+    )
     session.expire_all()
     resolved = session.get(IngredientFoodRef, mapping.id)
     assert resolved is not None
@@ -264,9 +265,7 @@ def test_stale_food_deleted_or_kept(
 
     import_cnf(_release_without("125", tmp_path), session)
     assert (
-        session.scalars(
-            select(RefFood).where(RefFood.source_food_id == "125")
-        ).first()
+        session.scalars(select(RefFood).where(RefFood.source_food_id == "125")).first()
         is None
     )
 

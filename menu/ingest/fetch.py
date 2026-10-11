@@ -113,7 +113,7 @@ def _retry_after(response: Response) -> float:
     minute (a day-long Retry-After must not stall the crawl), else 5."""
     try:
         return min(max(float(response.headers["Retry-After"]), 1.0), 60.0)
-    except (KeyError, TypeError, ValueError):
+    except KeyError, TypeError, ValueError:
         return 5.0
 
 
@@ -144,9 +144,7 @@ def fetch_page(
     # The site's own delay or the robots crawl-delay, whichever is
     # larger.
     try:
-        delay = max(
-            site.politeness_delay, float(parser.crawl_delay(USER_AGENT) or 0.0)
-        )
+        delay = max(site.politeness_delay, float(parser.crawl_delay(USER_AGENT) or 0.0))
     except ValueError:  # a garbage crawl-delay: fall back to our own
         delay = site.politeness_delay
     _politeness.wait(site.base_url, delay)

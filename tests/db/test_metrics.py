@@ -68,9 +68,7 @@ def test_collect_metrics_snapshot(session: Session) -> None:
                 coverage=0.95,
                 sources="fdc",
             ),
-            RecipeNutrition(
-                recipe_id=recipe.id, source="published", energy_kcal=100.0
-            ),
+            RecipeNutrition(recipe_id=recipe.id, source="published", energy_kcal=100.0),
         ]
     )
     # collect_metrics opens its own session, so the fixture rows must

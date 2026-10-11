@@ -153,9 +153,7 @@ def _refuse(dataset_dir: Path) -> dict[str, float]:
     return refuse
 
 
-def _portions(
-    dataset_dir: Path, measures: dict[int, str]
-) -> Iterator[dict[str, Any]]:
+def _portions(dataset_dir: Path, measures: dict[int, str]) -> Iterator[dict[str, Any]]:
     """Portion rows from the conversion factors. A factor multiplies
     the per-100 g values into per-measure values, so the measure's
     gram weight is factor x 100. Measures without a leading amount
@@ -215,8 +213,7 @@ def import_cnf(dataset_dir: Path, session: Session) -> dict[str, int]:
         ],
     )
     by_code = {
-        code: (nutrient, definition)
-        for code, nutrient, definition in NUTRIENT_MAP
+        code: (nutrient, definition) for code, nutrient, definition in NUTRIENT_MAP
     }
 
     ref_food_ids = select(RefFood.id).where(RefFood.source_id == source.id)

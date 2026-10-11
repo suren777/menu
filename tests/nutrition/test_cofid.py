@@ -158,11 +158,14 @@ def test_reimport_keeps_food_ids(session: Session) -> None:
     milk = Ingredient(name="milk")
     session.add(milk)
     session.flush()
+    food = _ref_food(session, "12-320")
     mapping = IngredientFoodRef(
         ingredient_id=milk.id,
-        ref_food_id=_ref_food(session, "12-320").id,
+        ref_food_id=food.id,
+        source_id=food.source_id,
         role="nutrition",
-        confirmed=True,
+        status="confirmed",
+        origin="seed",
     )
     session.add(mapping)
     session.flush()
@@ -175,9 +178,9 @@ def test_reimport_keeps_food_ids(session: Session) -> None:
     session.expire_all()
     resolved = session.get(IngredientFoodRef, mapping.id)
     assert resolved is not None
-    food = session.get(RefFood, resolved.ref_food_id)
-    assert food is not None
-    assert food.source_food_id == "12-320"
+    pinned = session.get(RefFood, resolved.ref_food_id)
+    assert pinned is not None
+    assert pinned.source_food_id == "12-320"
 
 
 def test_fdc_rows_untouched(session: Session) -> None:

@@ -104,18 +104,183 @@ def test_unknown_extractor_is_refused(session: Session) -> None:
         session.flush()
 
 
-def test_unknown_food_ref_role_is_refused(session: Session) -> None:
-    ingredient = Ingredient(name="milk")
-    source = FoodSource(
+def _add_ref_fixture(session: Session) -> tuple[Ingredient, RefFood, RefFood]:
+    """An ingredient and two foods, each from its own source: the
+    minimum real parents so a refusal below means the constraint, not
+    a missing foreign key."""
+    fdc = FoodSource(
         name="fdc", version="1", licence="public domain", citation="FDC"
     )
-    session.add_all([ingredient, source])
+    cnf = FoodSource(name="cnf", version="1", licence="test", citation="CNF")
+    session.add_all([fdc, cnf])
+    session.flush()
+    ingredient = Ingredient(name="milk")
+    session.add(ingredient)
+    session.flush()
+    fdc_food = RefFood(
+        source_id=fdc.id, source_food_id="1", description="Milk, whole"
+    )
+    cnf_food = RefFood(
+        source_id=cnf.id, source_food_id="1", description="Lait, entier"
+    )
+    session.add_all([fdc_food, cnf_food])
+    session.flush()
+    return ingredient, fdc_food, cnf_food
+
+
+def test_unknown_food_ref_role_is_refused(session: Session) -> None:
+    ingredient, fdc_food, _ = _add_ref_fixture(session)
+    session.add(
+        IngredientFoodRef(
+            ingredient_id=ingredient.id,
+            ref_food_id=fdc_food.id,
+            source_id=fdc_food.source_id,
+            role="guessing",  # only conversion | nutrition | NULL
+            status="candidate",
+            origin="parser",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_unknown_food_ref_status_is_refused(session: Session) -> None:
+    ingredient, fdc_food, _ = _add_ref_fixture(session)
+    session.add(
+        IngredientFoodRef(
+            ingredient_id=ingredient.id,
+            ref_food_id=fdc_food.id,
+            source_id=fdc_food.source_id,
+            role="nutrition",
+            status="tentative",  # only candidate | confirmed | rejected
+            origin="seed",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_confirmed_food_ref_without_role_is_refused(session: Session) -> None:
+    """A confirmed mapping has decided what the reference is for;
+    only candidates (and rejections) may sit roleless."""
+    ingredient, fdc_food, _ = _add_ref_fixture(session)
+    session.add(
+        IngredientFoodRef(
+            ingredient_id=ingredient.id,
+            ref_food_id=fdc_food.id,
+            source_id=fdc_food.source_id,
+            role=None,
+            status="confirmed",
+            origin="seed",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_food_ref_source_id_must_match_the_food(session: Session) -> None:
+    """The denormalised source_id is part of the composite FK: it can
+    only name the ref_food's own source."""
+    ingredient, fdc_food, cnf_food = _add_ref_fixture(session)
+    session.add(
+        IngredientFoodRef(
+            ingredient_id=ingredient.id,
+            ref_food_id=fdc_food.id,
+            source_id=cnf_food.source_id,  # not fdc_food's source
+            role="nutrition",
+            status="confirmed",
+            origin="seed",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_one_confirmed_reference_per_role_per_source(session: Session) -> None:
+    """The partial unique index: two confirmed nutrition references
+    from the same source for one ingredient cannot both stand."""
+    ingredient, fdc_food, _ = _add_ref_fixture(session)
+    second_fdc_food = RefFood(
+        source_id=fdc_food.source_id,
+        source_food_id="2",
+        description="Milk, skim",
+    )
+    session.add(second_fdc_food)
     session.flush()
     session.add(
         IngredientFoodRef(
             ingredient_id=ingredient.id,
-            ref_food_id=1,
-            role="guessing",  # only conversion | nutrition | NULL
+            ref_food_id=fdc_food.id,
+            source_id=fdc_food.source_id,
+            role="nutrition",
+            status="confirmed",
+            origin="seed",
+        )
+    )
+    session.flush()
+    session.add(
+        IngredientFoodRef(
+            ingredient_id=ingredient.id,
+            ref_food_id=second_fdc_food.id,
+            source_id=second_fdc_food.source_id,
+            role="nutrition",
+            status="confirmed",
+            origin="seed",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_confirmed_references_from_two_sources_allowed(session: Session) -> None:
+    """One confirmed reference per role per *source*: fdc and cnf may
+    each hold the ingredient's nutrition reference — the site's
+    nutrition_sources order picks between them."""
+    ingredient, fdc_food, cnf_food = _add_ref_fixture(session)
+    session.add_all(
+        [
+            IngredientFoodRef(
+                ingredient_id=ingredient.id,
+                ref_food_id=fdc_food.id,
+                source_id=fdc_food.source_id,
+                role="nutrition",
+                status="confirmed",
+                origin="seed",
+            ),
+            IngredientFoodRef(
+                ingredient_id=ingredient.id,
+                ref_food_id=cnf_food.id,
+                source_id=cnf_food.source_id,
+                role="nutrition",
+                status="confirmed",
+                origin="seed",
+            ),
+        ]
+    )
+    session.flush()  # no IntegrityError: both stand
+
+
+def test_same_mapping_not_stored_twice(session: Session) -> None:
+    """The expression index folds a NULL role into the key, so a
+    candidate and its re-suggestion share one row."""
+    ingredient, fdc_food, _ = _add_ref_fixture(session)
+    session.add(
+        IngredientFoodRef(
+            ingredient_id=ingredient.id,
+            ref_food_id=fdc_food.id,
+            source_id=fdc_food.source_id,
+            status="candidate",
+            origin="parser",
+        )
+    )
+    session.flush()
+    session.add(
+        IngredientFoodRef(
+            ingredient_id=ingredient.id,
+            ref_food_id=fdc_food.id,
+            source_id=fdc_food.source_id,
+            status="candidate",
+            origin="parser",
         )
     )
     with pytest.raises(IntegrityError):

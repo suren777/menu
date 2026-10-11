@@ -191,6 +191,17 @@ FOOD_REFS: dict[str, list[tuple[str, str, str]]] = {
 }
 
 
+# Reviewed-and-rejected parser suggestions, curated in git like
+# FOOD_REFS: (canonical ingredient, source name, source_food_id). When
+# --ref-review shows a candidate that is wrong but no honest reference
+# exists to seed instead, add it here and seeding marks the matching
+# candidate 'rejected' (inserting a rejected row if the ingredient
+# exists but no row does) — it then stays out of --ref-review for good,
+# and a re-crawl cannot resurrect it. A confirmed mapping is never
+# rejected: seeding logs a warning instead.
+REJECTED_REFS: list[tuple[str, str, str]] = []
+
+
 # Portion weights come from the first of these sources the ingredient
 # has a confirmed conversion reference in (seed overrides beat all).
 CONVERSION_SOURCES: tuple[str, ...] = ("fdc", "cnf")
@@ -274,46 +285,114 @@ def seed_ingredient_data(session: Session) -> None:
     # Reference-food mappings are hand-reviewed (the --ref-review
     # report shows what is left): only confirmed mappings feed
     # conversion and nutrition. The parser's own suggestions seed
-    # unconfirmed candidate rows instead (actions.py).
+    # candidate rows instead (actions.py); reviewed-and-rejected
+    # suggestions are curated below and marked 'rejected'.
     missed = 0
     for name, refs in FOOD_REFS.items():
         ingredient = _canonical_ingredient(name, session)
         for source_name, source_food_id, role in refs:
             ref_food = session.execute(
-                select(RefFood.id)
+                select(RefFood.id, RefFood.source_id)
                 .join(FoodSource, FoodSource.id == RefFood.source_id)
                 .where(
                     FoodSource.name == source_name,
                     RefFood.source_food_id == source_food_id,
                 )
-            ).scalar_one_or_none()
+            ).first()
             if ref_food is None:
                 missed += 1
                 continue
+            ref_food_id, source_id = ref_food
             ref_row = session.scalar(
                 select(IngredientFoodRef).where(
                     IngredientFoodRef.ingredient_id == ingredient.id,
-                    IngredientFoodRef.ref_food_id == ref_food,
+                    IngredientFoodRef.ref_food_id == ref_food_id,
                     IngredientFoodRef.role == role,
                 )
             )
             if ref_row is None:
+                # A parser candidate or a curated rejection sits on the
+                # same (ingredient, food) pair with no role: the seed
+                # confirms it into this role instead of doubling the
+                # mapping.
+                ref_row = session.scalar(
+                    select(IngredientFoodRef).where(
+                        IngredientFoodRef.ingredient_id == ingredient.id,
+                        IngredientFoodRef.ref_food_id == ref_food_id,
+                        IngredientFoodRef.role.is_(None),
+                    )
+                )
+            if ref_row is None:
                 session.add(
                     IngredientFoodRef(
                         ingredient_id=ingredient.id,
-                        ref_food_id=ref_food,
+                        ref_food_id=ref_food_id,
+                        source_id=source_id,
                         role=role,
-                        confirmed=True,
+                        status="confirmed",
+                        origin="seed",
                     )
                 )
             else:
-                ref_row.confirmed = True
+                ref_row.role = role
+                ref_row.status = "confirmed"
+                ref_row.origin = "seed"
     if missed:
         logger.warning(
             "%d seed mappings skipped: their foods are not in the ref"
             " tables yet; run menu-fdc-import",
             missed,
         )
+
+    # Reviewed-and-rejected candidates (REJECTED_REFS above): mark the
+    # matching candidate 'rejected' so --ref-review stops showing it,
+    # never a confirmed mapping. An ingredient the parser has not
+    # created yet is skipped — there is nothing to reject — and the
+    # next startup applies the rejection once a line resolves to it.
+    for name, source_name, source_food_id in REJECTED_REFS:
+        named = session.scalar(
+            select(Ingredient).where(Ingredient.name == name)
+        )
+        if named is None:
+            continue
+        ref_food = session.execute(
+            select(RefFood.id, RefFood.source_id)
+            .join(FoodSource, FoodSource.id == RefFood.source_id)
+            .where(
+                FoodSource.name == source_name,
+                RefFood.source_food_id == source_food_id,
+            )
+        ).first()
+        if ref_food is None:
+            missed += 1
+            continue
+        ref_food_id, source_id = ref_food
+        ref_row = session.scalar(
+            select(IngredientFoodRef).where(
+                IngredientFoodRef.ingredient_id == named.id,
+                IngredientFoodRef.ref_food_id == ref_food_id,
+            )
+        )
+        if ref_row is None:
+            session.add(
+                IngredientFoodRef(
+                    ingredient_id=named.id,
+                    ref_food_id=ref_food_id,
+                    source_id=source_id,
+                    status="rejected",
+                    origin="seed",
+                )
+            )
+        elif ref_row.status == "confirmed":
+            logger.warning(
+                "REJECTED_REFS lists %s / %s %s, but a confirmed"
+                " mapping exists; not rejecting it",
+                name,
+                source_name,
+                source_food_id,
+            )
+        else:
+            ref_row.status = "rejected"
 
     # Derive density and unit weight from the confirmed conversion
     # reference's portions when no seed override exists: the seeded
@@ -329,7 +408,7 @@ def seed_ingredient_data(session: Session) -> None:
         .join(RefPortion, RefPortion.ref_food_id == RefFood.id)
         .where(
             IngredientFoodRef.role == "conversion",
-            IngredientFoodRef.confirmed.is_(True),
+            IngredientFoodRef.status == "confirmed",
         )
     ).all()
     by_ingredient: dict[int, tuple[Ingredient, dict[str, list[RefPortion]]]] = {}

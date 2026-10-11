@@ -1,5 +1,6 @@
 """Tests for the hand-seeded ingredient data."""
 
+import logging
 from typing import TYPE_CHECKING
 
 import pytest
@@ -14,6 +15,7 @@ from menu.db.database import (
     RefPortion,
 )
 from menu.db.ingredients import repository
+from menu.db.ingredients import seed as seed_module
 from menu.db.ingredients.seed import ALIASES, seed_ingredient_data
 
 if TYPE_CHECKING:
@@ -163,30 +165,124 @@ def test_seed_confirms_fdc_ids(session: Session) -> None:
     refs = session.scalars(
         select(IngredientFoodRef).where(IngredientFoodRef.ingredient_id == egg.id)
     ).all()
-    assert [(ref.role, ref.confirmed) for ref in refs] == [
-        ("conversion", True),
-        ("nutrition", True),
+    assert [(ref.role, ref.status) for ref in refs] == [
+        ("conversion", "confirmed"),
+        ("nutrition", "confirmed"),
     ]
 
 
 def test_seed_overrides_stale_parser_candidates(session: Session) -> None:
     """The parser's suggestion is often wrong (baking powder once
     resolved to "Baobab powder"); the confirmed seed wins and the
-    stale candidate stays unconfirmed."""
+    stale candidate stays a candidate."""
     stale = _add_fdc_food(session, "167806", "Baobab powder")
     baking = _add_fdc_food(session, "172803", "Leavening agents, baking powder")
     powder = Ingredient(name="baking powder")
     session.add(powder)
     session.flush()
-    session.add(IngredientFoodRef(ingredient_id=powder.id, ref_food_id=stale))
+    stale_food = session.get(RefFood, stale)
+    assert stale_food is not None
+    session.add(
+        IngredientFoodRef(
+            ingredient_id=powder.id,
+            ref_food_id=stale,
+            source_id=stale_food.source_id,
+            status="candidate",
+            origin="parser",
+        )
+    )
 
     seed_ingredient_data(session)
 
     refs = session.scalars(
         select(IngredientFoodRef).where(IngredientFoodRef.ingredient_id == powder.id)
     ).all()
-    assert {ref.ref_food_id for ref in refs if ref.confirmed} == {baking}
-    assert any(ref.ref_food_id == stale and not ref.confirmed for ref in refs)
+    assert {ref.ref_food_id for ref in refs if ref.status == "confirmed"} == {baking}
+    assert any(
+        ref.ref_food_id == stale and ref.status == "candidate" for ref in refs
+    )
+
+
+def test_seed_rejects_candidate_from_rejected_refs(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A REJECTED_REFS entry marks the matching candidate 'rejected'
+    (inserting one when no row exists) — and a confirmed mapping for
+    a different food stays confirmed."""
+    stale = _add_fdc_food(session, "167806", "Baobab powder")
+    baking = _add_fdc_food(session, "172803", "Leavening agents, baking powder")
+    powder = Ingredient(name="baking powder")
+    session.add(powder)
+    session.flush()
+    stale_food = session.get(RefFood, stale)
+    assert stale_food is not None
+    session.add(
+        IngredientFoodRef(
+            ingredient_id=powder.id,
+            ref_food_id=stale,
+            source_id=stale_food.source_id,
+            status="candidate",
+            origin="parser",
+        )
+    )
+    session.flush()
+
+    monkeypatch.setattr(
+        seed_module, "REJECTED_REFS", [("baking powder", "fdc", "167806")]
+    )
+    seed_ingredient_data(session)
+
+    rows = {
+        ref.ref_food_id: ref.status
+        for ref in session.scalars(
+            select(IngredientFoodRef).where(
+                IngredientFoodRef.ingredient_id == powder.id
+            )
+        )
+    }
+    assert rows == {stale: "rejected", baking: "confirmed"}
+
+
+def test_seed_rejects_without_a_candidate(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No candidate row: the rejection inserts a rejected row, so a
+    re-crawl cannot resurrect the suggestion either."""
+    food_id = _add_fdc_food(session, "167806", "Baobab powder")
+    powder = Ingredient(name="baking powder")
+    session.add(powder)
+    session.flush()
+
+    monkeypatch.setattr(
+        seed_module, "REJECTED_REFS", [("baking powder", "fdc", "167806")]
+    )
+    seed_ingredient_data(session)
+
+    ref = session.scalars(
+        select(IngredientFoodRef).where(IngredientFoodRef.ingredient_id == powder.id)
+    ).one()
+    assert (ref.ref_food_id, ref.status, ref.role) == (food_id, "rejected", None)
+
+
+def test_seed_never_rejects_a_confirmed_mapping(
+    session: Session, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """REJECTED_REFS contradicting a FOOD_REFS seed is a curation
+    mistake: the confirmed mapping stands and seeding warns."""
+    _add_fdc_food(session, "171287", "Egg, whole, raw, fresh")
+    seed_ingredient_data(session)
+    monkeypatch.setattr(seed_module, "REJECTED_REFS", [("egg", "fdc", "171287")])
+
+    with caplog.at_level(logging.WARNING):
+        seed_ingredient_data(session)
+
+    egg = repository.find_ingredient_by_name("egg", session)
+    assert egg is not None
+    refs = session.scalars(
+        select(IngredientFoodRef).where(IngredientFoodRef.ingredient_id == egg.id)
+    ).all()
+    assert all(ref.status == "confirmed" for ref in refs)
+    assert "not rejecting it" in caplog.text
 
 
 def test_seed_derives_from_fdc_before_cnf(session: Session) -> None:
@@ -229,8 +325,10 @@ def test_seed_derives_from_fdc_before_cnf(session: Session) -> None:
             IngredientFoodRef(
                 ingredient_id=garlic.id,
                 ref_food_id=cnf_food.id,
+                source_id=cnf_food.source_id,
                 role="conversion",
-                confirmed=True,
+                status="confirmed",
+                origin="seed",
             ),
         ]
     )

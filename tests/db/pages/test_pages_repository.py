@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 
-from menu.db.database import Page, Recipe
+from menu.db.database import Page, Recipe, Sitemap
 from menu.db.pages import repository
 
 if TYPE_CHECKING:
@@ -17,8 +17,11 @@ def add_page(url: str, site: str = "test", status: str = "queued") -> Page:
 
 
 def test_to_model(session: Session) -> None:
+    sitemap = Sitemap(url="http://test.com/sitemap.xml", site="test")
+    session.add(sitemap)
+    session.flush()
     page = add_page("http://test.com")
-    page.sitemap_id = 3
+    page.sitemap_id = sitemap.id
     page.lastmod = "2026-10-01"
     page.attempts = 2
     session.add(page)
@@ -29,7 +32,7 @@ def test_to_model(session: Session) -> None:
     assert model.id == page.id
     assert model.url == "http://test.com"
     assert model.site == "test"
-    assert model.sitemap_id == 3
+    assert model.sitemap_id == sitemap.id
     assert model.lastmod == "2026-10-01"
     assert model.status == "queued"
     assert model.attempts == 2

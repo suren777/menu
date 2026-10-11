@@ -1,9 +1,9 @@
-"""Shared machinery for the reference-data importers.
+"""Common machinery for the reference-data importers.
 
 fdc, cofid and cnf all slice their release into the same ref_* tables.
 upsert_foods is the food half every importer needs: ref_food rows are
 upserted on (source_id, source_food_id) so a re-import keeps ref_food.id
-stable — a confirmed ingredient_food_ref mapping never silently points
+stable — a confirmed ingredient_food_refs mapping never silently points
 at a different food — while foods the release dropped are removed
 unless a mapping still references them.
 """
@@ -71,7 +71,7 @@ def upsert_foods(
         if food_id in referenced:
             logger.warning(
                 "ref_food %s is missing from the release but still "
-                "referenced by ingredient_food_ref; keeping it",
+                "referenced by ingredient_food_refs; keeping it",
                 source_food_id,
             )
         else:

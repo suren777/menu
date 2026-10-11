@@ -195,11 +195,14 @@ def test_reimport_keeps_food_ids(session: Session) -> None:
     egg = Ingredient(name="egg")
     session.add(egg)
     session.flush()
+    food = _ref_food(session, "125")
     mapping = IngredientFoodRef(
         ingredient_id=egg.id,
-        ref_food_id=_ref_food(session, "125").id,
+        ref_food_id=food.id,
+        source_id=food.source_id,
         role="nutrition",
-        confirmed=True,
+        status="confirmed",
+        origin="seed",
     )
     session.add(mapping)
     session.flush()
@@ -212,9 +215,9 @@ def test_reimport_keeps_food_ids(session: Session) -> None:
     session.expire_all()
     resolved = session.get(IngredientFoodRef, mapping.id)
     assert resolved is not None
-    food = session.get(RefFood, resolved.ref_food_id)
-    assert food is not None
-    assert food.source_food_id == "125"
+    pinned = session.get(RefFood, resolved.ref_food_id)
+    assert pinned is not None
+    assert pinned.source_food_id == "125"
 
 
 def _release_without(food_id: str, target: Path) -> Path:
@@ -240,13 +243,15 @@ def test_stale_food_deleted_or_kept(
     chicken = Ingredient(name="chicken")
     session.add(chicken)
     session.flush()
-    kept_id = _ref_food(session, "600").id
+    kept_food = _ref_food(session, "600")
     session.add(
         IngredientFoodRef(
             ingredient_id=chicken.id,
-            ref_food_id=kept_id,
+            ref_food_id=kept_food.id,
+            source_id=kept_food.source_id,
             role="nutrition",
-            confirmed=True,
+            status="confirmed",
+            origin="seed",
         )
     )
     session.flush()
@@ -255,7 +260,7 @@ def test_stale_food_deleted_or_kept(
         counts = import_cnf(_release_without("600", tmp_path), session)
     assert counts["kept_missing"] == 1
     assert "600" in caplog.text
-    assert _ref_food(session, "600").id == kept_id
+    assert _ref_food(session, "600").id == kept_food.id
 
     import_cnf(_release_without("125", tmp_path), session)
     assert (

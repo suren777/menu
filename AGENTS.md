@@ -7,7 +7,7 @@ Agent-facing conventions for the menu repo. Facts only — verify against the co
 Menu is a recipe **sourcing lab**: discovering recipe URLs, fetching pages politely, and extracting recipe data. It has no bot, no API and no deployment. Code that works here graduates to
 [food-guru](https://github.com/surenislyaev/food-guru)'s `backend/app/ingest/` with minimal rework — so module layout, naming, tooling and code style deliberately mirror food-guru. When in doubt about how something should be implemented here, check how food-guru's ingest does it.
 
-The boundary with food-guru: menu discovers, fetches and extracts **raw** structured recipe data (JSON-LD, or schema.org microdata when a site publishes no JSON-LD); parsing/structuring recipes into a real data model is food-guru's job. The ingredient structuring and nutrition prototype below is the one deliberate exception: a menu prototype that moves to food-guru with the ingest code. The SQLite database in `menu/db/` is scratch storage for experiments, never the source of truth — don't build anything on its schema (the ingredient, reference and nutrition tables included).
+The boundary with food-guru: menu discovers, fetches and extracts **raw** structured recipe data (JSON-LD, or schema.org microdata when a site publishes no JSON-LD); parsing/structuring recipes into a real data model is food-guru's job. The ingredient structuring and nutrition prototype below is the one deliberate exception: a menu prototype that moves to food-guru with the ingest code. The Postgres 18 database (`docker compose up -d db`) is scratch storage for experiments, never the source of truth — still disposable, don't build anything on its schema (the ingredient, reference and nutrition tables included).
 
 ## Python 3.14
 
@@ -16,8 +16,9 @@ This repo runs on Python 3.14 (`requires-python = ">=3.14"`, migrated from 3.11 
 ## Commands
 
 ```sh
+docker compose up -d db    # the scratch Postgres 18 server — the CLI needs it
 uv sync                    # install/refresh dependencies
-uv run pytest              # tests
+uv run pytest              # tests (need Docker: an ephemeral Postgres per run)
 uv run mypy menu tests     # type check (strict)
 uv run ruff check .        # lint (rule set matches food-guru's)
 uv run black --check .     # formatting — CI runs this and isort too
@@ -25,11 +26,13 @@ uv run isort --check-only .
 uv run pytest --cov=menu --cov-report=term-missing  # coverage, on demand
 ```
 
+The compose volume mounts `/var/lib/postgresql` — the postgres:18 image moved `PGDATA` there from the pre-18 `/var/lib/postgresql/data` layout.
+
 ## Scraping rules
 
 - **Politeness delay** — `fetch.py` spaces requests to a site's host by the site's `politeness_delay`. The delay lives in process memory (`_politeness`), so the crawl must stay **single-process**: parallel workers would each hammer the site at full speed. Same reason food-guru's worker is single-process.
 - **Disk cache** — fetched pages are cached under `.cache/` (gitignored, safe to delete) and reused on re-runs; sitemaps are always fetched fresh but cached too, for replay. A failed fetch is never cached, so a transient error can't poison later runs.
-- **`menu-rebuild` replays the cache offline** — it builds a whole database from `.cache/`, the seeds and any downloaded reference releases with no network access; sitemaps or pages missing from the cache stay pending/queued for the next live crawl.
+- **`menu-rebuild` replays the cache offline** — it builds a fresh database (default `menu_rebuilt`, `--target` names another) on the same server as the live database from `.cache/`, the seeds and any downloaded reference releases with no network access; sitemaps or pages missing from the cache stay pending/queued for the next live crawl.
 - **Test against saved pages** — don't write tests that hit live sites. Save the page HTML and test the parsing against the saved fixture.
 - **Bad URLs don't stop the crawl** — every URL's outcome is recorded on its `pages` row (`failed`/`blocked`/`disallowed`, with the HTTP status and error), the crawl logs it, counts it and moves on; a sitemap that won't fetch is marked failed on its `sitemaps` row and the crawl moves on too. Mirrors food-guru's worker, which counts a failure and moves on. The same rule holds per ingredient line: `store_recipe_ingredients` stores a line that fails to parse with `parse_status='failed'` and moves on.
 - **robots.txt is honoured** — `fetch.py` fetches each site's robots.txt once through the shared session and caches the parser (single process, like the politeness delay). A disallowed URL raises `DisallowedError` before anything is fetched; the robots crawl-delay joins the site's `politeness_delay`, whichever is larger. A 4xx (no robots.txt) allows all, a 5xx disallows all (RFC 9309).

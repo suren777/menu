@@ -1,0 +1,25 @@
+# The scratch Postgres 18 server: throwaway experiment storage, the
+# same database the CLI and menu-rebuild talk to by default.
+#
+# Host port 5433 — food-guru's local Postgres already owns 5432.
+# The volume mounts /var/lib/postgresql: the 18 image moved PGDATA
+# from the pre-18 /var/lib/postgresql/data layout.
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: menu
+    ports:
+      - "5433:5432"
+    volumes:
+      - menu_pg:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d menu"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  menu_pg:

@@ -5,20 +5,26 @@ session's get raises, so any network call fails the test.
 """
 
 import logging
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import func, select
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
 from menu.db.database import Page, Recipe, RecipeIngredient
+from menu.db.engine import database_url, make_engine
 from menu.db.rebuild import rebuild
 from menu.ingest.fetch import _cache_path
 from menu.ingest.registry import SiteConfig
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from sqlalchemy.engine import Engine
+    from testcontainers.community.postgres import PostgresContainer
 
 SITE = SiteConfig(
     name="testsite",
@@ -73,69 +79,101 @@ def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("menu.ingest.http.session.get", boom)
 
 
+def _target() -> str:
+    return f"t_rebuild_{uuid.uuid4().hex}"
+
+
+def _target_engine(pg_container: PostgresContainer, name: str) -> Engine:
+    """An engine on a database rebuild built."""
+    url = (
+        make_url(pg_container.get_connection_url())
+        .set(database=name)
+        .render_as_string(hide_password=False)
+    )
+    return make_engine(url)
+
+
 @pytest.mark.usefixtures("cache", "test_registry", "no_network")
 def test_rebuild_replays_the_cache_offline(
     tmp_path: Path,
+    pg_container: PostgresContainer,
+    drop_database: Callable[[str], None],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """One cached page is fetched with its recipe and lines; the
     uncached one stays queued; missing reference sources are skipped
     with a warning naming their import command."""
-    target = tmp_path / "rebuilt.db"
-    with caplog.at_level(logging.WARNING, logger="menu.db.rebuild"):
-        summary = rebuild(target, sources_dir=tmp_path / "sources")
-
-    assert summary["sources"] == {
-        "imported": [],
-        "skipped": ["fdc", "cofid", "cnf"],
-    }
-    assert summary["sites"] == {
-        "testsite": {"pages": {"fetched": 1, "queued": 1}, "recipes": 1}
-    }
-    for source in ("fdc", "cofid", "cnf"):
-        assert f"menu-{source}-import" in caplog.text
-
-    engine = create_engine(f"sqlite:///{target}")
+    target = _target()
+    drop_database(target)  # no-op unless the rebuild leaked it
     try:
-        with Session(engine) as session:
-            pages = {page.url: page for page in session.scalars(select(Page)).all()}
-            assert pages[DIP_URL].status == "fetched"
-            assert pages[CAKE_URL].status == "queued"
-            assert pages[CAKE_URL].attempts == 0
-            recipe = session.scalars(select(Recipe)).one()
-            assert recipe.page_id == pages[DIP_URL].id
-            assert recipe.name == "Pea and artichoke dip with pickled onions"
-            lines = session.scalars(select(RecipeIngredient)).all()
-            assert len(lines) >= 1
+        with caplog.at_level(logging.WARNING, logger="menu.db.rebuild"):
+            summary = rebuild(target, sources_dir=tmp_path / "sources")
+
+        assert summary["sources"] == {
+            "imported": [],
+            "skipped": ["fdc", "cofid", "cnf"],
+        }
+        assert summary["sites"] == {
+            "testsite": {"pages": {"fetched": 1, "queued": 1}, "recipes": 1}
+        }
+        for source in ("fdc", "cofid", "cnf"):
+            assert f"menu-{source}-import" in caplog.text
+
+        engine = _target_engine(pg_container, target)
+        try:
+            with Session(engine) as session:
+                pages = {page.url: page for page in session.scalars(select(Page)).all()}
+                assert pages[DIP_URL].status == "fetched"
+                assert pages[CAKE_URL].status == "queued"
+                assert pages[CAKE_URL].attempts == 0
+                recipe = session.scalars(select(Recipe)).one()
+                assert recipe.page_id == pages[DIP_URL].id
+                assert recipe.name == "Pea and artichoke dip with pickled onions"
+                lines = session.scalars(select(RecipeIngredient)).all()
+                assert len(lines) >= 1
+        finally:
+            engine.dispose()
     finally:
-        engine.dispose()
+        drop_database(target)
 
 
-def test_rebuild_refuses_an_existing_target(tmp_path: Path) -> None:
+def test_rebuild_refuses_the_live_database_name() -> None:
+    """A rebuild must never target the database the live URL names."""
+    live = make_url(database_url()).database
+    assert live is not None
+    with pytest.raises(ValueError, match="live database"):
+        rebuild(live)
+
+
+def test_rebuild_rejects_an_invalid_target_name() -> None:
+    """Target names are quoted into DDL, so the shape is validated."""
+    with pytest.raises(ValueError, match="invalid target database name"):
+        rebuild("Not-Valid")
+
+
+def test_rebuild_refuses_an_existing_target(
+    make_database: Callable[[], Engine],
+) -> None:
     """The refusal happens before any cache or engine work."""
-    target = tmp_path / "rebuilt.db"
-    target.write_bytes(b"existing")
-
+    target = make_database().url.database
+    assert target is not None
     with pytest.raises(FileExistsError, match="already exists"):
-        rebuild(target, sources_dir=tmp_path / "sources")
+        rebuild(target)
 
 
 @pytest.mark.usefixtures("cache", "test_registry", "no_network")
-def test_rebuild_writes_to_its_target_not_the_default(
-    tmp_path: Path, db_engine: Engine
+def test_rebuild_force_builds_into_its_target_not_the_default(
+    tmp_path: Path,
+    db_engine: Engine,
+    make_database: Callable[[], Engine],
 ) -> None:
-    """The rebuild's engine override scopes its writes to the target:
-    the default engine (patched here, as the conftest does) sees none
-    of them."""
-    target = tmp_path / "rebuilt.db"
-    rebuild(target, sources_dir=tmp_path / "sources")
+    """--force drops an existing target and builds into it: the
+    rebuild's engine override scopes its writes to the target — the
+    default engine (patched here, as the conftest does) sees none of
+    them."""
+    target = make_database().url.database
+    assert target is not None
+    rebuild(target, sources_dir=tmp_path / "sources", force=True)
 
     with Session(db_engine) as session:
         assert session.scalar(select(func.count()).select_from(Page)) == 0
-
-    rebuilt = create_engine(f"sqlite:///{target}")
-    try:
-        with Session(rebuilt) as session:
-            assert session.scalar(select(func.count()).select_from(Page)) == 2
-    finally:
-        rebuilt.dispose()

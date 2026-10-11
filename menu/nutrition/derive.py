@@ -24,6 +24,7 @@ from menu.db.database import (
     RefFood,
     RefNutrient,
 )
+from menu.db.ingredients import repository
 from menu.db.ingredients.seed import prepared_form
 from menu.ingest.registry import get_site
 
@@ -129,7 +130,8 @@ def derive_nutrition(recipe_id: int) -> RecipeNutrition:
     reference in the site's nutrition_sources order. Ranges use the
     midpoint — the shopping list's upper end is about buying, not
     eating. Lines with no quantity or no reference contribute
-    nothing and are counted.
+    nothing and are counted. Failed parses and not_food equipment
+    lines are excluded outright: they stay stored but are not food.
     """
     with get_session() as session:
         recipe = session.get(Recipe, recipe_id)
@@ -143,23 +145,29 @@ def derive_nutrition(recipe_id: int) -> RecipeNutrition:
             if page is not None
             else ("fdc",)
         )
-        lines = session.scalars(
-            select(RecipeIngredient).where(
+        lines = session.execute(
+            repository.lines_with_terms_select(
                 RecipeIngredient.recipe_id == recipe_id,
                 RecipeIngredient.alternative_of.is_(None),
                 RecipeIngredient.optional.is_(False),
             )
         ).all()
+        effective_ids = [
+            effective
+            for line, term in lines
+            if (
+                effective := repository.effective_ingredient_id(
+                    line.needs_review, term
+                )
+            )
+            is not None
+            and line.parse_status == "ok"
+            and (term is None or term.resolution != "not_food")
+        ]
         ingredient_names: dict[int, str] = dict(
             session.execute(
                 select(Ingredient.id, Ingredient.name).where(
-                    Ingredient.id.in_(
-                        [
-                            line.ingredient_id
-                            for line in lines
-                            if line.ingredient_id is not None
-                        ]
-                    )
+                    Ingredient.id.in_(effective_ids)
                 )
             ).all()
         )
@@ -169,12 +177,14 @@ def derive_nutrition(recipe_id: int) -> RecipeNutrition:
         total_grams = 0.0
         mapped_grams = 0.0
         unconverted = 0
-        for line in lines:
-            if (
-                line.quantity is None
-                or line.grams is None
-                or line.ingredient_id is None
+        for line, term in lines:
+            if line.parse_status == "failed" or (
+                term is not None and term.resolution == "not_food"
             ):
+                continue  # not ingredient lines at all: not counted
+            effective = repository.effective_ingredient_id(line.needs_review, term)
+            variant = term.variant if term is not None else None
+            if line.quantity is None or line.grams is None or effective is None:
                 unconverted += 1
                 continue
             # Ranges buy the upper end, but eating is the midpoint.
@@ -185,15 +195,15 @@ def derive_nutrition(recipe_id: int) -> RecipeNutrition:
             )
             total_grams += grams
             form = prepared_form(
-                ingredient_names[line.ingredient_id],
+                ingredient_names[effective],
                 line.preparation,
-                line.variant,
+                variant,
             )
             reference = None
             if form is not None:
                 reference = _prepared_nutrition(form, session)
             if reference is None:
-                reference = _nutrition_ref(line.ingredient_id, preference, session)
+                reference = _nutrition_ref(effective, preference, session)
             if reference is None:
                 unconverted += 1
                 continue

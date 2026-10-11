@@ -1,17 +1,17 @@
-"""Hand-seeded ingredient data: aliases, densities, unit weights, FDC ids.
+"""Hand-seeded ingredient data: terms, densities, unit weights, FDC ids.
 
 Three things cannot come from the parser and are curated here by hand:
 
-- Variant canonicalisation ("warm milk" -> "milk") is alias-driven;
+- Variant canonicalisation ("warm milk" -> "milk") is term-driven;
   the parser keeps modifiers fused into the name.
 - USDA FoodData Central has no directly usable density, so
   volume->mass aggregation needs these measured values.
 - The parser's fdc_id is a suggestion and often wrong; FDC_IDS
   carries hand-reviewed mappings.
 
-Rerunning is idempotent: missing rows are created, and an alias that
-already exists but points elsewhere (typically a parse-time self-alias
-of a variant name) is re-pointed to the canonical ingredient.
+Rerunning is idempotent: missing rows are created, and a seed term
+that exists as an auto/review guess (typically a parse-time term for
+a variant name) is re-pointed to the canonical ingredient.
 """
 
 import logging
@@ -22,8 +22,8 @@ from sqlalchemy import select
 from menu.db.database import (
     FoodSource,
     Ingredient,
-    IngredientAlias,
     IngredientFoodRef,
+    IngredientTerm,
     RefFood,
     RefPortion,
 )
@@ -78,6 +78,14 @@ ALIASES: list[tuple[str, str, str | None]] = [
 LINE_OVERRIDES: dict[str, str] = {
     "70g milk or dark chocolate roughly chopped (optional)": "milk chocolate",
 }
+
+# Equipment and other non-ingredients the parser calls an ingredient
+# ("12-hole mini bundt tin" parses as a food). Their terms are marked
+# not_food: the lines stay stored, but are excluded from aggregation
+# and nutrition.
+NOT_FOOD: list[str] = [
+    "12-hole mini bundt tin",
+]
 
 # g/ml, cooking-standard measured values
 DENSITIES_G_PER_ML: dict[str, float] = {
@@ -245,30 +253,77 @@ def prepared_form(
 
 
 def _canonical_ingredient(name: str, session: Session) -> Ingredient:
+    """The seed concept called `name`, created with origin 'seed' when
+    missing; a concept the parser had already created as 'auto' is
+    flipped to 'seed'. Every seed concept also gets its own seed term
+    (the self-term), so "milk" resolves to milk."""
     ingredient = session.scalar(select(Ingredient).where(Ingredient.name == name))
     if ingredient is None:
-        ingredient = Ingredient(name=name)
+        ingredient = Ingredient(name=name, origin="seed")
         session.add(ingredient)
         session.flush()
+    elif ingredient.origin == "auto":
+        ingredient.origin = "seed"
+    _seed_term(name, ingredient.id, None, session, repoint=False)
     return ingredient
+
+
+def _seed_term(
+    term: str,
+    ingredient_id: int | None,
+    variant: str | None,
+    session: Session,
+    *,
+    repoint: bool = True,
+) -> None:
+    """Upsert one seed term, overriding an existing auto/review term
+    (a parser guess loses to curated data) and re-pointing an existing
+    seed term whose target changed in seed.py — unless repoint is
+    False: a seed concept's self-term must not override an ALIASES
+    entry spelled the same ("warm milk" is an alias of milk even when
+    a density seeds a "warm milk" concept). A not_food term is a
+    curated decision too and stands."""
+    existing = session.scalar(select(IngredientTerm).where(IngredientTerm.term == term))
+    if existing is None:
+        session.add(
+            IngredientTerm(
+                term=term,
+                ingredient_id=ingredient_id,
+                variant=variant,
+                resolution="seed",
+            )
+        )
+    elif existing.resolution in ("auto", "review") or (
+        repoint and existing.resolution == "seed"
+    ):
+        existing.ingredient_id = ingredient_id
+        existing.variant = variant
+        existing.resolution = "seed"
 
 
 def seed_ingredient_data(session: Session) -> None:
     """Create the seed rows; safe to rerun."""
     for alias, canonical, variant in ALIASES:
         target = _canonical_ingredient(canonical, session)
+        _seed_term(alias, target.id, variant, session)
+
+    # Equipment and other non-ingredients: terms with no concept,
+    # excluded from aggregation and nutrition.
+    for name in NOT_FOOD:
         existing = session.scalar(
-            select(IngredientAlias).where(IngredientAlias.alias == alias)
+            select(IngredientTerm).where(IngredientTerm.term == name)
         )
         if existing is None:
             session.add(
-                IngredientAlias(
-                    alias=alias, ingredient_id=target.id, variant=variant
+                IngredientTerm(
+                    term=name, ingredient_id=None, variant=None,
+                    resolution="not_food",
                 )
             )
-        elif existing.ingredient_id != target.id:
-            existing.ingredient_id = target.id
-            existing.variant = variant
+        elif existing.resolution in ("auto", "review"):
+            existing.ingredient_id = None
+            existing.variant = None
+            existing.resolution = "not_food"
 
     # Density and unit-weight ingredients are created even when
     # nothing points at them yet: caster sugar is no alias target, so

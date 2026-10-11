@@ -6,12 +6,14 @@ freshly created tables."""
 from typing import TYPE_CHECKING
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from menu.db.database import (
     FoodSource,
     Ingredient,
     IngredientFoodRef,
+    IngredientTerm,
     Page,
     Recipe,
     RecipeIngredient,
@@ -310,3 +312,56 @@ def test_ref_food_natural_key_is_unique(session: Session) -> None:
     )
     with pytest.raises(IntegrityError):
         session.flush()
+
+
+def test_review_term_with_ingredient_id_is_refused(session: Session) -> None:
+    """A review term is unresolved by definition: it must not point at
+    a concept."""
+    ingredient = Ingredient(name="milk")
+    session.add(ingredient)
+    session.flush()
+    session.add(
+        IngredientTerm(
+            term="mangled name", ingredient_id=ingredient.id, resolution="review"
+        )
+    )
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_unknown_term_resolution_is_refused(session: Session) -> None:
+    """Only seed | auto | review | not_food."""
+    ingredient = Ingredient(name="milk")
+    session.add(ingredient)
+    session.flush()
+    session.add(
+        IngredientTerm(
+            term="milk", ingredient_id=ingredient.id, resolution="guessed"
+        )
+    )
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_deleting_a_line_cascades_to_alternatives(session: Session) -> None:
+    """An alternative row exists only through its primary: deleting
+    the primary deletes the alternatives (ondelete CASCADE)."""
+    recipe = _add_recipe(session)
+    session.flush()
+    primary = RecipeIngredient(
+        recipe_id=recipe.id, position=0, raw_text="rosewater"
+    )
+    session.add(primary)
+    session.flush()
+    session.add(
+        RecipeIngredient(
+            recipe_id=recipe.id,
+            position=0,
+            raw_text="rosewater or vanilla",
+            alternative_of=primary.id,
+        )
+    )
+    session.flush()
+    session.delete(primary)
+    session.flush()
+    assert session.scalars(select(RecipeIngredient)).all() == []

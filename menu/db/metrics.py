@@ -6,15 +6,17 @@ import statistics
 from collections import defaultdict
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 
 from menu.db.connection import get_session
 from menu.db.database import (
     Base,
     Ingredient,
+    IngredientTerm,
     RecipeIngredient,
     RecipeNutrition,
 )
+from menu.db.ingredients import repository
 from menu.nutrition.reports import COMPARED, validation_comparisons
 
 
@@ -33,10 +35,48 @@ def collect_metrics() -> dict[str, Any]:
                 .group_by(RecipeIngredient.grams_source)
             ).all()
         }
-        unresolved_lines = session.scalar(
+        total_lines = session.scalar(
+            select(func.count()).select_from(RecipeIngredient)
+        )
+        resolved_lines = session.scalar(
             select(func.count())
             .select_from(RecipeIngredient)
-            .where(RecipeIngredient.ingredient_id.is_(None))
+            .join(IngredientTerm, IngredientTerm.id == RecipeIngredient.term_id)
+            .where(*repository.effective_ingredient_predicates())
+        )
+        # Lines with no effective ingredient: no term (including the
+        # failed parses), a review/not_food term, or a line-level
+        # review flag.
+        unresolved_lines = (total_lines or 0) - (resolved_lines or 0)
+        lines_parse_failed = session.scalar(
+            select(func.count())
+            .select_from(RecipeIngredient)
+            .where(RecipeIngredient.parse_status == "failed")
+        )
+        review_queue_terms = session.scalar(
+            select(func.count())
+            .select_from(IngredientTerm)
+            .where(IngredientTerm.resolution == "review")
+        )
+        review_queue_lines = session.scalar(
+            select(func.count())
+            .select_from(RecipeIngredient)
+            .outerjoin(IngredientTerm, IngredientTerm.id == RecipeIngredient.term_id)
+            .where(
+                or_(
+                    and_(
+                        RecipeIngredient.needs_review.is_(True),
+                        IngredientTerm.resolution.is_distinct_from("not_food"),
+                    ),
+                    IngredientTerm.resolution == "review",
+                )
+            )
+        )
+        not_food_lines = session.scalar(
+            select(func.count())
+            .select_from(RecipeIngredient)
+            .join(IngredientTerm, IngredientTerm.id == RecipeIngredient.term_id)
+            .where(IngredientTerm.resolution == "not_food")
         )
         distinct_ingredients = session.scalar(
             select(func.count(func.distinct(Ingredient.name)))
@@ -68,6 +108,10 @@ def collect_metrics() -> dict[str, Any]:
         "row_counts": row_counts,
         "lines_with_grams_by_source": grams_by_source,
         "lines_with_ingredient_id_null": unresolved_lines,
+        "lines_parse_failed": lines_parse_failed,
+        "review_queue_lines": review_queue_lines,
+        "review_queue_terms": review_queue_terms,
+        "not_food_lines": not_food_lines,
         "distinct_ingredients": distinct_ingredients,
         "mean_coverage": statistics.fmean(coverages) if coverages else None,
         "recipes_with_coverage_at_least_0_9": sum(c >= 0.9 for c in coverages),

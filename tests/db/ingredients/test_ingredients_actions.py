@@ -11,8 +11,8 @@ from menu.db.connection import get_session
 from menu.db.database import (
     FoodSource,
     Ingredient,
-    IngredientAlias,
     IngredientFoodRef,
+    IngredientTerm,
     Page,
     Recipe,
     RecipeIngredient,
@@ -20,6 +20,7 @@ from menu.db.database import (
     RefPortion,
 )
 from menu.db.ingredients import actions, repository
+from menu.db.ingredients import seed as seed_module
 from menu.db.ingredients.seed import seed_ingredient_data
 from menu.ingest.ingredients import parse_line
 from menu.ingest.sites.bbc_good_food import BBC_GOOD_FOOD
@@ -71,6 +72,23 @@ def store_lines(recipe_id: int, data: dict[str, Any]) -> None:
     in the caller's session (the pipeline supplies it)."""
     with get_session() as session:
         actions.store_recipe_ingredients(recipe_id, data, BBC_GOOD_FOOD, session)
+
+
+def add_term(
+    session: Session,
+    term: str,
+    ingredient: Ingredient,
+    *,
+    variant: str | None = None,
+    resolution: str = "seed",
+) -> IngredientTerm:
+    """A term pointing at a concept, for hand-built lines."""
+    row = IngredientTerm(
+        term=term, ingredient_id=ingredient.id, variant=variant, resolution=resolution
+    )
+    session.add(row)
+    session.flush()
+    return row
 
 
 def _egg() -> repository.IngredientModel:
@@ -363,7 +381,9 @@ def test_store_recipe_ingredients() -> None:
         assert oil.quantity is None
         assert oil.dimension is None
         assert oil.note == "for proving"
-        assert all(line.ingredient_id is not None for line in lines)
+        # Every parsed name became a term the line points at.
+        assert all(line.term_id is not None for line in lines)
+        assert all(line.parse_status == "ok" for line in lines)
         assert all(line.parse_confidence is not None for line in lines)
 
 
@@ -400,9 +420,12 @@ def test_alternatives_stored_as_separate_rows() -> None:
 
 
 @pytest.mark.usefixtures("db_engine")
-def test_bad_line_does_not_stop_the_recipe(
+def test_bad_line_stored_as_failed_not_dropped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A parse that raises is data too: stored with parse_status
+    'failed' and no term. A bad line must not stop the recipe (or the
+    crawl), mirroring the pipeline's per-URL handling."""
     def flaky(text: str, site: SiteConfig) -> ParsedLine:
         if "bad" in text:
             raise ValueError("nope")
@@ -420,7 +443,14 @@ def test_bad_line_does_not_stop_the_recipe(
         lines = session.scalars(
             select(RecipeIngredient).order_by(RecipeIngredient.position)
         ).all()
-        assert [line.raw_text for line in lines] == ["240ml warm milk", "2 eggs"]
+        assert [line.raw_text for line in lines] == [
+            "240ml warm milk",
+            "bad line",
+            "2 eggs",
+        ]
+        failed = lines[1]
+        assert failed.parse_status == "failed"
+        assert failed.term_id is None
 
 
 @pytest.mark.usefixtures("db_engine")
@@ -430,6 +460,9 @@ def test_aggregate_folds_volume_into_mass_with_density() -> None:
         flour = Ingredient(name="flour", density_g_per_ml=0.6)
         emmental = Ingredient(name="emmental")
         session.add_all([flour, emmental])
+        session.flush()
+        flour_term = add_term(session, "flour", flour)
+        emmental_term = add_term(session, "emmental", emmental)
         recipe = add_recipe_row(session, "https://x/cordon-bleu", "Cordon bleu")
         recipe_id = recipe.id
         session.add(
@@ -437,7 +470,7 @@ def test_aggregate_folds_volume_into_mass_with_density() -> None:
                 recipe_id=recipe_id,
                 position=0,
                 raw_text="100g plain flour",
-                ingredient_id=flour.id,
+                term_id=flour_term.id,
                 quantity=100.0,
                 dimension="mass",
                 base_unit="g",
@@ -448,7 +481,7 @@ def test_aggregate_folds_volume_into_mass_with_density() -> None:
                 recipe_id=recipe_id,
                 position=1,
                 raw_text="2 tbsp flour",
-                ingredient_id=flour.id,
+                term_id=flour_term.id,
                 quantity=29.5735,
                 dimension="volume",
                 base_unit="ml",
@@ -459,7 +492,7 @@ def test_aggregate_folds_volume_into_mass_with_density() -> None:
                 recipe_id=recipe_id,
                 position=2,
                 raw_text="150g emmental",
-                ingredient_id=emmental.id,
+                term_id=emmental_term.id,
                 quantity=150.0,
                 dimension="mass",
                 base_unit="g",
@@ -477,32 +510,14 @@ def test_aggregate_folds_volume_into_mass_with_density() -> None:
 
 
 @pytest.mark.usefixtures("db_engine")
-def test_aggregate_rolls_alias_variants_up() -> None:
-    """Basbousa's warm milk + Shokupan's whole milk -> one milk line."""
-    with get_session() as session:
-        milk = Ingredient(name="milk")
-        session.add(milk)
-        session.flush()
-        session.add(IngredientAlias(alias="warm milk", ingredient_id=milk.id))
-        session.add(IngredientAlias(alias="whole milk", ingredient_id=milk.id))
-
-    basbousa_id = add_recipe("https://x/basbousa")
-    shokupan_id = add_recipe("https://x/shokupan")
-    store_lines(basbousa_id, {"recipeIngredient": ["240ml warm milk"]})
-    store_lines(shokupan_id, {"recipeIngredient": ["500ml whole milk"]})
-
-    lines = actions.aggregate([basbousa_id, shokupan_id])
-
-    assert len(lines) == 1
-    assert (lines[0].label, lines[0].total, lines[0].base_unit) == ("milk", 740.0, "ml")
-
-
-@pytest.mark.usefixtures("db_engine")
 def test_aggregate_skips_optional_and_alternative_lines() -> None:
     with get_session() as session:
         coconut = Ingredient(name="desiccated coconut")
         milk = Ingredient(name="milk")
         session.add_all([coconut, milk])
+        session.flush()
+        coconut_term = add_term(session, "desiccated coconut", coconut)
+        milk_term = add_term(session, "milk", milk)
         recipe = add_recipe_row(session, "https://x/cake", "Cake")
         recipe_id = recipe.id
         session.add(
@@ -510,7 +525,7 @@ def test_aggregate_skips_optional_and_alternative_lines() -> None:
                 recipe_id=recipe_id,
                 position=0,
                 raw_text="45g desiccated coconut (optional)",
-                ingredient_id=coconut.id,
+                term_id=coconut_term.id,
                 quantity=45.0,
                 dimension="mass",
                 base_unit="g",
@@ -521,7 +536,7 @@ def test_aggregate_skips_optional_and_alternative_lines() -> None:
             recipe_id=recipe_id,
             position=1,
             raw_text="rosewater",
-            ingredient_id=milk.id,
+            term_id=milk_term.id,
         )
         session.add(vanilla)
         session.flush()
@@ -530,7 +545,7 @@ def test_aggregate_skips_optional_and_alternative_lines() -> None:
                 recipe_id=recipe_id,
                 position=2,
                 raw_text="rosewater or vanilla",
-                ingredient_id=milk.id,
+                term_id=milk_term.id,
                 alternative_of=vanilla.id,
             )
         )
@@ -544,7 +559,7 @@ def test_aggregate_skips_optional_and_alternative_lines() -> None:
                 recipe_id=recipe_id,
                 position=3,
                 raw_text="250ml milk",
-                ingredient_id=milk.id,
+                term_id=milk_term.id,
                 quantity=250.0,
                 dimension="volume",
                 base_unit="ml",
@@ -553,7 +568,8 @@ def test_aggregate_skips_optional_and_alternative_lines() -> None:
 
     lines = actions.aggregate([recipe_id])
 
-    # Resolved lines sort before unresolved ones.
+    # Resolved lines sort before unresolved ones; the quantified milk
+    # line also covers rosewater's bare "as needed" entry.
     assert [(line.label, line.unresolved, line.as_needed) for line in lines] == [
         ("milk", False, False),
         ("salt to taste", True, True),
@@ -569,6 +585,8 @@ def test_aggregate_scales_by_servings() -> None:
     with get_session() as session:
         milk = Ingredient(name="milk")
         session.add(milk)
+        session.flush()
+        milk_term = add_term(session, "milk", milk)
         recipe = add_recipe_row(session, "https://x/1", "X")
         recipe_id = recipe.id
         session.add(
@@ -576,7 +594,7 @@ def test_aggregate_scales_by_servings() -> None:
                 recipe_id=recipe_id,
                 position=0,
                 raw_text="250ml milk",
-                ingredient_id=milk.id,
+                term_id=milk_term.id,
                 quantity=250.0,
                 dimension="volume",
                 base_unit="ml",
@@ -610,8 +628,8 @@ def test_servings_parsed_from_yield_variants() -> None:
 @pytest.mark.usefixtures("db_engine")
 def test_review_queue_catches_mangled_names() -> None:
     """Names the parser likely mangled (long modifier chains, unsplit
-    conjunctions) stay unresolved for review instead of becoming
-    canonical ingredients."""
+    conjunctions) become review terms: stored, pointing nowhere, so
+    they never become canonical ingredients."""
     recipe_id = add_recipe("https://x/cake")
 
     store_lines(
@@ -624,7 +642,11 @@ def test_review_queue_catches_mangled_names() -> None:
             select(RecipeIngredient).where(RecipeIngredient.recipe_id == recipe_id)
         ).all()
         assert len(lines) == 1
-        assert lines[0].ingredient_id is None
+        term = session.get(IngredientTerm, lines[0].term_id)
+        assert term is not None
+        assert term.resolution == "review"
+        assert term.ingredient_id is None
+        assert repository.effective_ingredient_id(lines[0].needs_review, term) is None
         assert lines[0].raw_text == "200g good-quality candied orange and lemon peel"
 
 
@@ -632,8 +654,8 @@ def test_review_queue_catches_mangled_names() -> None:
 def test_lost_conjunction_goes_to_review_queue() -> None:
     """"pink and yellow food colouring gels" parses as "pink food
     colouring gel" with "yellow food colouring gel" as an alternative —
-    but a shopping list needs both gels, so the line stays unresolved
-    for review."""
+    but a shopping list needs both gels, so the line carries the
+    line-level review flag and resolves to nothing."""
     recipe_id = add_recipe("https://x/cake")
 
     store_lines(
@@ -646,22 +668,28 @@ def test_lost_conjunction_goes_to_review_queue() -> None:
             select(RecipeIngredient).where(RecipeIngredient.recipe_id == recipe_id)
         ).all()
         primary = next(line for line in lines if line.alternative_of is None)
-        assert primary.ingredient_id is None
+        assert primary.needs_review is True
+        term = session.get(IngredientTerm, primary.term_id)
+        assert term is not None
+        assert repository.effective_ingredient_id(primary.needs_review, term) is None
 
 
 @pytest.mark.usefixtures("db_engine")
-def test_seeded_alias_rescues_lost_conjunction() -> None:
-    """A seeded alias wins over the lost-conjunction heuristic, like it
-    does over the mangled-name one."""
+def test_seeded_term_rescues_lost_conjunction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A seeded term wins over the lost-conjunction heuristic, like it
+    does over the mangled-name one — and the line flag clears."""
+    monkeypatch.setattr(
+        seed_module,
+        "ALIASES",
+        [
+            *seed_module.ALIASES,
+            ("pink food colouring gel", "food colouring gel", None),
+        ],
+    )
     with get_session() as session:
-        ingredient = Ingredient(name="food colouring gel")
-        session.add(ingredient)
-        session.flush()
-        session.add(
-            IngredientAlias(
-                alias="pink food colouring gel", ingredient_id=ingredient.id
-            )
-        )
+        seed_ingredient_data(session)
     recipe_id = add_recipe("https://x/cake")
 
     store_lines(
@@ -674,8 +702,14 @@ def test_seeded_alias_rescues_lost_conjunction() -> None:
             select(RecipeIngredient).where(RecipeIngredient.recipe_id == recipe_id)
         ).all()
         primary = next(line for line in lines if line.alternative_of is None)
-        assert primary.ingredient_id is not None
-        resolved = session.get(Ingredient, primary.ingredient_id)
+        # The seeded term decided: the line flag stays clear.
+        # The flag is stored as the heuristic says; the seed wins anyway.
+        assert primary.needs_review is True
+        term = session.get(IngredientTerm, primary.term_id)
+        assert term is not None
+        effective_id = repository.effective_ingredient_id(primary.needs_review, term)
+        assert effective_id is not None
+        resolved = session.get(Ingredient, effective_id)
         assert resolved is not None
         assert resolved.name == "food colouring gel"
 
@@ -683,7 +717,7 @@ def test_seeded_alias_rescues_lost_conjunction() -> None:
 @pytest.mark.usefixtures("db_engine")
 def test_fdc_id_conflicts_reported_not_merged() -> None:
     """Canonical ingredients sharing an unconfirmed candidate
-    reference food with no alias between them are reported as
+    reference food with no seed term between them are reported as
     hand-seeding candidates; a group the seed already linked and
     single-member groups are not."""
     with get_session() as session:
@@ -758,9 +792,14 @@ def test_fdc_id_conflicts_reported_not_merged() -> None:
             select(Ingredient).where(Ingredient.name == "almond")
         ).first()
         assert record is not None
-        session.add(IngredientAlias(alias="vanilla", ingredient_id=record.id))
+        # The curated seed term "vanilla" -> almond links the pair.
+        session.add(
+            IngredientTerm(
+                term="vanilla", ingredient_id=record.id, resolution="seed"
+            )
+        )
 
-    # The curated alias links the pair, so the group is no longer a conflict.
+    # The curated seed links the pair, so the group is no longer a conflict.
     assert actions.fdc_id_conflicts() == []
 
 
@@ -814,25 +853,27 @@ def test_ref_review_lists_unconfirmed() -> None:
                 origin="parser",
             )
         )
+        egg_term = add_term(session, "egg", egg)
+        mystery_term = add_term(session, "mystery powder", mystery)
         session.add_all(
             [
                 RecipeIngredient(
                     recipe_id=recipe_id,
                     position=0,
                     raw_text="2 eggs",
-                    ingredient_id=egg.id,
+                    term_id=egg_term.id,
                 ),
                 RecipeIngredient(
                     recipe_id=recipe_id,
                     position=1,
                     raw_text="1 tsp mystery powder",
-                    ingredient_id=mystery.id,
+                    term_id=mystery_term.id,
                 ),
                 RecipeIngredient(
                     recipe_id=recipe_id,
                     position=2,
                     raw_text="more mystery",
-                    ingredient_id=mystery.id,
+                    term_id=mystery_term.id,
                 ),
             ]
         )
@@ -874,12 +915,13 @@ def test_ref_review_excludes_rejected_candidates() -> None:
                 origin="parser",
             )
         )
+        mystery_term = add_term(session, "baobab powder", mystery)
         session.add(
             RecipeIngredient(
                 recipe_id=recipe_id,
                 position=0,
                 raw_text="1 tsp baobab powder",
-                ingredient_id=mystery.id,
+                term_id=mystery_term.id,
             )
         )
 
@@ -888,7 +930,7 @@ def test_ref_review_excludes_rejected_candidates() -> None:
 
 @pytest.mark.usefixtures("db_engine")
 def test_seeded_alias_rescues_mangled_name() -> None:
-    """A seeded alias wins over the review heuristic: the real cached
+    """A seeded term wins over the review heuristic: the real cached
     line "30g whole blanched almonds roughly chopped or flaked almonds"
     parses to the name "whole blanched almonds roughly chopped" and
     resolves to blanched almond instead of sitting unresolved."""
@@ -910,8 +952,11 @@ def test_seeded_alias_rescues_mangled_name() -> None:
             select(RecipeIngredient).where(RecipeIngredient.recipe_id == recipe_id)
         ).all()
         primary = next(line for line in lines if line.alternative_of is None)
-        assert primary.ingredient_id is not None
-        ingredient = session.get(Ingredient, primary.ingredient_id)
+        term = session.get(IngredientTerm, primary.term_id)
+        assert term is not None
+        effective_id = repository.effective_ingredient_id(primary.needs_review, term)
+        assert effective_id is not None
+        ingredient = session.get(Ingredient, effective_id)
         assert ingredient is not None
         assert ingredient.name == "blanched almond"
 
@@ -940,8 +985,11 @@ def test_line_override_fixes_wrong_merge() -> None:
             .order_by(RecipeIngredient.id)
         ).all()
         primary = next(line for line in lines if line.alternative_of is None)
-        assert primary.ingredient_id is not None
-        ingredient = session.get(Ingredient, primary.ingredient_id)
+        term = session.get(IngredientTerm, primary.term_id)
+        assert term is not None
+        effective_id = repository.effective_ingredient_id(primary.needs_review, term)
+        assert effective_id is not None
+        ingredient = session.get(Ingredient, effective_id)
         assert ingredient is not None
         assert ingredient.name == "milk chocolate"
 
@@ -1000,7 +1048,7 @@ def test_nameless_or_remainders_not_stored() -> None:
 
 @pytest.mark.usefixtures("db_engine")
 def test_variant_recorded_and_keep_variants_splits() -> None:
-    """A line remembers which alias variant it resolved through;
+    """A term remembers which seed variant its lines resolved through;
     keep_variants splits the shopping list back out by variant."""
     with get_session() as session:
         seed_ingredient_data(session)
@@ -1012,8 +1060,7 @@ def test_variant_recorded_and_keep_variants_splits() -> None:
     lines = actions.aggregate([basbousa_id, shokupan_id])
     assert len(lines) == 1
     assert (lines[0].label, lines[0].variant) == ("milk", None)
-    # Every line converted (seeded milk density): one gram line
-    # replaces the old 740 ml volume sum.
+    # Every line converted (seeded milk density): one gram line.
     assert lines[0].total == pytest.approx((240 + 500) * 1.03)
 
     split = actions.aggregate([basbousa_id, shokupan_id], keep_variants=True)
@@ -1043,6 +1090,8 @@ def test_aggregate_uses_grams_when_every_line_has_them() -> None:
     with get_session() as session:
         egg = Ingredient(name="egg")
         session.add(egg)
+        session.flush()
+        egg_term = add_term(session, "egg", egg)
         recipe = add_recipe_row(session, "https://x/omelette", "Omelette")
         recipe_id = recipe.id
         session.add(
@@ -1050,7 +1099,7 @@ def test_aggregate_uses_grams_when_every_line_has_them() -> None:
                 recipe_id=recipe_id,
                 position=0,
                 raw_text="1 egg",
-                ingredient_id=egg.id,
+                term_id=egg_term.id,
                 quantity=1.0,
                 dimension="count",
                 base_unit="piece",
@@ -1063,7 +1112,7 @@ def test_aggregate_uses_grams_when_every_line_has_them() -> None:
                 recipe_id=recipe_id,
                 position=1,
                 raw_text="50 ml egg",
-                ingredient_id=egg.id,
+                term_id=egg_term.id,
                 quantity=50.0,
                 dimension="volume",
                 base_unit="ml",
@@ -1084,9 +1133,106 @@ def test_aggregate_uses_grams_when_every_line_has_them() -> None:
 
 
 @pytest.mark.usefixtures("db_engine")
+def test_not_food_line_stored_but_not_shopping() -> None:
+    """Equipment the parser calls an ingredient ("12-hole mini bundt
+    tin") stays stored on its not_food term but is excluded from the
+    shopping list."""
+    with get_session() as session:
+        seed_ingredient_data(session)
+    recipe_id = add_recipe("https://x/bundt")
+
+    store_lines(
+        recipe_id,
+        {"recipeIngredient": ["12-hole mini bundt tin", "250ml milk"]},
+    )
+
+    with get_session() as session:
+        tin = session.scalars(
+            select(RecipeIngredient).where(
+                RecipeIngredient.raw_text == "12-hole mini bundt tin"
+            )
+        ).one()
+        term = session.get(IngredientTerm, tin.term_id)
+        assert term is not None
+        assert term.resolution == "not_food"
+        assert term.ingredient_id is None
+
+    lines = actions.aggregate([recipe_id])
+
+    assert [line.label for line in lines] == ["milk"]
+    assert lines[0].total == pytest.approx(250 * 1.03)
+
+
+@pytest.mark.usefixtures("db_engine")
+def test_re_resolve_repoints_terms_without_reparse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The everyday command after a seed change: a stored line's auto
+    term is re-pointed at the canonical ingredient — with the parser
+    unusable — and the line's grams are recomputed from the stored
+    columns. Every line sharing the term moves together."""
+    basbousa_id = add_recipe("https://x/basbousa")
+    shokupan_id = add_recipe("https://x/shokupan")
+    store_lines(basbousa_id, {"recipeIngredient": ["240ml warm milk"]})
+    store_lines(shokupan_id, {"recipeIngredient": ["500ml warm milk"]})
+
+    with get_session() as session:
+        lines = session.scalars(select(RecipeIngredient)).all()
+        assert len(lines) == 2
+        terms = {
+            session.get(IngredientTerm, line.term_id) for line in lines
+        }
+        assert len(terms) == 1  # both lines share one term
+        (term,) = terms
+        assert term is not None
+        assert term.resolution == "auto"
+        old_effective = term.ingredient_id
+        assert old_effective is not None
+
+    # Seed the variant and make the parser unusable: re-resolve must
+    # work from the stored columns alone.
+    monkeypatch.setattr(
+        seed_module,
+        "ALIASES",
+        [*seed_module.ALIASES, ("warm milk", "milk", "warm")],
+    )
+
+    def boom(*_args: object, **_kwargs: object) -> ParsedLine:
+        raise AssertionError("re-resolve must not parse")
+
+    monkeypatch.setattr(actions, "parse_line", boom)
+
+    regrammed, pruned = actions.re_resolve()[1:]
+
+    assert regrammed == 2  # both lines' effective ingredient changed
+    assert pruned == 1  # the orphaned auto concept "warm milk"
+    with get_session() as session:
+        milk = session.scalars(
+            select(Ingredient).where(Ingredient.name == "milk")
+        ).one()
+        for line in session.scalars(select(RecipeIngredient)).all():
+            term = session.get(IngredientTerm, line.term_id)
+            assert term is not None
+            assert (term.term, term.variant, term.resolution) == (
+                "warm milk",
+                "warm",
+                "seed",
+            )
+            effective = repository.effective_ingredient_id(line.needs_review, term)
+            assert effective == milk.id
+            assert effective != old_effective
+            # Grams recomputed from the stored columns through milk's
+            # seeded density (1.03 g/ml) — no parser involved.
+            expected = 240.0 if line.recipe_id == basbousa_id else 500.0
+            assert line.grams == pytest.approx(expected * 1.03)
+            assert line.grams_source == "seed"
+
+
+@pytest.mark.usefixtures("db_engine")
 def test_prune_orphan_ingredients() -> None:
-    """A parse-time self-alias must not keep an unused ingredient
-    alive; an ingredient with lines or inbound aliases stays."""
+    """An unused auto term goes, and an auto concept nothing points at
+    and no curated reference keeps goes with it; a concept a line
+    resolves through stays."""
     recipe_id = add_recipe("https://x/1")
 
     with get_session() as session:
@@ -1094,20 +1240,19 @@ def test_prune_orphan_ingredients() -> None:
         orphan = Ingredient(name="warm milk")
         session.add_all([used, orphan])
         session.flush()
-        session.add(IngredientAlias(alias="milk", ingredient_id=used.id))
-        session.add(IngredientAlias(alias="warm milk", ingredient_id=orphan.id))
+        used_term = add_term(session, "milk", used, resolution="auto")
+        add_term(session, "warm milk", orphan, resolution="auto")
         session.add(
             RecipeIngredient(
                 recipe_id=recipe_id,
                 position=0,
                 raw_text="250ml milk",
-                ingredient_id=used.id,
+                term_id=used_term.id,
                 quantity=250.0,
                 dimension="volume",
                 base_unit="ml",
             )
         )
-        used_id = used.id
         orphan_id = orphan.id
 
     with get_session() as session:
@@ -1115,7 +1260,13 @@ def test_prune_orphan_ingredients() -> None:
 
     with get_session() as session:
         assert session.get(Ingredient, orphan_id) is None
-        assert session.get(Ingredient, used_id) is not None
+        assert (
+            session.scalars(
+                select(IngredientTerm).where(IngredientTerm.term == "warm milk")
+            ).first()
+            is None
+        )
+        assert len(session.scalars(select(Ingredient)).all()) == 1
 
 
 @pytest.mark.usefixtures("db_engine")
@@ -1210,8 +1361,8 @@ def test_prune_drops_parser_candidates_but_keeps_curated_refs() -> None:
         session.add(source)
         session.flush()
         food = RefFood(source_id=source.id, source_food_id="1", description="Milk")
-        orphan = Ingredient(name="warm milk")
-        curated = Ingredient(name="milk")
+        orphan = Ingredient(name="warm milk", origin="auto")
+        curated = Ingredient(name="milk", origin="seed")
         session.add_all([food, orphan, curated])
         session.flush()
         session.add_all(
@@ -1241,3 +1392,117 @@ def test_prune_drops_parser_candidates_but_keeps_curated_refs() -> None:
     with get_session() as session:
         assert session.get(Ingredient, orphan_id) is None
         assert session.get(Ingredient, curated_id) is not None
+
+
+def _effective_names() -> list[str | None]:
+    """Each primary line's effective ingredient name, in id order."""
+    with get_session() as session:
+        names: list[str | None] = []
+        for line, term in session.execute(
+            repository.lines_with_terms_select(
+                RecipeIngredient.alternative_of.is_(None)
+            ).order_by(RecipeIngredient.id)
+        ):
+            effective = repository.effective_ingredient_id(line.needs_review, term)
+            ingredient = (
+                session.get(Ingredient, effective) if effective is not None else None
+            )
+            names.append(ingredient.name if ingredient is not None else None)
+        return names
+
+
+@pytest.mark.usefixtures("db_engine")
+def test_re_resolve_regrams_when_only_a_density_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A seed change can move grams without moving the ingredient."""
+    store_lines(add_recipe("https://x/1"), {"recipeIngredient": ["240ml oat milk"]})
+    with get_session() as session:
+        assert session.scalars(select(RecipeIngredient.grams)).one() is None
+
+    monkeypatch.setattr(
+        seed_module,
+        "DENSITIES_G_PER_ML",
+        {**seed_module.DENSITIES_G_PER_ML, "oat milk": 1.03},
+    )
+    actions.re_resolve()
+
+    assert _effective_names() == ["oat milk"]
+    with get_session() as session:
+        grams = session.scalars(select(RecipeIngredient.grams)).one()
+    assert grams == pytest.approx(240 * 1.03)
+
+
+@pytest.mark.usefixtures("db_engine")
+def test_re_resolve_lets_a_later_seed_rescue_a_flagged_line(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store_lines(
+        add_recipe("https://x/cake"),
+        {"recipeIngredient": ["pink and yellow food colouring gels"]},
+    )
+    assert _effective_names() == [None]
+
+    monkeypatch.setattr(
+        seed_module,
+        "ALIASES",
+        [
+            *seed_module.ALIASES,
+            ("pink food colouring gel", "food colouring gel", None),
+        ],
+    )
+    actions.re_resolve()
+
+    assert _effective_names() == ["food colouring gel"]
+
+
+@pytest.mark.usefixtures("db_engine")
+def test_alias_beats_a_same_named_seed_concept() -> None:
+    """"warm milk" is an ALIASES entry for milk; seeding a density for
+    a "warm milk" concept must not steal the term."""
+    with get_session() as session:
+        seed_ingredient_data(session)
+        concept = Ingredient(name="warm milk", origin="seed")
+        session.add(concept)
+        session.flush()
+        seed_module._seed_term(
+            "warm milk", concept.id, None, session, repoint=False
+        )
+        term = session.scalars(
+            select(IngredientTerm).where(IngredientTerm.term == "warm milk")
+        ).one()
+        milk = session.scalars(
+            select(Ingredient).where(Ingredient.name == "milk")
+        ).one()
+        assert term.ingredient_id == milk.id
+
+
+@pytest.mark.usefixtures("db_engine")
+def test_re_resolve_follows_alias_edits_and_removals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Re-pointing a seeded alias moves its lines; deleting it from
+    seed.py hands the term back to the heuristics."""
+    original = list(seed_module.ALIASES)
+    store_lines(add_recipe("https://x/1"), {"recipeIngredient": ["240ml oat milk"]})
+
+    monkeypatch.setattr(
+        seed_module, "ALIASES", [*original, ("oat milk", "milk", "oat")]
+    )
+    actions.re_resolve()
+    assert _effective_names() == ["milk"]
+
+    monkeypatch.setattr(
+        seed_module, "ALIASES", [*original, ("oat milk", "cream", None)]
+    )
+    actions.re_resolve()
+    assert _effective_names() == ["cream"]
+
+    monkeypatch.setattr(seed_module, "ALIASES", original)
+    actions.re_resolve()
+    assert _effective_names() == ["oat milk"]
+    with get_session() as session:
+        term = session.scalars(
+            select(IngredientTerm).where(IngredientTerm.term == "oat milk")
+        ).one()
+        assert term.resolution == "auto"

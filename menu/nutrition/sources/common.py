@@ -33,19 +33,19 @@ def upsert_foods(
     those an ingredient_food_ref row references: those are kept and
     warned about. Returns the source's ref_food ids by source_food_id
     (after the upsert) and the count of kept stale foods."""
+    stmt = sqlite_insert(RefFood)
+    upsert = stmt.on_conflict_do_update(
+        index_elements=[RefFood.source_id, RefFood.source_food_id],
+        set_={
+            "description": stmt.excluded.description,
+            "category": stmt.excluded.category,
+            "refuse_pct": stmt.excluded.refuse_pct,
+        },
+    )
+    # executemany, not one multi-row VALUES: a release's foods x columns
+    # would overflow SQLite's bound-parameter limit.
     for start in range(0, len(foods), CHUNK):
-        chunk = foods[start : start + CHUNK]
-        stmt = sqlite_insert(RefFood).values(chunk)
-        session.execute(
-            stmt.on_conflict_do_update(
-                index_elements=[RefFood.source_id, RefFood.source_food_id],
-                set_={
-                    "description": stmt.excluded.description,
-                    "category": stmt.excluded.category,
-                    "refuse_pct": stmt.excluded.refuse_pct,
-                },
-            )
-        )
+        session.execute(upsert, foods[start : start + CHUNK])
     ref_ids = dict(
         session.execute(
             select(RefFood.source_food_id, RefFood.id).where(

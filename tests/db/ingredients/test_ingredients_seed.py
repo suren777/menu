@@ -9,6 +9,7 @@ from sqlalchemy import select
 from menu.db.database import (
     FoodSource,
     Ingredient,
+    IngredientConversion,
     IngredientFoodRef,
     IngredientTerm,
     RefFood,
@@ -30,6 +31,20 @@ def term_row(term: str, session: Session) -> IngredientTerm:
     return row
 
 
+def conversion_row(
+    ingredient_id: int, kind: str, unit: str | None, session: Session
+) -> IngredientConversion:
+    row = session.scalars(
+        select(IngredientConversion).where(
+            IngredientConversion.ingredient_id == ingredient_id,
+            IngredientConversion.kind == kind,
+            IngredientConversion.unit == unit,
+        )
+    ).one()
+    assert isinstance(row, IngredientConversion)
+    return row
+
+
 def test_seed_creates_terms_and_canonicals(session: Session) -> None:
     seed_ingredient_data(session)
 
@@ -44,7 +59,8 @@ def test_seed_creates_terms_and_canonicals(session: Session) -> None:
 
     flour = repository.find_ingredient_by_name("flour", session)
     assert flour is not None
-    assert flour.density_g_per_ml == 0.55
+    density = conversion_row(flour.id, "density", None, session)
+    assert (density.grams, density.origin) == (0.55, "seed")
 
 
 def test_seed_creates_a_self_term_for_every_concept(session: Session) -> None:
@@ -142,7 +158,8 @@ def test_seed_sets_densities_and_weights_on_existing(session: Session) -> None:
 
     egg = repository.find_ingredient_by_name("egg", session)
     assert egg is not None
-    assert egg.unit_weight_g == 50.0
+    weight = conversion_row(egg.id, "unit_weight", None, session)
+    assert (weight.grams, weight.origin) == (50.0, "seed")
 
 
 def test_seed_creates_density_ingredients_up_front(session: Session) -> None:
@@ -153,7 +170,8 @@ def test_seed_creates_density_ingredients_up_front(session: Session) -> None:
 
     caster = repository.find_ingredient_by_name("caster sugar", session)
     assert caster is not None
-    assert caster.density_g_per_ml == 0.85
+    density = conversion_row(caster.id, "density", None, session)
+    assert (density.grams, density.origin) == (0.85, "seed")
 
 
 def _add_fdc_food(session: Session, source_food_id: str, description: str) -> int:
@@ -175,8 +193,9 @@ def _add_fdc_food(session: Session, source_food_id: str, description: str) -> in
 
 
 def test_seed_derives_weights_from_reference_portions(session: Session) -> None:
-    """No seed override: the confirmed conversion reference's
-    portions fill the ingredient's density and unit weight."""
+    """No seed override: the confirmed conversion reference's portions
+    become portion rows, plus the unit weight (the medium portion)
+    and the density (the first volumetric portion) they imply."""
     food_id = _add_fdc_food(session, "169230", "Garlic, raw")
     session.add(
         RefPortion(
@@ -204,8 +223,18 @@ def test_seed_derives_weights_from_reference_portions(session: Session) -> None:
 
     garlic = repository.find_ingredient_by_name("garlic", session)
     assert garlic is not None
-    assert garlic.unit_weight_g == 3.0
-    assert garlic.density_g_per_ml == pytest.approx(9.0 / 4.928921593749998)
+    medium = conversion_row(garlic.id, "portion", "medium", session)
+    assert (medium.grams, medium.origin, medium.ref_food_id, medium.ref_seq_num) == (
+        3.0,
+        "fdc",
+        food_id,
+        2,
+    )
+    assert conversion_row(garlic.id, "portion", "tsp", session).grams == 9.0
+    weight = conversion_row(garlic.id, "unit_weight", None, session)
+    assert (weight.grams, weight.origin) == (3.0, "fdc")
+    density = conversion_row(garlic.id, "density", None, session)
+    assert density.grams == pytest.approx(9.0 / 4.928921593749998)
 
 
 def test_seed_confirms_fdc_ids(session: Session) -> None:
@@ -339,8 +368,8 @@ def test_seed_never_rejects_a_confirmed_mapping(
 
 def test_seed_derives_from_fdc_before_cnf(session: Session) -> None:
     """With confirmed conversion references in two sources, the
-    weights come from the higher-precedence source's portions only,
-    whatever the portions' seq_num."""
+    derived rows come from the higher-precedence source's portions
+    only, whatever the portions' seq_num."""
     fdc_food = _add_fdc_food(session, "169230", "Garlic, raw")
     session.add(
         RefPortion(
@@ -384,9 +413,86 @@ def test_seed_derives_from_fdc_before_cnf(session: Session) -> None:
             ),
         ]
     )
-    garlic.density_g_per_ml = None
     session.flush()
 
     seed_ingredient_data(session)
 
-    assert garlic.density_g_per_ml == pytest.approx(9.0 / 4.928921593749998)
+    rows = session.scalars(
+        select(IngredientConversion).where(
+            IngredientConversion.ingredient_id == garlic.id
+        )
+    ).all()
+    # The cnf 5 g portion produced nothing: weights never mix sources.
+    assert all(row.origin == "fdc" for row in rows)
+    assert sorted((row.kind, row.unit, row.grams) for row in rows) == [
+        ("density", None, pytest.approx(9.0 / 4.928921593749998)),
+        ("portion", "tsp", 9.0),
+    ]
+
+
+def test_seed_creates_all_portion_sizes(session: Session) -> None:
+    """Every ref portion size becomes a portion row, so a line can
+    convert through its own size."""
+    food_id = _add_fdc_food(session, "171287", "Egg, whole, raw, fresh")
+    for seq_num, (unit, grams) in enumerate(
+        (
+            ("small", 38.0),
+            ("medium", 44.0),
+            ("large", 50.0),
+            ("cup (4.86 large eggs)", 243.0),
+        ),
+        start=1,
+    ):
+        session.add(
+            RefPortion(
+                ref_food_id=food_id,
+                seq_num=seq_num,
+                amount=1.0,
+                unit=unit,
+                modifier=unit,
+                gram_weight=grams,
+            )
+        )
+    session.flush()
+
+    seed_ingredient_data(session)
+
+    egg = repository.find_ingredient_by_name("egg", session)
+    assert egg is not None
+    portions = session.scalars(
+        select(IngredientConversion)
+        .where(
+            IngredientConversion.ingredient_id == egg.id,
+            IngredientConversion.kind == "portion",
+        )
+        .order_by(IngredientConversion.unit)
+    ).all()
+    assert [(row.unit, row.grams, row.origin) for row in portions] == [
+        ("cup (4.86 large eggs)", 243.0, "fdc"),
+        ("large", 50.0, "fdc"),
+        ("medium", 44.0, "fdc"),
+        ("small", 38.0, "fdc"),
+    ]
+
+
+def test_reseeding_keeps_conversion_ids_stable(session: Session) -> None:
+    """Upsert by the unique key: re-seeding never re-ids a surviving
+    row, so lines can keep pointing at it."""
+    seed_ingredient_data(session)
+    before = [
+        (row.id, row.ingredient_id, row.kind, row.unit, row.origin)
+        for row in session.scalars(
+            select(IngredientConversion).order_by(IngredientConversion.id)
+        )
+    ]
+
+    seed_ingredient_data(session)
+
+    after = [
+        (row.id, row.ingredient_id, row.kind, row.unit, row.origin)
+        for row in session.scalars(
+            select(IngredientConversion).order_by(IngredientConversion.id)
+        )
+    ]
+    assert before
+    assert after == before

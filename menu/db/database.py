@@ -195,11 +195,6 @@ class Ingredient(Base):
     """'seed' (curated in seed.py) | 'auto' (a parser name the
     heuristics let through). Seeding a name that exists as auto flips
     it to seed; auto concepts are what pruning cleans up."""
-    density_g_per_ml: Mapped[float | None]
-    """Enables volume<->mass conversion. Hand-seeded; derived from the
-    reference data when no seed exists."""
-    unit_weight_g: Mapped[float | None]
-    """Per-item weight for count->mass conversion (egg ~= 50 g)."""
 
     __table_args__ = (
         CheckConstraint("origin IN ('seed', 'auto')", "ck_ingredients_origin"),
@@ -334,6 +329,76 @@ class IngredientTerm(Base):
     )
 
 
+class IngredientConversion(Base):
+    """One conversion factor of one ingredient: how its quantities
+    turn into grams.
+
+    The curated seeds (seed.py) and the confirmed conversion
+    reference's portions live here side by side, and the read
+    precedence (seed > reference source) applies at query time — the
+    exact row a line's grams came from is named by
+    recipe_ingredients.conversion_id. `kind` says what the factor is:
+    a density (grams per ml), a per-piece unit weight, or the grams
+    of one named unit ("cup", "medium", "stick") — `unit` is NULL
+    exactly for the first two. `origin` is 'seed' or the reference
+    source's name ("fdc", "cnf", ...): source names are data, not an
+    enum. A derived row keeps the ref portion it was computed from.
+    """
+
+    __tablename__ = "ingredient_conversions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ingredient_id: Mapped[int] = mapped_column(
+        ForeignKey("ingredients.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(nullable=False)
+    """'density' | 'unit_weight' | 'portion'."""
+    unit: Mapped[str | None]
+    """The named unit a `portion` row weighs ("cup", "medium", "cup
+    (4.86 large eggs)"); NULL for density and unit_weight rows."""
+    modifier: Mapped[str | None]
+    """The ref portion's modifier ("large"), for preparation
+    matching."""
+    grams: Mapped[float] = mapped_column(nullable=False)
+    """Grams per ml (density), per piece (unit_weight) or per one
+    `unit` (portion)."""
+    origin: Mapped[str] = mapped_column(nullable=False)
+    """'seed' (curated in seed.py) or the reference source's name."""
+    ref_food_id: Mapped[int | None]
+    ref_seq_num: Mapped[int | None]
+    """The ref portion a derived row was computed from; NULL for seed
+    rows. Composite FK below."""
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["ref_food_id", "ref_seq_num"],
+            ["ref_portion.ref_food_id", "ref_portion.seq_num"],
+        ),
+        # The upsert key: one factor per (ingredient, origin, kind,
+        # unit, modifier), so re-seeding keeps ids stable and lines
+        # can point at them.
+        Index(
+            "ix_ingredient_conversions_key",
+            "ingredient_id",
+            "origin",
+            "kind",
+            text("COALESCE(unit, '')"),
+            text("COALESCE(modifier, '')"),
+            unique=True,
+        ),
+        CheckConstraint(
+            "kind IN ('density', 'unit_weight', 'portion')",
+            "ck_ingredient_conversions_kind",
+        ),
+        CheckConstraint("grams > 0", "ck_ingredient_conversions_grams"),
+        CheckConstraint(
+            "(kind IN ('density', 'unit_weight') AND unit IS NULL) "
+            "OR (kind = 'portion' AND unit IS NOT NULL)",
+            "ck_ingredient_conversions_unit",
+        ),
+    )
+
+
 class RecipeIngredient(Base):
     """One parsed ingredient line of one recipe.
 
@@ -388,9 +453,15 @@ class RecipeIngredient(Base):
     grams_max: Mapped[float | None]
     """Upper end of a range ("2-3"), in grams."""
     grams_source: Mapped[str | None]
-    """Provenance of the conversion: "seed", the reference source's
-    name ("fdc"), NULL for mass lines (no lookup happened) and for
-    unconverted lines."""
+    """Provenance of the conversion — the used conversion row's
+    origin: "seed" or the reference source's name ("fdc"). NULL for
+    mass lines (no lookup happened) and unconverted lines."""
+    conversion_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ingredient_conversions.id", ondelete="SET NULL")
+    )
+    """The conversion row the grams came from, so a derived value
+    names the factor that produced it; NULL for mass lines (no lookup
+    happened) and lines with no conversion."""
 
     __table_args__ = (
         Index("ix_recipe_ingredients_term_id", "term_id"),

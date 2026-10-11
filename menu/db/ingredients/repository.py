@@ -5,7 +5,12 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import Select, or_, select
 
-from menu.db.database import Ingredient, IngredientTerm, RecipeIngredient
+from menu.db.database import (
+    Ingredient,
+    IngredientConversion,
+    IngredientTerm,
+    RecipeIngredient,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -19,17 +24,25 @@ RESOLVED_RESOLUTIONS = ("seed", "auto")
 class IngredientModel:
     id: int
     name: str
-    density_g_per_ml: float | None
-    unit_weight_g: float | None
 
 
 def to_model(record: Ingredient) -> IngredientModel:
-    return IngredientModel(
-        id=record.id,
-        name=record.name,
-        density_g_per_ml=record.density_g_per_ml,
-        unit_weight_g=record.unit_weight_g,
-    )
+    return IngredientModel(id=record.id, name=record.name)
+
+
+def conversion_factors(
+    rows: list[IngredientConversion],
+) -> tuple[float | None, float | None]:
+    """(density g/ml, unit weight g) from an ingredient's conversion
+    rows, seed rows before derived ones — what the cross-dimension
+    aggregation fold reads instead of the old ingredient columns."""
+    density = unit_weight = None
+    for row in sorted(rows, key=lambda r: r.origin != "seed"):
+        if density is None and row.kind == "density":
+            density = row.grams
+        elif unit_weight is None and row.kind == "unit_weight":
+            unit_weight = row.grams
+    return density, unit_weight
 
 
 def find_ingredient_by_name(name: str, session: Session) -> IngredientModel | None:
@@ -110,6 +123,9 @@ class RecipeIngredientModel:
     grams: float | None
     grams_max: float | None
     grams_source: str | None
+    conversion_id: int | None
+    """The conversion row the grams came from; NULL for mass lines
+    and lines with no conversion."""
 
 
 def to_recipe_ingredient_model(
@@ -142,6 +158,7 @@ def to_recipe_ingredient_model(
         grams=record.grams,
         grams_max=record.grams_max,
         grams_source=record.grams_source,
+        conversion_id=record.conversion_id,
     )
 
 

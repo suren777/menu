@@ -73,7 +73,7 @@ No single table covers every ingredient, so the model is **multi-source with a p
 - Add a report command, `menu-ingest <site> --ref-review`. It lists the top-N ingredients without a confirmed reference, with the parser candidate plus the best text matches from each imported source.
 - Add `SiteConfig.nutrition_sources: tuple[str, ...]`, the preferred order next to `unit_system`. For example BBC/Ottolenghi = `("cofid", "fdc", …)` and King Arthur/Smitten Kitchen = `("fdc", "cnf", …)`. Seeds always win.
 
-### 3. Grams on every line (`menu/ingest/units.py`, `menu/db/ingredients/actions.py`)
+### 3. Grams on every line (`menu/ingest/units.py`, `menu/db/ingredients/grams.py`)
 - Add `recipe_ingredient.grams NULL` and `grams_max NULL`. Keep the original quantity, unit and base-unit columns as they are, since `grams` is derived. Also store `grams_source` (`seed` | the ref source) for provenance.
 - Make conversion one function, `to_grams(line, ingredient, portions) -> float | None`:
   - **mass:** use as is.

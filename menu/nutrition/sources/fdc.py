@@ -27,6 +27,7 @@ from menu.db.database import (
     RefPortion,
     initialise,
 )
+from menu.nutrition.sources.common import upsert_foods
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -178,8 +179,10 @@ def _food_source(session: Session) -> FoodSource:
 
 
 def import_fdc(dataset_dirs: list[Path], session: Session) -> dict[str, int]:
-    """Replace the FDC rows in the common ref tables with the slices
-    of the extracted release directories. Returns the row counts."""
+    """Refresh the FDC rows in the common ref tables with the slices
+    of the extracted release directories: ref_food rows are upserted
+    (ids stay stable across re-imports), portions and nutrients are
+    replaced wholesale. Returns the row counts."""
     source = _food_source(session)
     session.execute(delete(NutrientMap).where(NutrientMap.source_id == source.id))
     session.execute(
@@ -204,7 +207,6 @@ def import_fdc(dataset_dirs: list[Path], session: Session) -> dict[str, int]:
         delete(RefNutrient).where(RefNutrient.ref_food_id.in_(ref_food_ids))
     )
     session.execute(delete(RefPortion).where(RefPortion.ref_food_id.in_(ref_food_ids)))
-    session.execute(delete(RefFood).where(RefFood.source_id == source.id))
 
     foods: list[dict[str, Any]] = []
     portions: list[dict[str, Any]] = []
@@ -245,14 +247,7 @@ def import_fdc(dataset_dirs: list[Path], session: Session) -> dict[str, int]:
                 }
             )
 
-    session.execute(insert(RefFood), foods)
-    ref_ids = dict(
-        session.execute(
-            select(RefFood.source_food_id, RefFood.id).where(
-                RefFood.source_id == source.id
-            )
-        ).all()
-    )
+    ref_ids, kept_missing = upsert_foods(session, source.id, foods)
     # The bulk inserts need ref_food_id in place of the source's own
     # id; rebuild the rows rather than mutate the typed dicts in place.
     portion_rows: list[dict[str, Any]] = [
@@ -271,6 +266,7 @@ def import_fdc(dataset_dirs: list[Path], session: Session) -> dict[str, int]:
         "foods": len(foods),
         "portions": len(portions),
         "nutrients": len(nutrients),
+        "kept_missing": kept_missing,
     }
 
 

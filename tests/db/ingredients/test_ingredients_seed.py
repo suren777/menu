@@ -14,7 +14,7 @@ from menu.db.database import (
     RefPortion,
 )
 from menu.db.ingredients import repository
-from menu.db.ingredients.seed import seed_ingredient_data
+from menu.db.ingredients.seed import ALIASES, seed_ingredient_data
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -32,6 +32,25 @@ def test_seed_creates_aliases_and_canonicals(session: Session) -> None:
     flour = repository.find_ingredient_by_name("flour", session)
     assert flour is not None
     assert flour.density_g_per_ml == 0.55
+
+
+def test_seed_king_arthur_aliases_are_brand_free(session: Session) -> None:
+    """King Arthur's brand prefix is stripped from ingredient lines at
+    parse time (ingredient_strip_patterns), so the seeded aliases match
+    the brand-free names the parser sees."""
+    seed_ingredient_data(session)
+
+    for alias in (
+        "unbleached all-purpose flour",
+        "unbleached bread flour",
+        "baker's special dry milk",
+        "artisan bread topping",
+        "the works bread topping",
+    ):
+        found = session.query(IngredientAlias).where(IngredientAlias.alias == alias)
+        assert found.count() == 1, alias
+
+    assert all("king arthur" not in alias for alias, _, _ in ALIASES)
 
 
 def test_seed_is_idempotent(session: Session) -> None:

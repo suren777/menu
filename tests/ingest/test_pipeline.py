@@ -360,7 +360,8 @@ def test_crawl_sitemap_processes_only_queued_and_blocked_pages(
     add_page("https://test.com/norecipe", status="no_recipe")
     processed: list[str] = []
 
-    def fake_process_url(page: Any, _site: SiteConfig) -> str:
+    def fake_process_url(page: Any, _site: SiteConfig, offline: bool) -> str:
+        assert not offline  # a live crawl never passes offline
         processed.append(page.url)
         return "fetched"
 
@@ -451,7 +452,9 @@ def test_process_url_records_a_fetched_page(
     status = process_url(get_page_model("https://test.com/recipes/cake"), SITE)
 
     assert status == "fetched"
-    mock_fetch.assert_called_once_with("https://test.com/recipes/cake", SITE)
+    mock_fetch.assert_called_once_with(
+        "https://test.com/recipes/cake", SITE, offline=False
+    )
     mock_store.assert_called_once()
     with get_session() as session:
         record = get_page_record(session, "https://test.com/recipes/cake")
@@ -703,6 +706,50 @@ def test_changed_data_replaces_the_recipe_and_lines(
         recipes = session.scalars(select(Recipe)).all()
         assert len(recipes) == 1
         assert recipes[0].name == "Tart"
+
+
+# --- offline replay ---------------------------------------------------------
+
+
+@pytest.mark.usefixtures("db_engine")
+@patch("menu.ingest.http.session.get")
+def test_offline_crawl_leaves_an_uncached_page_queued(mock_get: MagicMock) -> None:
+    """Offline a page the cache doesn't hold wasn't replayable: it
+    stays queued with no attempt recorded, for the next live crawl."""
+    add_page("https://test.com/recipes/cake")
+    mock_get.side_effect = RuntimeError("network")
+
+    report = crawl_sitemap(SITE, offline=True)
+
+    assert report == CrawlReport(fetched=1)
+    mock_get.assert_not_called()
+    with get_session() as session:
+        record = get_page_record(session, "https://test.com/recipes/cake")
+        assert record.status == "queued"
+        assert record.attempts == 0
+        assert record.error is None
+
+
+@pytest.mark.usefixtures("db_engine")
+@patch("menu.ingest.http.session.get")
+def test_offline_crawl_leaves_an_uncached_sitemap_pending(
+    mock_get: MagicMock,
+) -> None:
+    """Same rule for sitemaps: an uncached one stays pending instead
+    of failing."""
+    add_sitemap("https://test.com/sitemap1.xml")
+    mock_get.side_effect = RuntimeError("network")
+
+    report = crawl_sitemap(SITE, offline=True)
+
+    assert report == CrawlReport()
+    mock_get.assert_not_called()
+    with get_session() as session:
+        sitemap = session.scalars(select(Sitemap)).first()
+        assert sitemap is not None
+        assert sitemap.status == "pending"
+        assert sitemap.error is None
+        assert session.scalars(select(Page)).first() is None
 
 
 # --- reparse -----------------------------------------------------------------

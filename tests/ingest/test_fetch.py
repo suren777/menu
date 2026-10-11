@@ -5,7 +5,12 @@ import pytest
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import RetryError
 
-from menu.ingest.errors import BlockedError, DisallowedError, FetchError
+from menu.ingest.errors import (
+    BlockedError,
+    DisallowedError,
+    FetchError,
+    NotCachedError,
+)
 from menu.ingest.fetch import _cache_path, _robots, fetch_page, fetch_recipe
 from menu.ingest.registry import SiteConfig
 
@@ -295,3 +300,40 @@ def test_fetch_page_429_retry_after_is_capped(
 
     assert result == b"page"
     mock_sleep.assert_called_once_with(60.0)
+
+
+# --- offline mode -----------------------------------------------------------
+
+
+@patch("menu.ingest.http.session.get", side_effect=RuntimeError("network"))
+@patch("menu.ingest.fetch._politeness.wait")
+@patch("menu.ingest.fetch._robots.parser")
+def test_fetch_page_offline_uncached_raises_not_cached(
+    mock_parser: MagicMock, mock_wait: MagicMock, mock_get: MagicMock, tmp_path: Path
+) -> None:
+    """Offline, an uncached URL raises NotCachedError without touching
+    the network, robots.txt or the politeness delay."""
+    with pytest.raises(NotCachedError, match="offline cache"):
+        fetch_page(
+            "https://test.com/recipes/cake", SITE, cache_dir=tmp_path, offline=True
+        )
+    mock_parser.assert_not_called()
+    mock_wait.assert_not_called()
+    mock_get.assert_not_called()
+
+
+@patch("menu.ingest.http.session.get")
+def test_fetch_page_offline_serves_the_cache(
+    mock_get: MagicMock, tmp_path: Path
+) -> None:
+    """Offline a cached URL is served from the disk, never the network."""
+    _cache_path("https://test.com/recipes/cake", tmp_path).write_bytes(
+        b"<html>cached</html>"
+    )
+
+    result = fetch_page(
+        "https://test.com/recipes/cake", SITE, cache_dir=tmp_path, offline=True
+    )
+
+    assert result == b"<html>cached</html>"
+    mock_get.assert_not_called()

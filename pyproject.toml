@@ -21,6 +21,7 @@ menu-ingest = "menu.ingest.pipeline:main"
 menu-fdc-import = "menu.nutrition.sources.fdc:main"
 menu-cofid-import = "menu.nutrition.sources.cofid:main"
 menu-cnf-import = "menu.nutrition.sources.cnf:main"
+menu-rebuild = "menu.db.rebuild:main"
 
 [dependency-groups]
 dev = [

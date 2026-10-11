@@ -45,6 +45,7 @@ from menu.ingest.errors import (
     CrawlBlockedError,
     DisallowedError,
     FetchError,
+    NotCachedError,
 )
 from menu.ingest.extract import extract_recipe
 from menu.ingest.fetch import fetch_page
@@ -84,7 +85,9 @@ def _exc_text(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
-def import_sitemap(site: SiteConfig, sitemap_url: str | None = None) -> None:
+def import_sitemap(
+    site: SiteConfig, sitemap_url: str | None = None, *, offline: bool = False
+) -> None:
     """Store the site's sitemaps in the ledger, ready to crawl.
 
     A sitemap index stores itself (kind "index", status "done") and
@@ -92,12 +95,14 @@ def import_sitemap(site: SiteConfig, sitemap_url: str | None = None) -> None:
     those. A plain urlset stores itself as one pending row, so the
     crawl reads its page URLs as normal. The top-level documents are
     re-read on every run, so an index's new children are picked up;
-    rows that already exist are left alone.
+    rows that already exist are left alone. Offline replays the cached
+    sitemaps; one that isn't cached raises NotCachedError and the
+    caller moves on.
     """
     urls = [sitemap_url] if sitemap_url else list(site.sitemap_urls)
 
     for url in urls:
-        kind, entries = request_xml(url, site)
+        kind, entries = request_xml(url, site, offline=offline)
         with get_session() as session:
             record = session.scalars(select(Sitemap).where(Sitemap.url == url)).first()
             if record is None:
@@ -117,15 +122,18 @@ def import_sitemap(site: SiteConfig, sitemap_url: str | None = None) -> None:
                     )
 
 
-def _walk_sitemap(sitemap: SitemapModel, site: SiteConfig) -> None:
+def _walk_sitemap(
+    sitemap: SitemapModel, site: SiteConfig, offline: bool = False
+) -> None:
     """Fetch one pending sitemap and queue its recipe URLs as pages.
 
     The sitemap row records the outcome: done, with its kind and a
     fetched_at. URLs already in pages are skipped, so re-walking is
     cheap. An index lists sitemaps, not pages — import_sitemap stores
-    its children — so only a urlset queues pages.
+    its children — so only a urlset queues pages. Offline a sitemap
+    the cache doesn't hold raises NotCachedError, leaving it pending.
     """
-    kind, entries = request_xml(sitemap.url, site)
+    kind, entries = request_xml(sitemap.url, site, offline=offline)
     pattern = re.compile(site.url_pattern) if site.url_pattern else None
     with get_session() as session:
         record = session.get(Sitemap, sitemap.id)
@@ -183,18 +191,25 @@ def _store_recipe(
         return True
 
 
-def process_url(page: PageModel, site: SiteConfig) -> str:
+def process_url(page: PageModel, site: SiteConfig, offline: bool = False) -> str:
     """Fetch one page (cached, polite) and record the outcome on its
     ledger row: 'fetched' with the recipe stored, 'no_recipe' when the
     page holds no recipe, 'failed'/'blocked'/'disallowed' with the
     error otherwise. The recipe and its ingredient lines go in one
     transaction.
 
+    Offline a page the cache doesn't hold raises NotCachedError: the
+    page simply wasn't replayable, so it stays queued with no attempt
+    counted and returns "queued".
+
     Returns the recorded status, so the crawl can count stores and
     failures; a BlockedError is re-raised for the block-streak logic.
     """
     try:
-        content = fetch_page(page.url, site)
+        content = fetch_page(page.url, site, offline=offline)
+    except NotCachedError:
+        logger.info("Offline: %s not cached, stays queued", page.url)
+        return "queued"
     except DisallowedError as exc:
         page_actions.record_outcome(page.id, "disallowed", error=_exc_text(exc))
         return "disallowed"
@@ -238,7 +253,9 @@ def process_url(page: PageModel, site: SiteConfig) -> str:
     return status
 
 
-def _crawl_pages(site: SiteConfig, report: CrawlReport) -> None:
+def _crawl_pages(
+    site: SiteConfig, report: CrawlReport, offline: bool = False
+) -> None:
     """Fetch the site's queued and blocked pages in id order, counting
     the outcomes into the report.
 
@@ -248,6 +265,7 @@ def _crawl_pages(site: SiteConfig, report: CrawlReport) -> None:
     crawl. A block is different: consecutive BlockedErrors mean the
     site is shutting the crawl out as a whole, so CrawlBlockedError
     stops the run with the remaining pages queued for a later run.
+    Offline, a page missing from the cache stays queued instead.
     """
     with get_session() as session:
         queue = pages.get_unfinished(session, site.name)
@@ -256,7 +274,7 @@ def _crawl_pages(site: SiteConfig, report: CrawlReport) -> None:
     for page in queue:
         report.fetched += 1
         try:
-            status = process_url(page, site)
+            status = process_url(page, site, offline=offline)
         except BlockedError as exc:
             blocked += 1
             logger.warning("Blocked on %s: %s", page.url, exc)
@@ -272,7 +290,7 @@ def _crawl_pages(site: SiteConfig, report: CrawlReport) -> None:
             report.failed += 1
 
 
-def crawl_sitemap(site: SiteConfig) -> CrawlReport:
+def crawl_sitemap(site: SiteConfig, *, offline: bool = False) -> CrawlReport:
     """Crawl a site: queue pages from its unfetched sitemaps, then
     fetch every queued or blocked page, in id order.
 
@@ -285,7 +303,8 @@ def crawl_sitemap(site: SiteConfig) -> CrawlReport:
     failed and the crawl moves on. A block is the opposite — a blocked
     sitemap fetch (402/403/429 from the sitemap itself) is a site-wide
     block: the run stops and the unfinished work stays queued for a
-    later run.
+    later run. Offline, a sitemap missing from the cache is neither:
+    it simply wasn't replayable, so it stays pending.
     """
     report = CrawlReport()
     with get_session() as session:
@@ -294,7 +313,7 @@ def crawl_sitemap(site: SiteConfig) -> CrawlReport:
     stopped = False
     for sitemap in pending:
         try:
-            _walk_sitemap(sitemap, site)
+            _walk_sitemap(sitemap, site, offline=offline)
         except BlockedError as exc:
             sitemap_actions.set_status(
                 sitemap.url, site.name, "blocked", error=_exc_text(exc)
@@ -304,6 +323,9 @@ def crawl_sitemap(site: SiteConfig) -> CrawlReport:
             )
             stopped = True
             break
+        except NotCachedError:
+            logger.info("Offline: sitemap %s not cached, stays pending", sitemap.url)
+            continue
         except Exception as exc:  # noqa: BLE001 - a dead sitemap must not stop the crawl
             sitemap_actions.set_status(
                 sitemap.url, site.name, "failed", error=_exc_text(exc)
@@ -315,7 +337,7 @@ def crawl_sitemap(site: SiteConfig) -> CrawlReport:
 
     if not stopped:
         try:
-            _crawl_pages(site, report)
+            _crawl_pages(site, report, offline=offline)
         except CrawlBlockedError as exc:
             logger.error("Stopping %s: %s", site.name, exc)
 

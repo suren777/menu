@@ -18,7 +18,12 @@ from urllib.robotparser import RobotFileParser
 from bs4 import BeautifulSoup
 from requests.exceptions import RequestException, RetryError
 
-from menu.ingest.errors import BlockedError, DisallowedError, FetchError
+from menu.ingest.errors import (
+    BlockedError,
+    DisallowedError,
+    FetchError,
+    NotCachedError,
+)
 from menu.ingest.http import USER_AGENT, session
 
 if TYPE_CHECKING:
@@ -115,13 +120,24 @@ def _retry_after(response: Response) -> float:
 def fetch_page(
     url: str,
     site: SiteConfig,
-    cache_dir: Path = DEFAULT_CACHE_DIR,
+    cache_dir: Path | None = None,
     use_cache: bool = True,
+    offline: bool = False,
 ) -> bytes:
-    """Fetch a page's raw bytes, from the disk cache when possible."""
+    """Fetch a page's raw bytes, from the disk cache when possible.
+
+    The cache directory is resolved at call time (defaulting to
+    DEFAULT_CACHE_DIR) so a rebuild can point it at another cache.
+    Offline never touches the network, robots.txt or the politeness
+    delay: a URL the cache doesn't hold raises NotCachedError.
+    """
+    if cache_dir is None:
+        cache_dir = DEFAULT_CACHE_DIR
     path = _cache_path(url, cache_dir)
     if use_cache and path.exists():
         return path.read_bytes()
+    if offline:
+        raise NotCachedError(f"Not in the offline cache: {url!r}")
 
     check_robots(url, site)
     parser = _robots.parser(site.base_url)

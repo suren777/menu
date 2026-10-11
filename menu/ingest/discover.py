@@ -26,12 +26,16 @@ class SitemapEntry:
     lastmod: str | None = None
 
 
-def request_xml(url: str, site: SiteConfig) -> tuple[str, list[SitemapEntry]]:
+def request_xml(
+    url: str, site: SiteConfig, *, offline: bool = False
+) -> tuple[str, list[SitemapEntry]]:
     """Fetch a sitemap and return its root kind ("sitemapindex" or
     "urlset") with the entries listed in it, matching food-guru's
     _urls_from_xml. The fetch is a normal page fetch: robots.txt,
-    politeness and the disk cache apply."""
-    content = fetch_page(url, site, use_cache=False)
+    politeness and the disk cache apply. Offline replays the cached
+    sitemap instead (a rebuild never touches the network); live stays
+    as before: fetched fresh, but cached for the replay."""
+    content = fetch_page(url, site, use_cache=offline, offline=offline)
     tree = fromstring(content)
     kind = tree.tag.rsplit("}", 1)[-1]
     entries: list[SitemapEntry] = []

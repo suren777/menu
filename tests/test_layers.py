@@ -26,11 +26,12 @@ def _imported_menu_modules(tree: ast.Module) -> list[tuple[int, str]]:
             for alias in node.names:
                 if alias.name == "menu" or alias.name.startswith("menu."):
                     found.append((node.lineno, alias.name))
-        elif isinstance(node, ast.ImportFrom) and (
-            node.module == "menu"
-            or (node.module is not None and node.module.startswith("menu."))
-        ):
-            found.append((node.lineno, node.module))
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            if node.module == "menu":
+                # `from menu import ingest` imports the subpackage
+                found.extend((node.lineno, f"menu.{a.name}") for a in node.names)
+            elif node.module.startswith("menu."):
+                found.append((node.lineno, node.module))
     return found
 
 
@@ -42,7 +43,8 @@ def test_package_layers_import_downward_only() -> None:
         if len(parts) == 1:  # menu/__init__.py is exempt
             continue
         layer = LAYER_OF.get(parts[0])
-        if layer is None:  # not one of the mapped layers
+        if layer is None:
+            violations.append(f"{module_path} is in no layer")
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for lineno, target in _imported_menu_modules(tree):

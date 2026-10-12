@@ -1,8 +1,9 @@
 """Site registry: adding a site to menu is mostly config."""
 
-from menu.domain.site import SiteConfig
+from typing import TYPE_CHECKING
 
-__all__ = ["SiteConfig", "get_site"]
+if TYPE_CHECKING:
+    from menu.domain.site import SiteConfig
 
 
 def get_site(name: str) -> SiteConfig:

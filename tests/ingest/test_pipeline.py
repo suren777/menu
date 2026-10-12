@@ -20,6 +20,7 @@ from menu.db.database import (
 from menu.db.pages import repository as pages_repository
 from menu.db.sitemaps import actions as sitemap_actions
 from menu.domain import suggestions
+from menu.domain.site import SiteConfig
 from menu.ingest import pipeline
 from menu.ingest.discover import SitemapEntry
 from menu.ingest.errors import (
@@ -36,7 +37,7 @@ from menu.ingest.pipeline import (
     process_url,
     reparse_site,
 )
-from menu.ingest.registry import SiteConfig, get_site
+from menu.ingest.registry import get_site
 from menu.ingest.sites.bbc_good_food import BBC_GOOD_FOOD
 
 if TYPE_CHECKING:

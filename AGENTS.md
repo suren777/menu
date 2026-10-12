@@ -23,6 +23,8 @@ menu.scripts    CLI entrypoints and top-level jobs; may import anything
 
 (`menu.scripts` mirrors food-guru's `backend/app/scripts`.) `tests/test_layers.py` enforces it.
 
+Transactions belong to the caller: library functions take a `session: Session`; only `menu/scripts/`, the crawl in `pipeline.py`, the reference importers' `main()` and the eval scripts open one (`tests/test_session_boundaries.py` enforces it).
+
 ## Python 3.14
 
 This repo runs on Python 3.14 (`requires-python = ">=3.14"`, migrated from 3.11 in Oct 2026). Assume newer-than-training-data syntax; read `pyproject.toml` before pinning anything.

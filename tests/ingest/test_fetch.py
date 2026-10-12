@@ -5,6 +5,7 @@ import pytest
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import RetryError
 
+from menu.domain.site import SiteConfig
 from menu.ingest.errors import (
     BlockedError,
     DisallowedError,
@@ -13,7 +14,6 @@ from menu.ingest.errors import (
 )
 from menu.ingest.fetch import _cache_path, _robots, fetch_page, fetch_recipe
 from menu.ingest.http import http_session
-from menu.ingest.registry import SiteConfig
 
 if TYPE_CHECKING:
     from collections.abc import Iterator

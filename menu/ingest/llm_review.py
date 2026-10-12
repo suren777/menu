@@ -11,6 +11,7 @@ yield nothing. What survives lands as pending Suggestions for the
 suggestions.json ledger, where they are reviewed in git.
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -359,6 +360,21 @@ _SCHEMAS: dict[InputSet, dict[str, Any]] = {
 }
 
 
+def prompt_hash(input_set: InputSet) -> str:
+    """First 12 hex chars of sha256 over the system prompt + schema.
+
+    Recorded on every suggestion as model["prompt"], so the ledger
+    shows which prompt version produced it without changing the
+    meaning of older entries (no prompt key = older prompt).
+    """
+    digest = hashlib.sha256(
+        (
+            _SYSTEM_PROMPTS[input_set] + json.dumps(_SCHEMAS[input_set], sort_keys=True)
+        ).encode("utf-8")
+    )
+    return digest.hexdigest()[:12]
+
+
 def _user_message(input_set: InputSet, chunk: Sequence[ReviewItem]) -> str:
     label = {"pair": "pair", "food_ref": "ingredient"}.get(input_set, "term")
     out: list[str] = []
@@ -498,7 +514,10 @@ def _proposal(
 
 
 def _verdict_suggestion(
-    chunk: Sequence[ReviewItem], verdict: dict[str, Any], model_id: str
+    chunk: Sequence[ReviewItem],
+    verdict: dict[str, Any],
+    model_id: str,
+    input_set: InputSet,
 ) -> Suggestion | str:
     """A Suggestion for the verdict, or the mechanical-check drop reason."""
     index = verdict.get("index")
@@ -525,7 +544,7 @@ def _verdict_suggestion(
         subject=item.subject,
         proposal=proposal,
         evidence={"reason": str(verdict.get("reason") or "")},
-        model={"llm": model_id},
+        model={"llm": model_id, "prompt": prompt_hash(input_set)},
     )
 
 
@@ -605,7 +624,7 @@ def suggest(
                     dropped["kind"] += 1
                     continue
                 seen.add(entry.get("index"))
-                outcome = _verdict_suggestion(chunk, entry, worker.model_id)
+                outcome = _verdict_suggestion(chunk, entry, worker.model_id, input_set)
                 if isinstance(outcome, str):
                     dropped[outcome] += 1
                 else:

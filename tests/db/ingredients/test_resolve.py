@@ -95,7 +95,8 @@ def test_removing_a_density_seed_regrams_the_line(
             if name != "milk"
         },
     )
-    resolve.re_resolve()
+    with get_session() as session:
+        resolve.re_resolve(session)
 
     with get_session() as session:
         milk_id = session.scalar(select(Ingredient.id).where(Ingredient.name == "milk"))
@@ -149,7 +150,8 @@ def test_re_resolve_repoints_terms_without_reparse(
 
     monkeypatch.setattr(lines_module, "parse_line", boom)
 
-    regrammed, pruned = resolve.re_resolve()[1:]
+    with get_session() as session:
+        regrammed, pruned = resolve.re_resolve(session)[1:]
 
     assert regrammed == 2  # both lines' effective ingredient changed
     assert pruned == 1  # the orphaned auto concept "warm milk"
@@ -194,7 +196,8 @@ def test_accepted_alias_repoints_lines_on_re_resolve(
 
     monkeypatch.setattr(lines_module, "parse_line", boom)
 
-    regrammed, pruned = resolve.re_resolve()[1:]
+    with get_session() as session:
+        regrammed, pruned = resolve.re_resolve(session)[1:]
 
     assert regrammed == 1
     assert pruned == 1  # the orphaned auto concept "oat milk"
@@ -210,8 +213,10 @@ def test_re_resolve_keeps_an_accepted_alias(
     store_lines(add_recipe("https://x/1"), {"recipeIngredient": ["240ml oat milk"]})
     _write_suggestions(tmp_path, monkeypatch, _alias("oat milk", "milk", "oat"))
 
-    resolve.re_resolve()
-    resolve.re_resolve()
+    with get_session() as session:
+        resolve.re_resolve(session)
+    with get_session() as session:
+        resolve.re_resolve(session)
 
     assert _effective_names() == ["milk"]
     with get_session() as session:
@@ -319,7 +324,8 @@ def test_re_resolve_regrams_when_only_a_density_changes(
         "DENSITIES_G_PER_ML",
         {**seed_module.DENSITIES_G_PER_ML, "oat milk": 1.03},
     )
-    resolve.re_resolve()
+    with get_session() as session:
+        resolve.re_resolve(session)
 
     assert _effective_names() == ["oat milk"]
     with get_session() as session:
@@ -345,7 +351,8 @@ def test_re_resolve_lets_a_later_seed_rescue_a_flagged_line(
             ("pink food colouring gel", "food colouring gel", None),
         ],
     )
-    resolve.re_resolve()
+    with get_session() as session:
+        resolve.re_resolve(session)
 
     assert _effective_names() == ["food colouring gel"]
 
@@ -381,17 +388,20 @@ def test_re_resolve_follows_alias_edits_and_removals(
     monkeypatch.setattr(
         seed_module, "ALIASES", [*original, ("oat milk", "milk", "oat")]
     )
-    resolve.re_resolve()
+    with get_session() as session:
+        resolve.re_resolve(session)
     assert _effective_names() == ["milk"]
 
     monkeypatch.setattr(
         seed_module, "ALIASES", [*original, ("oat milk", "cream", None)]
     )
-    resolve.re_resolve()
+    with get_session() as session:
+        resolve.re_resolve(session)
     assert _effective_names() == ["cream"]
 
     monkeypatch.setattr(seed_module, "ALIASES", original)
-    resolve.re_resolve()
+    with get_session() as session:
+        resolve.re_resolve(session)
     assert _effective_names() == ["oat milk"]
     with get_session() as session:
         term = session.scalars(

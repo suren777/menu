@@ -179,8 +179,9 @@ def test_derive_nutrition_sums_confirmed_reference() -> None:
             )
         )
 
-    derive_nutrition(recipe_id)
-    derive_nutrition(recipe_id)
+    with get_session() as session:
+        derive_nutrition(recipe_id, session)
+        derive_nutrition(recipe_id, session)
     with get_session() as session:
         rows = session.scalars(
             select(RecipeNutrition).where(RecipeNutrition.recipe_id == recipe_id)
@@ -278,7 +279,8 @@ def test_derive_nutrition_midpoint_and_skips() -> None:
             )
         )
 
-    derive_nutrition(recipe_id)
+    with get_session() as session:
+        derive_nutrition(recipe_id, session)
     with get_session() as session:
         row = session.scalars(
             select(RecipeNutrition).where(RecipeNutrition.recipe_id == recipe_id)
@@ -345,7 +347,8 @@ def test_derive_nutrition_coverage_and_definitions() -> None:
                 )
             )
 
-    derive_nutrition(recipe_id)
+    with get_session() as session:
+        derive_nutrition(recipe_id, session)
     with get_session() as session:
         row = session.scalars(
             select(RecipeNutrition).where(RecipeNutrition.recipe_id == recipe_id)
@@ -418,7 +421,8 @@ def test_derive_nutrition_uses_prepared_form() -> None:
         )
         recipe_id = recipe.id
 
-    derive_nutrition(recipe_id)
+    with get_session() as session:
+        derive_nutrition(recipe_id, session)
     with get_session() as session:
         row = session.scalars(
             select(RecipeNutrition).where(RecipeNutrition.recipe_id == recipe_id)
@@ -484,7 +488,8 @@ def test_derive_nutrition_skips_not_food_lines() -> None:
             ]
         )
 
-    derive_nutrition(recipe_id)
+    with get_session() as session:
+        derive_nutrition(recipe_id, session)
     with get_session() as session:
         row = session.scalars(
             select(RecipeNutrition).where(RecipeNutrition.recipe_id == recipe_id)

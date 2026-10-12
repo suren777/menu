@@ -193,7 +193,8 @@ def rebuild(
                 continue
             with get_session() as session:
                 summaries[site.name] = _site_summary(site, session)
-        derived = derive_all_nutrition()
+        with get_session() as session:
+            derived = derive_all_nutrition(session)
     engine.dispose()
 
     summary: dict[str, Any] = {

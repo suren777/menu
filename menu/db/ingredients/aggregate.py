@@ -1,13 +1,16 @@
 """Aggregation: folding recipes into shopping-list lines."""
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
-from menu.db.connection import get_session
 from menu.db.database import Ingredient, IngredientConversion, RecipeIngredient
 from menu.db.ingredients import repository
 from menu.ingest.units import MASS, count_to_mass, volume_to_mass
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 
 @dataclass
@@ -27,6 +30,7 @@ class ShoppingLine:
 
 def aggregate(
     recipe_ids: list[int],
+    session: Session,
     servings_scale: float = 1.0,
     include_optional: bool = False,
     keep_variants: bool = False,
@@ -52,7 +56,7 @@ def aggregate(
     the same ingredient also has quantified lines, the one purchase
     covers it and no second line is emitted.
     """
-    records, ingredients, factors = _load_inputs(recipe_ids)
+    records, ingredients, factors = _load_inputs(recipe_ids, session)
 
     shopping: list[ShoppingLine] = []
     grouped, unresolved = _group_lines(records, include_optional, keep_variants)
@@ -81,42 +85,36 @@ def aggregate(
 
 def _load_inputs(
     recipe_ids: list[int],
+    session: Session,
 ) -> tuple[
     list[repository.RecipeIngredientModel],
     dict[int, repository.IngredientModel],
     dict[int, tuple[float | None, float | None]],
 ]:
     """The recipes' parsed lines, the ingredient names and each
-    ingredient's (density, unit_weight) factors, read in one session."""
-    with get_session() as session:
-        # Convert inside the session: the commit on exit expires the
-        # ORM instances, so attributes are unreadable after it.
-        records = []
-        for line, term in session.execute(
-            repository.lines_with_terms_select(
-                RecipeIngredient.recipe_id.in_(recipe_ids)
-            )
-        ).all():
-            model = repository.to_recipe_ingredient_model(line, term)
-            # Failed parses and not_food equipment stay stored but are
-            # not shopping.
-            if model.parse_status == "failed" or model.term_resolution == "not_food":
-                continue
-            records.append(model)
-        ingredients = {
-            ingredient.id: repository.to_model(ingredient)
-            for ingredient in session.scalars(select(Ingredient))
-        }
-        conversions: dict[int, list[IngredientConversion]] = {}
-        for conversion in session.scalars(select(IngredientConversion)):
-            conversions.setdefault(conversion.ingredient_id, []).append(conversion)
-        # Inside the session like every other read: the commit on exit
-        # expires the ORM instances.
-        factors = {
-            ingredient_id: repository.conversion_factors(rows)
-            for ingredient_id, rows in conversions.items()
-        }
-
+    ingredient's (density, unit_weight) factors, read through the
+    caller's session."""
+    records = []
+    for line, term in session.execute(
+        repository.lines_with_terms_select(RecipeIngredient.recipe_id.in_(recipe_ids))
+    ).all():
+        model = repository.to_recipe_ingredient_model(line, term)
+        # Failed parses and not_food equipment stay stored but are
+        # not shopping.
+        if model.parse_status == "failed" or model.term_resolution == "not_food":
+            continue
+        records.append(model)
+    ingredients = {
+        ingredient.id: repository.to_model(ingredient)
+        for ingredient in session.scalars(select(Ingredient))
+    }
+    conversions: dict[int, list[IngredientConversion]] = {}
+    for conversion in session.scalars(select(IngredientConversion)):
+        conversions.setdefault(conversion.ingredient_id, []).append(conversion)
+    factors = {
+        ingredient_id: repository.conversion_factors(rows)
+        for ingredient_id, rows in conversions.items()
+    }
     return records, ingredients, factors
 
 

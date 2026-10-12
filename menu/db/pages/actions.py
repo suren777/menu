@@ -1,12 +1,14 @@
 """Page actions: recording the crawl ledger's outcomes."""
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import update
 
-from menu.db.connection import get_session
 from menu.db.database import Page
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 
 def utcnow() -> datetime:
@@ -18,6 +20,7 @@ def utcnow() -> datetime:
 def record_outcome(
     page_id: int,
     status: str,
+    session: Session,
     *,
     http_status: int | None = None,
     content_sha256: str | None = None,
@@ -28,9 +31,9 @@ def record_outcome(
     status when the response gave one, the content hash on a fetch,
     and the error.
 
-    Its own transaction — the ledger must survive every other
-    failure — and attempts is bumped server-side, so a caller cannot
-    forget it.
+    The caller owns the transaction — the pipeline gives each ledger
+    write its own, so it survives every later failure — and attempts is
+    bumped server-side, so a caller cannot forget it.
     """
     values: dict[str, Any] = {
         "status": status,
@@ -42,5 +45,4 @@ def record_outcome(
         values["content_sha256"] = content_sha256
     if fetched:
         values["fetched_at"] = utcnow()
-    with get_session() as session:
-        session.execute(update(Page).where(Page.id == page_id).values(**values))
+    session.execute(update(Page).where(Page.id == page_id).values(**values))

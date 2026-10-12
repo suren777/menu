@@ -87,12 +87,13 @@ def test_fdc_id_conflicts_reported_not_merged() -> None:
             ]
         )
 
-    assert reports.fdc_id_conflicts() == [
-        (
-            "Almond, vanilla and rosewater extract",
-            ["almond", "rosewater", "vanilla"],
-        )
-    ]
+    with get_session() as session:
+        assert reports.fdc_id_conflicts(session) == [
+            (
+                "Almond, vanilla and rosewater extract",
+                ["almond", "rosewater", "vanilla"],
+            )
+        ]
 
     with get_session() as session:
         record = session.scalars(
@@ -105,7 +106,8 @@ def test_fdc_id_conflicts_reported_not_merged() -> None:
         )
 
     # The curated seed links the pair, so the group is no longer a conflict.
-    assert reports.fdc_id_conflicts() == []
+    with get_session() as session:
+        assert reports.fdc_id_conflicts(session) == []
 
 
 @pytest.mark.usefixtures("db_engine")
@@ -183,7 +185,10 @@ def test_ref_review_lists_unconfirmed() -> None:
             ]
         )
 
-    assert reports.ref_review() == [(2, "mystery powder", "Baobab powder", (), ())]
+    with get_session() as session:
+        assert reports.ref_review(session) == [
+            (2, "mystery powder", "Baobab powder", (), ())
+        ]
 
 
 @pytest.mark.usefixtures("db_engine")
@@ -230,7 +235,8 @@ def test_ref_review_excludes_rejected_candidates() -> None:
             )
         )
 
-    assert reports.ref_review() == [(1, "baobab powder", None, (), ())]
+    with get_session() as session:
+        assert reports.ref_review(session) == [(1, "baobab powder", None, (), ())]
 
 
 class _SameVector:
@@ -266,8 +272,9 @@ def test_ref_review_shows_embedding_neighbours() -> None:
             )
         )
 
-    ((_count, name, _candidate, matches, neighbours),) = reports.ref_review(
-        embedder=_SameVector()
-    )
+    with get_session() as session:
+        ((_count, name, _candidate, matches, neighbours),) = reports.ref_review(
+            session, embedder=_SameVector()
+        )
     assert (name, matches) == ("aubergine", ())
     assert neighbours == ("fdc 1: Eggplant, raw (1.00)",)

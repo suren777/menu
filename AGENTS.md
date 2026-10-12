@@ -21,9 +21,8 @@ uv sync                    # install/refresh dependencies
 uv run pytest              # tests (need Docker: an ephemeral Postgres per run)
 uv run mypy menu tests     # type check (strict)
 uv run ruff check .        # lint (rule set matches food-guru's)
-uv run black --check .     # formatting — CI runs this and isort too
-uv run isort --check-only .
-uv run pytest --cov=menu --cov-report=term-missing  # coverage, on demand
+uv run ruff format --check .  # formatting (ruff replaced black + isort)
+uv run pytest --cov=menu --cov-report=term-missing  # coverage; CI fails under 85%
 ```
 
 The compose volume mounts `/var/lib/postgresql` — the postgres:18 image moved `PGDATA` there from the pre-18 `/var/lib/postgresql/data` layout.

@@ -29,8 +29,6 @@ menu-embed-eval = "menu.ingest.embeddings_eval:main"
 
 [dependency-groups]
 dev = [
-    "black>=24.1",
-    "isort>=5.13",
     "mypy>=1.8",
     "pre-commit>=4.5.1",
     "pytest>=7.2",
@@ -54,12 +52,6 @@ addopts = ["-ra", "-q"]
 testpaths = ["tests"]
 strict = true
 filterwarnings = ["error"]
-
-[tool.black]
-target-version = ["py314"]
-
-[tool.isort]
-profile = "black"
 
 [tool.ruff]
 line-length = 88

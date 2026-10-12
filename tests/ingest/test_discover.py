@@ -13,6 +13,7 @@ import pytest
 from menu.ingest.discover import SitemapEntry, request_xml
 from menu.ingest.errors import FetchError, NotCachedError
 from menu.ingest.fetch import _cache_path
+from menu.ingest.http import http_session
 from menu.ingest.registry import SiteConfig
 from menu.ingest.sites.bbc_good_food import BBC_GOOD_FOOD
 
@@ -94,7 +95,7 @@ def test_request_xml_offline_replays_the_cache(
         b"<url><loc>https://test.com/recipes/a</loc></url></urlset>"
     )
 
-    with patch("menu.ingest.http.session.get", side_effect=RuntimeError("network")):
+    with patch.object(http_session(), "get", side_effect=RuntimeError("network")):
         kind, entries = request_xml("https://test.com/sitemap.xml", SITE, offline=True)
 
     assert kind == "urlset"
@@ -107,7 +108,7 @@ def test_request_xml_offline_uncached_raises(
     monkeypatch.setattr("menu.ingest.fetch.DEFAULT_CACHE_DIR", tmp_path)
 
     with (
-        patch("menu.ingest.http.session.get", side_effect=RuntimeError("network")),
+        patch.object(http_session(), "get", side_effect=RuntimeError("network")),
         pytest.raises(NotCachedError, match="offline cache"),
     ):
         request_xml("https://test.com/sitemap.xml", SITE, offline=True)

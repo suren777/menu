@@ -1,9 +1,8 @@
 """Session factories for the scratch database.
 
-The default engine is resolved at call time (not bound into a default
-argument at import time) so tests can patch it. An explicit engine
-argument wins over everything; `use_engine` scopes a rebuild target
-for a block; otherwise the module default applies.
+An explicit engine argument wins over everything; `use_engine` scopes
+a rebuild target or a test database for a block; otherwise the shared
+default engine applies (built once, on first use).
 """
 
 from contextlib import contextmanager
@@ -12,7 +11,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy.orm import Session
 
-from menu.db.engine import engine as default_engine
+from menu.db.engine import default_engine
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -24,8 +23,8 @@ _override: ContextVar[Engine | None] = ContextVar("engine_override", default=Non
 
 def current_engine(engine: Engine | None = None) -> Engine:
     """The engine to bind to: explicit argument > `use_engine` override
-    > the module default (resolved at call time so tests can patch it)."""
-    return engine or _override.get() or default_engine
+    > the shared default engine."""
+    return engine or _override.get() or default_engine()
 
 
 @contextmanager

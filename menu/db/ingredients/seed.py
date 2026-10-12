@@ -33,7 +33,6 @@ from menu.db.database import (
     RefFood,
     RefPortion,
 )
-from menu.db.ingredients import suggestions
 from menu.db.ingredients.seed_data import (
     ALIASES,
     CONVERSION_SOURCES,
@@ -45,7 +44,8 @@ from menu.db.ingredients.seed_data import (
     PREPARED_FORMS,
     UNIT_WEIGHTS_G,
 )
-from menu.db.ingredients.suggestions import (
+from menu.domain import suggestions
+from menu.domain.suggestions import (
     AliasProposal,
     FoodRefProposal,
     LineOverrideProposal,
@@ -53,7 +53,7 @@ from menu.db.ingredients.suggestions import (
     Suggestion,
     VariantProposal,
 )
-from menu.ingest.units import singular, unit_ml
+from menu.domain.units import singular, unit_ml
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session

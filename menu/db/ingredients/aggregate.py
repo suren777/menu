@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from menu.db.database import Ingredient, IngredientConversion, RecipeIngredient
 from menu.db.ingredients import repository
-from menu.ingest.units import MASS, count_to_mass, volume_to_mass
+from menu.domain.units import MASS, count_to_mass, volume_to_mass
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session

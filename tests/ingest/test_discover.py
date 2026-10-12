@@ -10,11 +10,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from menu.domain.site import SiteConfig
 from menu.ingest.discover import SitemapEntry, request_xml
 from menu.ingest.errors import FetchError, NotCachedError
 from menu.ingest.fetch import _cache_path
 from menu.ingest.http import http_session
-from menu.ingest.registry import SiteConfig
 from menu.ingest.sites.bbc_good_food import BBC_GOOD_FOOD
 
 if TYPE_CHECKING:

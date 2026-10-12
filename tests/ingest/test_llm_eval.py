@@ -3,9 +3,10 @@
 import json
 from typing import Any
 
+from menu.domain.review import InputSet, ReviewItem
 from menu.ingest import llm_eval, llm_review
 from menu.ingest.llm_eval import EvalItem
-from menu.ingest.llm_review import InputSet, ReviewItem, Usage
+from menu.ingest.llm_review import Usage
 
 
 class KindClient:

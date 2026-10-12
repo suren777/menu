@@ -13,16 +13,31 @@ from menu.db.database import (
     Ingredient,
     IngredientFoodRef,
     IngredientTerm,
+    Page,
+    Recipe,
     RecipeIngredient,
     RefFood,
 )
-from menu.db.ingredients import review_inputs
-from menu.ingest.llm_review import FoodCandidate
-
-from .helpers import add_recipe_row
+from menu.domain.review import FoodCandidate
+from menu.ingest import review_inputs
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
+
+
+def add_recipe_row(session: Session, url: str, name: str) -> Recipe:
+    """A bare recipe row, in the caller's transaction (inlined from the
+    ingredient-test helpers: tests/ingest is not a package)."""
+    page = Page(url=url, site="bbc_good_food")
+    session.add(page)
+    session.flush()
+    recipe = Recipe(
+        page_id=page.id, name=name, data={}, data_sha256=url, extractor="json_ld"
+    )
+    session.add(recipe)
+    session.flush()
+    return recipe
+
 
 DIM = 8
 

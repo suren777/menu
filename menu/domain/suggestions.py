@@ -17,8 +17,10 @@ import pydantic
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-SUGGESTIONS_PATH = Path(__file__).with_name("suggestions.json")
-"""The committed suggestions ledger, next to this module."""
+SUGGESTIONS_PATH = (
+    Path(__file__).resolve().parents[1] / "db/ingredients/suggestions.json"
+)
+"""The committed suggestions ledger, under menu/db/ingredients/."""
 
 Status = Literal["pending", "accepted", "rejected"]
 

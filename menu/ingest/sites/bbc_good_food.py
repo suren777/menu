@@ -1,6 +1,6 @@
 """BBC Good Food site config."""
 
-from menu.ingest.registry import SiteConfig
+from menu.domain.site import SiteConfig
 
 BBC_SITEMAP = "https://www.bbcgoodfood.com/sitemap.xml"
 BBC_JSON_TEST_ID = "page-schema"

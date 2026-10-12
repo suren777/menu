@@ -15,7 +15,7 @@ from defusedxml.ElementTree import fromstring
 from menu.ingest.fetch import fetch_page
 
 if TYPE_CHECKING:
-    from menu.ingest.registry import SiteConfig
+    from menu.domain.site import SiteConfig
 
 
 @dataclass

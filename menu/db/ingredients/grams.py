@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import select
 
 from menu.db.database import IngredientConversion
-from menu.ingest.units import COUNT, MASS, VOLUME, singular, unit_ml
+from menu.domain.units import COUNT, MASS, VOLUME, singular, unit_ml
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session

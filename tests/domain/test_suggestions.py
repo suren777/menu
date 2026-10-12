@@ -6,8 +6,8 @@ from typing import TYPE_CHECKING, Any
 import pydantic
 import pytest
 
-from menu.db.ingredients import suggestions as suggestions_module
-from menu.db.ingredients.suggestions import (
+from menu.domain import suggestions as suggestions_module
+from menu.domain.suggestions import (
     AliasProposal,
     FoodRefProposal,
     LineOverrideProposal,

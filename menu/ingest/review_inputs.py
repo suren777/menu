@@ -25,8 +25,8 @@ from menu.db.database import (
     RecipeIngredient,
     RefFood,
 )
+from menu.domain.review import FoodCandidate, ReviewItem
 from menu.ingest.embeddings import EMBEDDINGS_DIR, embed, nearest
-from menu.ingest.llm_review import FoodCandidate, ReviewItem
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence

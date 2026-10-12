@@ -26,6 +26,7 @@ menu-cofid-import = "menu.nutrition.sources.cofid:main"
 menu-cnf-import = "menu.nutrition.sources.cnf:main"
 menu-rebuild = "menu.db.rebuild:main"
 menu-embed-eval = "menu.ingest.embeddings_eval:main"
+menu-llm-eval = "menu.ingest.llm_eval:main"
 
 [dependency-groups]
 dev = [

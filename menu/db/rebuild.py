@@ -186,8 +186,7 @@ def rebuild(
                 crawl_sitemap(site, offline=True)
             except FetchError as exc:
                 logger.warning(
-                    "%s: top-level sitemap not in the offline cache, "
-                    "site skipped: %s",
+                    "%s: top-level sitemap not in the offline cache, site skipped: %s",
                     site.name,
                     exc,
                 )

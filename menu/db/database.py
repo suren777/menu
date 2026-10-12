@@ -570,7 +570,6 @@ class NutrientMap(Base):
 
 
 def initialise(db_engine: Engine | None = None) -> None:
-    """Create the tables. The engine is resolved at call time: explicit
-    argument, else any use_engine override, else the default — so tests
-    can patch the default."""
+    """Create the tables on the explicit engine, else any use_engine
+    override, else the default."""
     Base.metadata.create_all(current_engine(db_engine))

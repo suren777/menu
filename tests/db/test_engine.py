@@ -39,8 +39,7 @@ def test_importing_the_module_builds_no_engine() -> None:
     """Importing menu.db.engine has no side effect: no engine exists
     until default_engine() is first called."""
     script = (
-        "import menu.db.engine as m; "
-        "assert m.default_engine.cache_info().currsize == 0"
+        "import menu.db.engine as m; assert m.default_engine.cache_info().currsize == 0"
     )
     subprocess.run(  # noqa: S603 - a fixed literal script, nothing untrusted
         [sys.executable, "-c", script], check=True

@@ -223,7 +223,9 @@ def parse_line(text: str, site: SiteConfig) -> ParsedLine:
     confidence = (
         amount.confidence
         if amount is not None
-        else names[0].confidence if names else 0.0
+        else names[0].confidence
+        if names
+        else 0.0
     )
 
     return ParsedLine(

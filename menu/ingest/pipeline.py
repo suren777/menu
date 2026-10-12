@@ -2,7 +2,7 @@
 
 Run a site end-to-end with:
 
-    uv run python -m menu.ingest bbc_good_food
+    uv run menu-ingest crawl bbc_good_food
 
 Every URL's outcome is recorded on its `pages` row (the crawl
 ledger), so a re-run continues from the queued pages instead of
@@ -625,7 +625,7 @@ def _build_parser() -> ArgumentParser:
 
     derive_parser = subparsers.add_parser(
         "derive-nutrition",
-        help="derive nutrition for every stored recipe and backfill " "published rows",
+        help="derive nutrition for every stored recipe and backfill published rows",
     )
     derive_parser.set_defaults(handler=_cmd_derive_nutrition)
 
@@ -650,7 +650,7 @@ def _build_parser() -> ArgumentParser:
     validate_parser.set_defaults(handler=_cmd_report_validate_nutrition)
     coverage_parser = reports.add_parser(
         "coverage",
-        help="list high-frequency ingredients with no confirmed " "nutrition reference",
+        help="list high-frequency ingredients with no confirmed nutrition reference",
     )
     coverage_parser.set_defaults(handler=_cmd_report_coverage)
 

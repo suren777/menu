@@ -22,8 +22,6 @@ from menu.db.ingredients.seed import ALIASES, NOT_FOOD, seed_ingredient_data
 from menu.domain import suggestions as suggestions_module
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from sqlalchemy.orm import Session
 
 
@@ -56,15 +54,12 @@ def _entry(
     }
 
 
-def _write_suggestions(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    *entries: dict[str, Any],
-) -> None:
-    """Point the suggestions ledger at a temp file holding entries."""
-    path = tmp_path / "suggestions.json"
-    path.write_text(json.dumps(list(entries)), encoding="utf-8")
-    monkeypatch.setattr(suggestions_module, "SUGGESTIONS_PATH", path)
+def _write_suggestions(*entries: dict[str, Any]) -> None:
+    """Write entries into the ledger the autouse empty_suggestions
+    fixture scopes (per-test tmp, so tests stay isolated)."""
+    suggestions_module.ledger_path().write_text(
+        json.dumps(list(entries)), encoding="utf-8"
+    )
 
 
 def conversion_row(
@@ -314,9 +309,7 @@ def test_seed_overrides_stale_parser_candidates(session: Session) -> None:
     assert any(ref.ref_food_id == stale and ref.status == "candidate" for ref in refs)
 
 
-def test_seed_rejects_candidate_from_rejected_refs(
-    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_seed_rejects_candidate_from_rejected_refs(session: Session) -> None:
     """A rejected food_ref suggestion marks the matching candidate
     'rejected' (inserting one when no row exists) — and a confirmed
     mapping for a different food stays confirmed. suggestions.json
@@ -340,8 +333,6 @@ def test_seed_rejects_candidate_from_rejected_refs(
     session.flush()
 
     _write_suggestions(
-        tmp_path,
-        monkeypatch,
         _entry(
             "food_ref",
             "baking powder",
@@ -366,9 +357,7 @@ def test_seed_rejects_candidate_from_rejected_refs(
     assert rows == {stale: "rejected", baking: "confirmed"}
 
 
-def test_seed_rejects_without_a_candidate(
-    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_seed_rejects_without_a_candidate(session: Session) -> None:
     """No candidate row: the rejection inserts a rejected row, so a
     re-crawl cannot resurrect the suggestion either."""
     food_id = _add_fdc_food(session, "167806", "Baobab powder")
@@ -377,8 +366,6 @@ def test_seed_rejects_without_a_candidate(
     session.flush()
 
     _write_suggestions(
-        tmp_path,
-        monkeypatch,
         _entry(
             "food_ref",
             "baking powder",
@@ -400,8 +387,6 @@ def test_seed_rejects_without_a_candidate(
 
 def test_seed_never_rejects_a_confirmed_mapping(
     session: Session,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A rejection contradicting a FOOD_REFS seed is a curation
@@ -410,8 +395,6 @@ def test_seed_never_rejects_a_confirmed_mapping(
     seed_ingredient_data(session)
 
     _write_suggestions(
-        tmp_path,
-        monkeypatch,
         _entry(
             "food_ref",
             "egg",
@@ -431,14 +414,10 @@ def test_seed_never_rejects_a_confirmed_mapping(
     assert "not rejecting it" in caplog.text
 
 
-def test_accepted_alias_with_new_creates_the_seed_concept(
-    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_accepted_alias_with_new_creates_the_seed_concept(session: Session) -> None:
     """new: true: the accepted alias's target is created as a seed
     concept with its self-term, exactly like an ALIASES target."""
     _write_suggestions(
-        tmp_path,
-        monkeypatch,
         _entry(
             "alias",
             "aubergine",
@@ -462,14 +441,10 @@ def test_accepted_alias_with_new_creates_the_seed_concept(
     assert (self_term.ingredient_id, self_term.resolution) == (eggplant.id, "seed")
 
 
-def test_pending_or_rejected_alias_does_nothing(
-    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_pending_or_rejected_alias_does_nothing(session: Session) -> None:
     """Only accepted entries seed: pending proposals wait for review
     and rejected ones stay out."""
     _write_suggestions(
-        tmp_path,
-        monkeypatch,
         _entry(
             "alias",
             "aubergine",
@@ -502,14 +477,10 @@ def test_pending_or_rejected_alias_does_nothing(
     assert repository.find_ingredient_by_name("arugula", session) is None
 
 
-def test_hand_alias_beats_conflicting_accepted_suggestion(
-    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_hand_alias_beats_conflicting_accepted_suggestion(session: Session) -> None:
     """Hand seeds win: an accepted suggestion re-proposing a term the
     hand ALIASES already name changes nothing."""
     _write_suggestions(
-        tmp_path,
-        monkeypatch,
         _entry(
             "alias",
             "warm milk",
@@ -529,9 +500,7 @@ def test_hand_alias_beats_conflicting_accepted_suggestion(
     )
 
 
-def test_accepted_not_food_marks_the_term(
-    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_accepted_not_food_marks_the_term(session: Session) -> None:
     """An accepted not_food suggestion acts like a NOT_FOOD entry: the
     term is marked not_food, an existing auto term is flipped."""
     stale = Ingredient(name="stand mixer")
@@ -542,8 +511,6 @@ def test_accepted_not_food_marks_the_term(
     )
 
     _write_suggestions(
-        tmp_path,
-        monkeypatch,
         _entry("not_food", "stand mixer", {"term": "stand mixer"}),
     )
 
@@ -553,16 +520,12 @@ def test_accepted_not_food_marks_the_term(
     assert (row.resolution, row.ingredient_id, row.variant) == ("not_food", None, None)
 
 
-def test_accepted_food_ref_creates_confirmed_rows(
-    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_accepted_food_ref_creates_confirmed_rows(session: Session) -> None:
     """An accepted food_ref suggestion confirms the mapping at role
     nutrition — plus conversion, fdc being a conversion source — and
     creates the ingredient if missing, like FOOD_REFS does."""
     _add_fdc_food(session, "1269801", "Seeds, sesame butter, tahini")
     _write_suggestions(
-        tmp_path,
-        monkeypatch,
         _entry(
             "food_ref",
             "tahini",
@@ -585,16 +548,12 @@ def test_accepted_food_ref_creates_confirmed_rows(
     ]
 
 
-def test_hand_food_ref_beats_conflicting_accepted_suggestion(
-    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_hand_food_ref_beats_conflicting_accepted_suggestion(session: Session) -> None:
     """Hand seeds win per (ingredient, source): an accepted food_ref
     suggesting another food for a hand-seeded mapping changes nothing."""
     food_id = _add_fdc_food(session, "171287", "Egg, whole, raw, fresh")
     _add_fdc_food(session, "167806", "Baobab powder")
     _write_suggestions(
-        tmp_path,
-        monkeypatch,
         _entry(
             "food_ref",
             "egg",
@@ -613,17 +572,11 @@ def test_hand_food_ref_beats_conflicting_accepted_suggestion(
     assert all(ref.ref_food_id == food_id and ref.status == "confirmed" for ref in refs)
 
 
-def test_malformed_accepted_entry_fails_to_load(
-    session: Session,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_malformed_accepted_entry_fails_to_load(session: Session) -> None:
     """A malformed accepted entry (a missing proposal key) is a
     load-time ValidationError: the ledger cannot carry drift into
     seeding."""
     _write_suggestions(
-        tmp_path,
-        monkeypatch,
         _entry("alias", "aubergine", {"term": "aubergine"}),  # no target
     )
 

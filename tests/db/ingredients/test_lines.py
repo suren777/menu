@@ -28,19 +28,14 @@ from menu.domain.ingredients import parse_line
 from .helpers import add_recipe, store_lines
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from menu.domain.ingredients import ParsedLine
     from menu.domain.site import SiteConfig
 
 
-def _write_suggestions(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: dict[str, Any]
-) -> None:
-    """Point the suggestions ledger at a temp file holding one entry."""
-    path = tmp_path / "suggestions.json"
-    path.write_text(json.dumps([entry]), encoding="utf-8")
-    monkeypatch.setattr(suggestions_module, "SUGGESTIONS_PATH", path)
+def _write_suggestions(entry: dict[str, Any]) -> None:
+    """Write one entry into the ledger the autouse empty_suggestions
+    fixture scopes (per-test tmp, so tests stay isolated)."""
+    suggestions_module.ledger_path().write_text(json.dumps([entry]), encoding="utf-8")
 
 
 @pytest.mark.usefixtures("db_engine")
@@ -500,15 +495,11 @@ def test_line_override_fixes_wrong_merge() -> None:
 
 
 @pytest.mark.usefixtures("db_engine")
-def test_accepted_line_override_fixes_a_line(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_accepted_line_override_fixes_a_line() -> None:
     """An accepted line_override suggestion acts like a LINE_OVERRIDES
     entry: the newly stored line resolves through the override name,
     matched case- and whitespace-insensitively."""
     _write_suggestions(
-        tmp_path,
-        monkeypatch,
         {
             "input": "queue",
             "kind": "line_override",

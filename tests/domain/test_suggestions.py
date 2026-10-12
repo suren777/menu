@@ -252,16 +252,17 @@ def test_accepted_filters_by_status_and_kind() -> None:
     assert accepted(entries, "line_override") == []
 
 
-def test_default_path_resolved_at_call_time(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """load()/save() with no path read SUGGESTIONS_PATH at call time,
-    so tests (and callers) can repoint the ledger."""
-    path = tmp_path / "suggestions.json"
-    monkeypatch.setattr(suggestions_module, "SUGGESTIONS_PATH", path)
+def test_use_ledger_scopes_the_default_path(tmp_path: Path) -> None:
+    """use_ledger repoints load()/save()'s default path for the block
+    and resets it after — no test monkeypatches a path global."""
+    scoped = tmp_path / "scoped.json"
     entry = _suggestion(subject="late")
+    outside = suggestions_module.ledger_path()
 
-    save([entry])
+    with suggestions_module.use_ledger(scoped):
+        save([entry])
 
-    assert path.exists()
-    assert load() == [entry]
+        assert load() == [entry]
+        assert suggestions_module.ledger_path() == scoped
+
+    assert suggestions_module.ledger_path() == outside

@@ -1,6 +1,6 @@
 """Smitten Kitchen site config."""
 
-from menu.ingest.registry import SiteConfig
+from menu.domain.site import SiteConfig
 
 SMITTEN_KITCHEN = SiteConfig(
     name="smitten_kitchen",

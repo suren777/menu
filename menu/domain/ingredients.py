@@ -26,10 +26,10 @@ from ingredient_parser.dataclasses import (
     UnitSystem,
 )
 
-from menu.ingest.units import to_base
+from menu.domain.units import to_base
 
 if TYPE_CHECKING:
-    from menu.ingest.registry import SiteConfig
+    from menu.domain.site import SiteConfig
 
 # The parser has no "metric" volumetric system. Metric sites rarely use
 # cups, and where they do, the US convention is the common rendering.
@@ -223,7 +223,9 @@ def parse_line(text: str, site: SiteConfig) -> ParsedLine:
     confidence = (
         amount.confidence
         if amount is not None
-        else names[0].confidence if names else 0.0
+        else names[0].confidence
+        if names
+        else 0.0
     )
 
     return ParsedLine(

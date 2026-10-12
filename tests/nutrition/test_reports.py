@@ -73,7 +73,8 @@ def test_validation_report_compares_per_serving(
             )
         )
 
-    validation_report()
+    with get_session() as session:
+        validation_report(session)
     out = capsys.readouterr().out
     assert "bbc_good_food via fdc: 1 recipes" in out
     assert "25%" in out
@@ -100,7 +101,8 @@ def test_validation_report_skips_low_coverage(
             )
         )
 
-    validation_report()
+    with get_session() as session:
+        validation_report(session)
     assert "bbc_good_food" not in capsys.readouterr().out
 
 
@@ -124,7 +126,8 @@ def test_validation_report_skips_zero_servings(
             )
         )
 
-    validation_report()
+    with get_session() as session:
+        validation_report(session)
     assert "bbc_good_food" not in capsys.readouterr().out
 
 
@@ -176,7 +179,8 @@ def test_coverage_report_lists_unreferenced_ingredients(
                 )
             )
 
-    coverage_report()
+    with get_session() as session:
+        coverage_report(session)
     out = capsys.readouterr().out
     assert "bbc_good_food:" in out
     assert "water" in out

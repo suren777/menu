@@ -70,7 +70,7 @@ No single table covers every ingredient, so the model is **multi-source with a p
 - Replace the single `ingredient.fdc_id` with `ingredient_food_ref(ingredient_id, ref_food_id, role, confirmed)`, where role = `conversion` | `nutrition`. One ingredient can have one confirmed reference per role per region preference.
 - The parser's `fdc_id` seeds an *unconfirmed* candidate. Only confirmed references feed conversion and nutrition, consistent with the `--fdc-report` rule (suggest, never auto-merge).
 - Add `seed.FOOD_REFS: dict[str, list[tuple[str, str, str]]]` (ingredient → (source, source_food_id, role)) for hand-reviewed mappings, worked through in order of line count.
-- Add a report command, `menu-ingest <site> --ref-review`. It lists the top-N ingredients without a confirmed reference, with the parser candidate plus the best text matches from each imported source.
+- Add a report command, `menu-ingest report ref-review`. It lists the top-N ingredients without a confirmed reference, with the parser candidate plus the best text matches from each imported source.
 - Add `SiteConfig.nutrition_sources: tuple[str, ...]`, the preferred order next to `unit_system`. For example BBC/Ottolenghi = `("cofid", "fdc", …)` and King Arthur/Smitten Kitchen = `("fdc", "cnf", …)`. Seeds always win.
 
 ### 3. Grams on every line (`menu/ingest/units.py`, `menu/db/ingredients/grams.py`)

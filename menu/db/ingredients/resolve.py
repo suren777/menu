@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import delete, select
 
-from menu.db.connection import get_session
 from menu.db.database import (
     Ingredient,
     IngredientConversion,
@@ -16,7 +15,7 @@ from menu.db.database import (
 from menu.db.ingredients import repository, seed
 from menu.db.ingredients.grams import ingredient_conversions, to_grams
 from menu.db.ingredients.seed import seed_ingredient_data
-from menu.ingest.ingredients import name_needs_review
+from menu.domain.ingredients import name_needs_review
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -111,54 +110,53 @@ def _recompute_terms(session: Session) -> int:
     return changed
 
 
-def re_resolve() -> tuple[int, int, int]:
+def re_resolve(session: Session) -> tuple[int, int, int]:
     """Re-apply the seeds and review heuristics to the terms, in one
-    transaction, with no parser: a seed change reaches every line by
-    re-pointing its term. Every line's grams are recomputed from the
-    stored columns — a seed change can move grams without moving the
-    ingredient (a conversion row, a confirmed conversion reference) —
-    with the conversion rows read once per ingredient. Orphans are
-    pruned last. Returns (terms changed, lines regrammed, concepts
-    pruned)."""
-    with get_session() as session:
-        seed_ingredient_data(session)
-        terms_changed = _recompute_terms(session)
-        session.flush()
-        inputs: dict[int, list[IngredientConversion]] = {}
-        regrammed = 0
-        for line, term in session.execute(repository.lines_with_terms_select()):
-            effective = repository.effective_ingredient_id(line.needs_review, term)
-            grams: tuple[float | None, float | None, str | None, int | None] = (
-                None,
-                None,
-                None,
-                None,
+    transaction (the caller's), with no parser: a seed change reaches
+    every line by re-pointing its term. Every line's grams are
+    recomputed from the stored columns — a seed change can move grams
+    without moving the ingredient (a conversion row, a confirmed
+    conversion reference) — with the conversion rows read once per
+    ingredient. Orphans are pruned last. Returns (terms changed,
+    lines regrammed, concepts pruned)."""
+    seed_ingredient_data(session)
+    terms_changed = _recompute_terms(session)
+    session.flush()
+    inputs: dict[int, list[IngredientConversion]] = {}
+    regrammed = 0
+    for line, term in session.execute(repository.lines_with_terms_select()):
+        effective = repository.effective_ingredient_id(line.needs_review, term)
+        grams: tuple[float | None, float | None, str | None, int | None] = (
+            None,
+            None,
+            None,
+            None,
+        )
+        if effective is not None:
+            if effective not in inputs:
+                inputs[effective] = ingredient_conversions(effective, session)
+            grams = to_grams(
+                line.quantity,
+                line.quantity_max,
+                line.dimension,
+                line.base_unit,
+                line.original_unit,
+                line.preparation,
+                line.size,
+                inputs[effective],
             )
-            if effective is not None:
-                if effective not in inputs:
-                    inputs[effective] = ingredient_conversions(effective, session)
-                grams = to_grams(
-                    line.quantity,
-                    line.quantity_max,
-                    line.dimension,
-                    line.base_unit,
-                    line.original_unit,
-                    line.preparation,
-                    line.size,
-                    inputs[effective],
-                )
-            if grams != (
+        if grams != (
+            line.grams,
+            line.grams_max,
+            line.grams_source,
+            line.conversion_id,
+        ):
+            (
                 line.grams,
                 line.grams_max,
                 line.grams_source,
                 line.conversion_id,
-            ):
-                (
-                    line.grams,
-                    line.grams_max,
-                    line.grams_source,
-                    line.conversion_id,
-                ) = grams
-                regrammed += 1
-        pruned = prune_orphan_ingredients(session)
+            ) = grams
+            regrammed += 1
+    pruned = prune_orphan_ingredients(session)
     return terms_changed, regrammed, pruned

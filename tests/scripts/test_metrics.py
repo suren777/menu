@@ -11,7 +11,7 @@ from menu.db.database import (
     RecipeIngredient,
     RecipeNutrition,
 )
-from menu.db.metrics import collect_metrics
+from menu.scripts.metrics import collect_metrics
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -71,11 +71,9 @@ def test_collect_metrics_snapshot(session: Session) -> None:
             RecipeNutrition(recipe_id=recipe.id, source="published", energy_kcal=100.0),
         ]
     )
-    # collect_metrics opens its own session, so the fixture rows must
-    # be committed first.
-    session.commit()
-
-    metrics = collect_metrics()
+    # collect_metrics reads through the caller's session: the fixture
+    # rows are visible uncommitted.
+    metrics = collect_metrics(session)
 
     assert metrics["row_counts"]["pages"] == 1
     assert metrics["row_counts"]["recipes"] == 1

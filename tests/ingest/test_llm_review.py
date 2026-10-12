@@ -13,13 +13,18 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3 import HTTPResponse
 
+from menu.domain.review import FoodCandidate, InputSet, ReviewItem
+from menu.domain.suggestions import (
+    AliasProposal,
+    FoodRefProposal,
+    LineOverrideProposal,
+    OkProposal,
+    VariantProposal,
+)
 from menu.ingest import llm_review
 from menu.ingest.llm_review import (
     FireworksClient,
-    FoodCandidate,
-    InputSet,
     LLMError,
-    ReviewItem,
     SuggestResult,
     Usage,
     suggest,
@@ -181,12 +186,14 @@ def test_numbers_from_the_raw_line_survive() -> None:
     assert suggestion.input == "queue"
     assert suggestion.kind == "line_override"
     assert suggestion.subject == "dark chocolate"
-    assert suggestion.proposal == {
-        "line": "70g dark chocolate",
-        "name": "70g chocolate",
-    }
+    assert suggestion.proposal == LineOverrideProposal(
+        line="70g dark chocolate", name="70g chocolate"
+    )
     assert suggestion.evidence == {"reason": "brand stripped"}
-    assert suggestion.model == {"llm": "fake/model"}
+    assert suggestion.model == {
+        "llm": "fake/model",
+        "prompt": llm_review.prompt_hash("queue"),
+    }
     assert suggestion.status == "pending"
 
 
@@ -211,12 +218,9 @@ def test_alias_target_must_be_known_or_new() -> None:
     }
     result = _run(_queue_item(), [new])
     assert result.dropped == {}
-    assert result.suggestions[0].proposal == {
-        "term": "dark chocolate",
-        "target": "cacao",
-        "variant": None,
-        "new": True,
-    }
+    assert result.suggestions[0].proposal == AliasProposal(
+        term="dark chocolate", target="cacao", new=True
+    )
 
     known = {
         "index": 0,
@@ -227,12 +231,9 @@ def test_alias_target_must_be_known_or_new() -> None:
         "reason": "r",
     }
     result = _run(_queue_item(), [known])
-    assert result.suggestions[0].proposal == {
-        "term": "dark chocolate",
-        "target": "chocolate",
-        "variant": None,
-        "new": False,
-    }
+    assert result.suggestions[0].proposal == AliasProposal(
+        term="dark chocolate", target="chocolate"
+    )
 
 
 def test_variant_proposals_must_target_a_known_concept() -> None:
@@ -255,11 +256,9 @@ def test_variant_proposals_must_target_a_known_concept() -> None:
     }
     result = _run(_queue_item(), [known])
     assert result.dropped == {}
-    assert result.suggestions[0].proposal == {
-        "term": "dark chocolate",
-        "target": "chocolate",
-        "variant": "dark",
-    }
+    assert result.suggestions[0].proposal == VariantProposal(
+        term="dark chocolate", target="chocolate", variant="dark"
+    )
 
 
 def test_food_ref_proposal_must_pick_a_listed_candidate() -> None:
@@ -285,15 +284,16 @@ def test_food_ref_proposal_must_pick_a_listed_candidate() -> None:
         "reason": "same food",
     }
     result = _run(item, [picked])
-    assert result.suggestions[0].proposal == {
-        "ingredient": "icing sugar",
-        "source": "fdc",
-        "source_food_id": "175079",
-    }
+    assert result.suggestions[0].proposal == FoodRefProposal(
+        ingredient="icing sugar", source="fdc", source_food_id="175079"
+    )
 
     none = {"index": 0, "kind": "none", "reason": "none fits"}
     result = _run(item, [none])
-    assert (result.suggestions[0].kind, result.suggestions[0].proposal) == ("ok", {})
+    assert (result.suggestions[0].kind, result.suggestions[0].proposal) == (
+        "ok",
+        OkProposal(),
+    )
 
 
 def test_override_line_must_be_verbatim() -> None:
@@ -331,12 +331,9 @@ def test_pair_verdicts_derive_term_and_target_from_the_subject() -> None:
     result = _run(
         same, [{"index": 0, "kind": "alias", "new": False, "reason": "regional names"}]
     )
-    assert result.suggestions[0].proposal == {
-        "term": "rocket",
-        "target": "arugula",
-        "variant": None,
-        "new": False,
-    }
+    assert result.suggestions[0].proposal == AliasProposal(
+        term="rocket", target="arugula"
+    )
 
     whole = ReviewItem(
         input="pair", subject="whole milk | milk", known_concepts=("milk",)
@@ -344,15 +341,13 @@ def test_pair_verdicts_derive_term_and_target_from_the_subject() -> None:
     result = _run(
         whole, [{"index": 0, "kind": "variant", "variant": "whole", "reason": "r"}]
     )
-    assert result.suggestions[0].proposal == {
-        "term": "whole milk",
-        "target": "milk",
-        "variant": "whole",
-    }
+    assert result.suggestions[0].proposal == VariantProposal(
+        term="whole milk", target="milk", variant="whole"
+    )
 
     different = ReviewItem(input="pair", subject="coriander | ground coriander")
     result = _run(different, [{"index": 0, "kind": "ok", "reason": "herb vs spice"}])
-    assert result.suggestions[0].proposal == {}
+    assert result.suggestions[0].proposal == OkProposal()
 
 
 def test_empty_and_invalid_replies_are_failed_chunks() -> None:
@@ -390,6 +385,21 @@ def test_system_prompts_carry_the_language_only_rules() -> None:
         assert "Never output quantities, weights or nutrients" in system
         assert '"Related" is not "same"' in system
         assert "UK and US names are both in use" in system
+
+
+def test_prompt_hash_is_stable_and_distinct_per_input_set() -> None:
+    assert llm_review.prompt_hash("queue") == llm_review.prompt_hash("queue")
+    assert len(llm_review.prompt_hash("queue")) == 12
+    assert (
+        len({llm_review.prompt_hash(s) for s in ("queue", "audit", "pair", "food_ref")})
+        == 4
+    )
+
+
+def test_suggestions_record_the_prompt_hash() -> None:
+    result = _run(_queue_item(), [{"index": 0, "kind": "ok", "reason": "right"}])
+    (suggestion,) = result.suggestions
+    assert suggestion.model["prompt"] == llm_review.prompt_hash("queue")
 
 
 def _reply(content: str) -> FakeResponse:

@@ -4,6 +4,7 @@ from typing import Any
 
 from bs4 import BeautifulSoup
 
+from menu.domain.site import SiteConfig
 from menu.ingest.extract import (
     extract_json_ld,
     extract_json_ld_recipe,
@@ -11,7 +12,6 @@ from menu.ingest.extract import (
     extract_recipe,
     extract_recipe_data,
 )
-from menu.ingest.registry import SiteConfig
 from menu.ingest.sites.bbc_good_food import BBC_GOOD_FOOD
 
 FIXTURES = Path(__file__).parent / "fixtures"

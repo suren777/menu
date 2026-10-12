@@ -5,6 +5,7 @@ import pytest
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import RetryError
 
+from menu.domain.site import SiteConfig
 from menu.ingest.errors import (
     BlockedError,
     DisallowedError,
@@ -12,7 +13,7 @@ from menu.ingest.errors import (
     NotCachedError,
 )
 from menu.ingest.fetch import _cache_path, _robots, fetch_page, fetch_recipe
-from menu.ingest.registry import SiteConfig
+from menu.ingest.http import http_session
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -35,7 +36,7 @@ def _fresh_robots_cache() -> Iterator[None]:
     _robots._parsers.clear()
 
 
-@patch("menu.ingest.fetch.session.get")
+@patch.object(http_session(), "get")
 def test_fetch_page_caches_to_disk(mock_get: MagicMock, tmp_path: Path) -> None:
     mock_response = MagicMock()
     mock_response.ok = True
@@ -58,7 +59,7 @@ def test_fetch_page_caches_to_disk(mock_get: MagicMock, tmp_path: Path) -> None:
     mock_get.assert_not_called()
 
 
-@patch("menu.ingest.fetch.session.get")
+@patch.object(http_session(), "get")
 def test_fetch_page_bypasses_cache_when_disabled(
     mock_get: MagicMock, tmp_path: Path
 ) -> None:
@@ -75,7 +76,7 @@ def test_fetch_page_bypasses_cache_when_disabled(
     mock_get.assert_called_with("https://test.com/x", timeout=10)
 
 
-@patch("menu.ingest.fetch.session.get")
+@patch.object(http_session(), "get")
 def test_fetch_page_bypass_still_writes_the_cache(
     mock_get: MagicMock, tmp_path: Path
 ) -> None:
@@ -96,7 +97,7 @@ def test_fetch_page_bypass_still_writes_the_cache(
 
 
 @patch("menu.ingest.fetch._politeness.wait")
-@patch("menu.ingest.fetch.session.get")
+@patch.object(http_session(), "get")
 def test_fetch_recipe_parses_html(
     mock_get: MagicMock, mock_wait: MagicMock, tmp_path: Path
 ) -> None:
@@ -114,7 +115,7 @@ def test_fetch_recipe_parses_html(
     )
 
 
-@patch("menu.ingest.fetch.session.get")
+@patch.object(http_session(), "get")
 def test_fetch_page_raises_when_disallowed(mock_get: MagicMock, tmp_path: Path) -> None:
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -125,7 +126,7 @@ def test_fetch_page_raises_when_disallowed(mock_get: MagicMock, tmp_path: Path) 
         fetch_page("https://test.com/recipes/cake", SITE, cache_dir=tmp_path)
 
 
-@patch("menu.ingest.fetch.session.get")
+@patch.object(http_session(), "get")
 def test_fetch_page_403_is_a_block(mock_get: MagicMock, tmp_path: Path) -> None:
     robots = MagicMock()
     robots.status_code = 200
@@ -139,7 +140,7 @@ def test_fetch_page_403_is_a_block(mock_get: MagicMock, tmp_path: Path) -> None:
     assert excinfo.value.status_code == 403
 
 
-@patch("menu.ingest.fetch.session.get")
+@patch.object(http_session(), "get")
 def test_fetch_page_404_is_a_fetch_error_with_status(
     mock_get: MagicMock, tmp_path: Path
 ) -> None:
@@ -159,7 +160,7 @@ def test_fetch_page_404_is_a_fetch_error_with_status(
 
 
 @patch("menu.ingest.fetch.time.sleep")
-@patch("menu.ingest.fetch.session.get")
+@patch.object(http_session(), "get")
 def test_fetch_page_429_waits_then_retries(
     mock_get: MagicMock, mock_sleep: MagicMock, tmp_path: Path
 ) -> None:
@@ -181,7 +182,7 @@ def test_fetch_page_429_waits_then_retries(
 
 
 @patch("menu.ingest.fetch.time.sleep")
-@patch("menu.ingest.fetch.session.get")
+@patch.object(http_session(), "get")
 def test_fetch_page_429_twice_is_a_block(
     mock_get: MagicMock, mock_sleep: MagicMock, tmp_path: Path
 ) -> None:
@@ -200,7 +201,7 @@ def test_fetch_page_429_twice_is_a_block(
     mock_sleep.assert_called_once()
 
 
-@patch("menu.ingest.fetch.session.get")
+@patch.object(http_session(), "get")
 def test_fetch_page_missing_robots_allows_all(
     mock_get: MagicMock, tmp_path: Path
 ) -> None:
@@ -219,7 +220,7 @@ def test_fetch_page_missing_robots_allows_all(
     assert result == b"page"
 
 
-@patch("menu.ingest.fetch.session.get")
+@patch.object(http_session(), "get")
 def test_fetch_page_unreachable_robots_allows_all(
     mock_get: MagicMock, tmp_path: Path
 ) -> None:
@@ -233,7 +234,7 @@ def test_fetch_page_unreachable_robots_allows_all(
     assert result == b"page"
 
 
-@patch("menu.ingest.fetch.session.get")
+@patch.object(http_session(), "get")
 def test_fetch_page_robots_5xx_disallows_all(
     mock_get: MagicMock, tmp_path: Path
 ) -> None:
@@ -245,7 +246,7 @@ def test_fetch_page_robots_5xx_disallows_all(
         fetch_page("https://test.com/recipes/cake", SITE, cache_dir=tmp_path)
 
 
-@patch("menu.ingest.fetch.session.get")
+@patch.object(http_session(), "get")
 def test_fetch_page_robots_retry_error_disallows_all(
     mock_get: MagicMock, tmp_path: Path
 ) -> None:
@@ -258,7 +259,7 @@ def test_fetch_page_robots_retry_error_disallows_all(
 
 
 @patch("menu.ingest.fetch._politeness.wait")
-@patch("menu.ingest.fetch.session.get")
+@patch.object(http_session(), "get")
 def test_fetch_page_uses_our_ua_crawl_delay(
     mock_get: MagicMock, mock_wait: MagicMock, tmp_path: Path
 ) -> None:
@@ -279,7 +280,7 @@ def test_fetch_page_uses_our_ua_crawl_delay(
 
 
 @patch("menu.ingest.fetch.time.sleep")
-@patch("menu.ingest.fetch.session.get")
+@patch.object(http_session(), "get")
 def test_fetch_page_429_retry_after_is_capped(
     mock_get: MagicMock, mock_sleep: MagicMock, tmp_path: Path
 ) -> None:
@@ -303,7 +304,7 @@ def test_fetch_page_429_retry_after_is_capped(
 # --- offline mode -----------------------------------------------------------
 
 
-@patch("menu.ingest.http.session.get", side_effect=RuntimeError("network"))
+@patch.object(http_session(), "get", side_effect=RuntimeError("network"))
 @patch("menu.ingest.fetch._politeness.wait")
 @patch("menu.ingest.fetch._robots.parser")
 def test_fetch_page_offline_uncached_raises_not_cached(
@@ -320,7 +321,7 @@ def test_fetch_page_offline_uncached_raises_not_cached(
     mock_get.assert_not_called()
 
 
-@patch("menu.ingest.http.session.get")
+@patch.object(http_session(), "get")
 def test_fetch_page_offline_serves_the_cache(
     mock_get: MagicMock, tmp_path: Path
 ) -> None:

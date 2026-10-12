@@ -2,7 +2,7 @@
 
 Run a site end-to-end with:
 
-    uv run python -m menu.ingest bbc_good_food
+    uv run menu-ingest crawl bbc_good_food
 
 Every URL's outcome is recorded on its `pages` row (the crawl
 ledger), so a re-run continues from the queued pages instead of
@@ -13,31 +13,26 @@ to food-guru's backend/app/ingest/ with minimal rework.
 """
 
 import hashlib
-import json
 import logging
 import re
-from argparse import ArgumentParser
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from bs4 import BeautifulSoup
 from sqlalchemy import select
 
 from menu.db.connection import get_session
-from menu.db.database import Page, Sitemap, initialise
-from menu.db.ingredients import review_inputs, suggestions
+from menu.db.database import Page, Sitemap
 from menu.db.ingredients.lines import store_recipe_ingredients
-from menu.db.ingredients.reports import fdc_id_conflicts, ref_review
-from menu.db.ingredients.resolve import prune_orphan_ingredients, re_resolve
-from menu.db.ingredients.seed import seed_ingredient_data
-from menu.db.metrics import collect_metrics
+from menu.db.ingredients.resolve import prune_orphan_ingredients
 from menu.db.pages import actions as page_actions
 from menu.db.pages import repository as pages
 from menu.db.sitemaps import actions as sitemap_actions
 from menu.db.sitemaps import repository as sitemaps
+from menu.domain import suggestions
+from menu.ingest import review_inputs
 from menu.ingest.discover import request_xml
 from menu.ingest.embeddings import FastEmbedder
 from menu.ingest.errors import (
@@ -50,21 +45,17 @@ from menu.ingest.errors import (
 from menu.ingest.extract import extract_recipe
 from menu.ingest.fetch import fetch_page
 from menu.ingest.llm_review import FireworksClient, suggest
-from menu.ingest.registry import SiteConfig, get_site
-from menu.nutrition.reports import (
-    coverage_report,
-    derive_all_nutrition,
-    validation_report,
-)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from menu.db.ingredients.suggestions import Suggestion
     from menu.db.pages.repository import PageModel
     from menu.db.sitemaps.repository import SitemapModel
+    from menu.domain.review import ReviewItem
+    from menu.domain.site import SiteConfig
+    from menu.domain.suggestions import Suggestion
     from menu.ingest.embeddings import Embedder
-    from menu.ingest.llm_review import LLMClient, ReviewItem
+    from menu.ingest.llm_review import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -211,26 +202,29 @@ def process_url(page: PageModel, site: SiteConfig, offline: bool = False) -> str
     Returns the recorded status, so the crawl can count stores and
     failures; a BlockedError is re-raised for the block-streak logic.
     """
+
+    def _record(status: str, **outcome: Any) -> None:
+        """One ledger write, one transaction: the outcome survives
+        everything that happens later — including the raises below."""
+        with get_session() as session:
+            page_actions.record_outcome(page.id, status, session, **outcome)
+
     try:
         content = fetch_page(page.url, site, offline=offline)
     except NotCachedError:
         logger.info("Offline: %s not cached, stays queued", page.url)
         return "queued"
     except DisallowedError as exc:
-        page_actions.record_outcome(page.id, "disallowed", error=_exc_text(exc))
+        _record("disallowed", error=_exc_text(exc))
         return "disallowed"
     except BlockedError as exc:
-        page_actions.record_outcome(
-            page.id, "blocked", http_status=exc.status_code, error=_exc_text(exc)
-        )
+        _record("blocked", http_status=exc.status_code, error=_exc_text(exc))
         raise
     except FetchError as exc:
-        page_actions.record_outcome(
-            page.id, "failed", http_status=exc.status_code, error=_exc_text(exc)
-        )
+        _record("failed", http_status=exc.status_code, error=_exc_text(exc))
         return "failed"
     except Exception as exc:  # noqa: BLE001 - a bad URL must not stop the crawl
-        page_actions.record_outcome(page.id, "failed", error=_exc_text(exc))
+        _record("failed", error=_exc_text(exc))
         return "failed"
 
     content_sha = hashlib.sha256(content).hexdigest()
@@ -239,8 +233,7 @@ def process_url(page: PageModel, site: SiteConfig, offline: bool = False) -> str
     try:
         _store_recipe(page, site, soup, recipe)
     except Exception as exc:  # noqa: BLE001 - a bad recipe must not stop the crawl
-        page_actions.record_outcome(
-            page.id,
+        _record(
             "failed",
             http_status=200,
             content_sha256=content_sha,
@@ -249,8 +242,7 @@ def process_url(page: PageModel, site: SiteConfig, offline: bool = False) -> str
         return "failed"
 
     status = "fetched" if recipe is not None else "no_recipe"
-    page_actions.record_outcome(
-        page.id,
+    _record(
         status,
         http_status=200,
         content_sha256=content_sha,
@@ -322,9 +314,10 @@ def crawl_sitemap(site: SiteConfig, *, offline: bool = False) -> CrawlReport:
         try:
             _walk_sitemap(sitemap, site, offline=offline)
         except BlockedError as exc:
-            sitemap_actions.set_status(
-                sitemap.url, site.name, "blocked", error=_exc_text(exc)
-            )
+            with get_session() as session:
+                sitemap_actions.set_status(
+                    sitemap.url, site.name, "blocked", session, error=_exc_text(exc)
+                )
             logger.error(
                 "Stopping %s: sitemap %s blocked: %s", site.name, sitemap.url, exc
             )
@@ -335,9 +328,10 @@ def crawl_sitemap(site: SiteConfig, *, offline: bool = False) -> CrawlReport:
             continue
         # A dead sitemap must not stop the crawl.
         except Exception as exc:  # noqa: BLE001
-            sitemap_actions.set_status(
-                sitemap.url, site.name, "failed", error=_exc_text(exc)
-            )
+            with get_session() as session:
+                sitemap_actions.set_status(
+                    sitemap.url, site.name, "failed", session, error=_exc_text(exc)
+                )
             report.failed += 1
             logger.warning(
                 "Skipping sitemap %s: %s: %s", sitemap.url, type(exc).__name__, exc
@@ -388,7 +382,6 @@ def reparse_site(site: SiteConfig) -> None:
     print(f"Reparsed: {stored} recipes, {failed} failed, {pruned} orphans pruned")
 
 
-_SUGGEST_SETS = ("queue", "audit", "pair", "food_ref")
 # llm_review sizes each chunk's max_tokens as 1,000 + 150 per item;
 # the --dry-run budget uses the same shape (chunk_size 50 there).
 _SUGGEST_CHUNK = 50
@@ -488,160 +481,3 @@ def suggest_command(
         f"Tokens: {result.usage.prompt_tokens} prompt, "
         f"{result.usage.completion_tokens} completion"
     )
-
-
-def main() -> None:
-    logging.basicConfig()
-    parser = ArgumentParser(description="Ingest recipes for a registered site.")
-    parser.add_argument(
-        "site",
-        nargs="?",
-        help="site name from the registry (not needed for the " "nutrition reports)",
-    )
-    parser.add_argument(
-        "--reparse",
-        action="store_true",
-        help="re-parse stored ingredient lines without re-fetching",
-    )
-    parser.add_argument(
-        "--re-resolve",
-        action="store_true",
-        help="re-apply the seeds and review heuristics to the terms "
-        "without re-running the parser, then exit",
-    )
-    parser.add_argument(
-        "--fdc-report",
-        action="store_true",
-        help="list canonical ingredients sharing a reference food with "
-        "no alias between them (candidates to hand-seed), then exit",
-    )
-    parser.add_argument(
-        "--ref-review",
-        action="store_true",
-        help="list the top ingredients without a confirmed reference "
-        "by ingredient line count, with text and embedding "
-        "neighbours, then exit",
-    )
-    parser.add_argument(
-        "--suggest",
-        nargs="?",
-        const=",".join(_SUGGEST_SETS),
-        default=None,
-        metavar="SETS",
-        help="send the review input sets (comma list of queue,audit,"
-        "pair,food_ref; default all four) through the LLM and append "
-        "the verdicts to suggestions.json, then exit",
-    )
-    parser.add_argument(
-        "--suggest-limit",
-        type=int,
-        metavar="N",
-        help="cap the items per input set (with --suggest)",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="with --suggest, print per-set item counts and an "
-        "estimated token budget without calling the LLM",
-    )
-    parser.add_argument(
-        "--derive-nutrition",
-        action="store_true",
-        help="derive nutrition for every stored recipe and backfill "
-        "published rows, then exit",
-    )
-    parser.add_argument(
-        "--validate-nutrition",
-        action="store_true",
-        help="compare derived vs published nutrition per serving, " "then exit",
-    )
-    parser.add_argument(
-        "--coverage-report",
-        action="store_true",
-        help="list high-frequency ingredients with no confirmed "
-        "nutrition reference, then exit",
-    )
-    parser.add_argument(
-        "--metrics",
-        metavar="PATH",
-        help="write a JSON metrics snapshot to PATH, then exit",
-    )
-    args = parser.parse_args()
-
-    if args.dry_run and args.suggest is None:
-        parser.error("--dry-run only applies to --suggest")
-    if args.suggest_limit is not None and args.suggest is None:
-        parser.error("--suggest-limit only applies to --suggest")
-
-    initialise()
-    # Seed before parsing or reparsing: the aliases decide canonical
-    # resolution, so a fresh database must not parse unseeded. The
-    # ref-review report reads the same state — unconfirmed there means
-    # unseeded.
-    with get_session() as session:
-        seed_ingredient_data(session)
-    if args.fdc_report:
-        for food, names in fdc_id_conflicts():
-            print(f"{food}: {', '.join(names)}")
-        return
-    if args.ref_review:
-        for count, name, candidate, matches, neighbours in ref_review(
-            embedder=suggest_embedder()
-        ):
-            head = f"{count:5d}  {name}:"
-            if candidate is not None:
-                head += f" parser candidate: {candidate}"
-            else:
-                head += " no parser candidate"
-            print(" | ".join([head, *matches]))
-            if neighbours:
-                print(f"    {' | '.join(neighbours)}")
-        return
-    if args.suggest is not None:
-        sets = list(dict.fromkeys(args.suggest.split(",")))
-        unknown = [name for name in sets if name not in _SUGGEST_SETS]
-        if unknown:
-            parser.error(f"unknown input set(s): {', '.join(unknown)}")
-        if args.suggest_limit is not None and args.suggest_limit < 1:
-            parser.error("--suggest-limit must be at least 1")
-        suggest_command(sets, limit=args.suggest_limit, dry_run=args.dry_run)
-        return
-    if args.derive_nutrition:
-        print(f"Derived nutrition for {derive_all_nutrition()} recipes")
-        return
-    if args.validate_nutrition:
-        validation_report()
-        return
-    if args.coverage_report:
-        coverage_report()
-        return
-    if args.metrics:
-        path = Path(args.metrics)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(collect_metrics(), indent=2, sort_keys=True) + "\n")
-        print(f"Metrics snapshot written to {path}")
-        return
-    if args.re_resolve:
-        terms_changed, regrammed, pruned = re_resolve()
-        print(
-            f"Re-resolved: {terms_changed} terms changed, "
-            f"{regrammed} lines regrammed, {pruned} concepts pruned"
-        )
-        return
-    if args.site is None:
-        parser.error("a site is required unless a report flag is given")
-    site = get_site(args.site)
-    if args.reparse:
-        reparse_site(site)
-        return
-    try:
-        import_sitemap(site)
-        crawl_sitemap(site)
-    except BlockedError as exc:
-        # A blocked sitemap or crawl is a site-wide block: stop cleanly
-        # instead of a traceback. Unfinished pages stay queued.
-        raise SystemExit(f"{site.name}: blocked: {exc}") from exc
-
-
-if __name__ == "__main__":
-    main()

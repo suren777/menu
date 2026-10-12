@@ -11,25 +11,38 @@ yield nothing. What survives lands as pending Suggestions for the
 suggestions.json ledger, where they are reviewed in git.
 """
 
+import hashlib
 import json
 import logging
 import os
 import re
 from collections import Counter
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import requests
 from requests import Session
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 
-from menu.db.ingredients.suggestions import Suggestion
+from menu.domain.suggestions import (
+    AliasProposal,
+    FoodRefProposal,
+    Kind,
+    LineOverrideProposal,
+    NotFoodProposal,
+    OkProposal,
+    Proposal,
+    Suggestion,
+    VariantProposal,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
 
     from urllib3 import BaseHTTPResponse
+
+    from menu.domain.review import InputSet, ReviewItem
 
 logger = logging.getLogger(__name__)
 
@@ -46,11 +59,6 @@ _MAX_RETRY_AFTER_SECONDS = 60
 _BASE_TOKENS = 1_000
 _TOKENS_PER_ITEM = 150
 _SCHEMA_NAME = "menu_review"
-
-InputSet = Literal["queue", "audit", "pair", "food_ref"]
-SuggestionKind = Literal[
-    "alias", "variant", "line_override", "not_food", "food_ref", "ok"
-]
 
 
 class _CappedRetry(Retry):
@@ -101,26 +109,6 @@ class _PostSession(Protocol):
 
 class LLMError(RuntimeError):
     """The LLM request could not be made or answered unusably."""
-
-
-@dataclass(frozen=True)
-class FoodCandidate:
-    """One reference-food row an ingredient might map to."""
-
-    source: str  # "fdc" | "cofid" | "cnf"
-    source_food_id: str
-    description: str
-
-
-@dataclass(frozen=True)
-class ReviewItem:
-    """One item to classify, with the context the model may use."""
-
-    input: InputSet
-    subject: str  # term text; for "pair": "a | b"; for "food_ref": the ingredient name
-    lines: tuple[str, ...] = ()  # raw recipe lines that use the subject
-    candidates: tuple[FoodCandidate, ...] = ()  # food_ref only
-    known_concepts: tuple[str, ...] = ()  # existing concept names an alias may target
 
 
 @dataclass(frozen=True)
@@ -359,6 +347,21 @@ _SCHEMAS: dict[InputSet, dict[str, Any]] = {
 }
 
 
+def prompt_hash(input_set: InputSet) -> str:
+    """First 12 hex chars of sha256 over the system prompt + schema.
+
+    Recorded on every suggestion as model["prompt"], so the ledger
+    shows which prompt version produced it without changing the
+    meaning of older entries (no prompt key = older prompt).
+    """
+    digest = hashlib.sha256(
+        (
+            _SYSTEM_PROMPTS[input_set] + json.dumps(_SCHEMAS[input_set], sort_keys=True)
+        ).encode("utf-8")
+    )
+    return digest.hexdigest()[:12]
+
+
 def _user_message(input_set: InputSet, chunk: Sequence[ReviewItem]) -> str:
     label = {"pair": "pair", "food_ref": "ingredient"}.get(input_set, "term")
     out: list[str] = []
@@ -395,11 +398,12 @@ def _string_values(value: Any) -> Iterator[str]:
             yield from _string_values(nested)
 
 
-def _numbers_ok(item: ReviewItem, proposal: dict[str, Any]) -> bool:
+def _numbers_ok(item: ReviewItem, proposal: Proposal) -> bool:
+    values = proposal.model_dump()
     if item.input in ("pair", "food_ref"):
         return all(
             not _NUMBER_RE.search(text)
-            for key, value in proposal.items()
+            for key, value in values.items()
             if key != "source_food_id"
             for text in _string_values(value)
         )
@@ -410,14 +414,14 @@ def _numbers_ok(item: ReviewItem, proposal: dict[str, Any]) -> bool:
     }
     return all(
         set(_NUMBER_RE.findall(text)) <= allowed
-        for value in proposal.values()
+        for value in values.values()
         for text in _string_values(value)
     )
 
 
 def _concept_proposal(
     item: ReviewItem, kind: str, verdict: dict[str, Any]
-) -> dict[str, Any] | str:
+) -> AliasProposal | VariantProposal | str:
     """alias/variant for queue and audit: the model picks the target."""
     target = verdict.get("target")
     variant = verdict.get("variant")
@@ -431,15 +435,15 @@ def _concept_proposal(
             return "kind"  # a variant proposal needs the variant word
         if target not in item.known_concepts:
             return "target"  # variants must target a known concept
-        return {"term": item.subject, "target": target, "variant": variant}
+        return VariantProposal(term=item.subject, target=target, variant=variant)
     if target not in item.known_concepts and not new:
         return "target"
-    return {"term": item.subject, "target": target, "variant": variant, "new": new}
+    return AliasProposal(term=item.subject, target=target, variant=variant, new=new)
 
 
 def _pair_proposal(
     item: ReviewItem, kind: str, verdict: dict[str, Any]
-) -> dict[str, Any] | str:
+) -> AliasProposal | VariantProposal | str:
     """alias/variant for pairs: the subject's halves are term and target."""
     head, _, tail = item.subject.partition(" | ")
     if not tail:
@@ -451,24 +455,22 @@ def _pair_proposal(
             return "kind"
         if tail not in item.known_concepts:
             return "target"
-        return {"term": head, "target": tail, "variant": variant}
+        return VariantProposal(term=head, target=tail, variant=variant)
     if tail not in item.known_concepts and not new:
         return "target"
-    return {"term": head, "target": tail, "variant": None, "new": new}
+    return AliasProposal(term=head, target=tail, variant=None, new=new)
 
 
-def _proposal(
-    item: ReviewItem, kind: str, verdict: dict[str, Any]
-) -> dict[str, Any] | str:
-    """The proposal dict, or the mechanical-check reason it is dropped."""
+def _proposal(item: ReviewItem, kind: str, verdict: dict[str, Any]) -> Proposal | str:
+    """The proposal, or the mechanical-check reason it is dropped."""
     if kind == "ok":
         # "None fits" that still names a candidate contradicts itself;
         # recording it as reviewed would hide the item for good.
         if item.input == "food_ref" and verdict.get("source_food_id") is not None:
             return "kind"
-        return {}
+        return OkProposal()
     if kind == "not_food":
-        return {"term": item.subject}
+        return NotFoodProposal(term=item.subject)
     if item.input in ("queue", "audit"):
         if kind == "line_override":
             line = verdict.get("line")
@@ -477,7 +479,7 @@ def _proposal(
                 return "kind"
             if line not in item.lines:
                 return "line"
-            return {"line": line, "name": name}
+            return LineOverrideProposal(line=line, name=name)
         return _concept_proposal(item, kind, verdict)
     if item.input == "pair":
         return _pair_proposal(item, kind, verdict)
@@ -490,15 +492,18 @@ def _proposal(
         for candidate in item.candidates
     ):
         return "candidate"
-    return {
-        "ingredient": item.subject,
-        "source": source,
-        "source_food_id": source_food_id,
-    }
+    return FoodRefProposal(
+        ingredient=item.subject,
+        source=source,
+        source_food_id=source_food_id,
+    )
 
 
 def _verdict_suggestion(
-    chunk: Sequence[ReviewItem], verdict: dict[str, Any], model_id: str
+    chunk: Sequence[ReviewItem],
+    verdict: dict[str, Any],
+    model_id: str,
+    input_set: InputSet,
 ) -> Suggestion | str:
     """A Suggestion for the verdict, or the mechanical-check drop reason."""
     index = verdict.get("index")
@@ -521,11 +526,12 @@ def _verdict_suggestion(
         return "numbers"
     return Suggestion(
         input=item.input,
-        kind=kind,
+        # the membership check above guarantees one of the six kinds
+        kind=cast("Kind", kind),
         subject=item.subject,
         proposal=proposal,
         evidence={"reason": str(verdict.get("reason") or "")},
-        model={"llm": model_id},
+        model={"llm": model_id, "prompt": prompt_hash(input_set)},
     )
 
 
@@ -605,7 +611,7 @@ def suggest(
                     dropped["kind"] += 1
                     continue
                 seen.add(entry.get("index"))
-                outcome = _verdict_suggestion(chunk, entry, worker.model_id)
+                outcome = _verdict_suggestion(chunk, entry, worker.model_id, input_set)
                 if isinstance(outcome, str):
                     dropped[outcome] += 1
                 else:

@@ -28,7 +28,7 @@ from menu.db.database import (
     RefPortion,
     initialise,
 )
-from menu.ingest.units import singular
+from menu.domain.units import singular
 from menu.nutrition.sources.common import upsert_foods
 
 if TYPE_CHECKING:

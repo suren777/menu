@@ -6,13 +6,20 @@ from typing import TYPE_CHECKING
 import pytest
 from sqlalchemy import create_engine, text
 
-from menu.db.connection import get_session, use_engine
+from menu.db.connection import current_engine, get_session, use_engine
+from menu.db.engine import default_engine
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from sqlalchemy.engine import Engine
     from testcontainers.community.postgres import PostgresContainer
+
+
+def test_current_engine_defaults_to_the_cached_engine() -> None:
+    """No explicit engine and no use_engine override: the shared
+    default engine, the same object on every call."""
+    assert current_engine() is default_engine()
 
 
 def test_use_engine_binds_get_session(

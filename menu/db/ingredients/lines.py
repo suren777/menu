@@ -18,7 +18,7 @@ from menu.db.database import (
 )
 from menu.db.ingredients import repository, seed
 from menu.db.ingredients.grams import _line_grams
-from menu.ingest.ingredients import (
+from menu.domain.ingredients import (
     canonical_name,
     line_needs_review,
     name_needs_review,
@@ -28,8 +28,8 @@ from menu.ingest.ingredients import (
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
-    from menu.ingest.ingredients import ParsedLine
-    from menu.ingest.registry import SiteConfig
+    from menu.domain.ingredients import ParsedLine
+    from menu.domain.site import SiteConfig
 
 logger = logging.getLogger(__name__)
 
@@ -84,109 +84,158 @@ def store_recipe_ingredients(
         try:
             parsed = parse_line(raw, site)
         except Exception as exc:  # noqa: BLE001 - a bad line must not stop the recipe
-            logger.warning(
-                "Storing failed line %r for recipe %s: %s: %s",
-                raw,
-                recipe_id,
-                type(exc).__name__,
-                exc,
-            )
-            session.add(
-                RecipeIngredient(
-                    recipe_id=recipe_id,
-                    position=position,
-                    raw_text=raw,
-                    parse_status="failed",
-                )
-            )
+            _store_failed(raw, recipe_id, position, exc, session)
             continue
-        override = overrides.get(" ".join(raw.lower().split()))
-        alt_parsed = None if parsed.alternatives else _split_or_alternative(raw, site)
-        line_review = override is None and line_needs_review(raw, parsed, alt_parsed)
-        term = _resolve_term(
-            override if override is not None else parsed.name,
-            parsed.fdc_id,
-            session,
-        )
-        # Stored as the heuristic says; a seeded term overrides it in
-        # effective_ingredient_id, so a later seed still wins.
-        needs_review = line_review
-        ingredient_id = repository.effective_ingredient_id(needs_review, term)
-        grams = grams_max = None
-        grams_source = None
-        conversion_id = None
-        if ingredient_id is not None:
-            grams, grams_max, grams_source, conversion_id = _line_grams(
-                parsed.quantity,
-                parsed.quantity_max,
-                parsed.dimension,
-                parsed.base_unit,
-                parsed.original_unit,
-                parsed.preparation,
-                parsed.size,
-                ingredient_id,
-                session,
-            )
-        line = RecipeIngredient(
+        _store_line(parsed, raw, recipe_id, position, overrides, site, session)
+
+
+def _store_failed(
+    raw: str,
+    recipe_id: int,
+    position: int,
+    exc: Exception,
+    session: Session,
+) -> None:
+    """A parse that raised is stored too, with parse_status 'failed'
+    and no term: a bad line must not stop the recipe (or a crawl),
+    but it is data too."""
+    logger.warning(
+        "Storing failed line %r for recipe %s: %s: %s",
+        raw,
+        recipe_id,
+        type(exc).__name__,
+        exc,
+    )
+    session.add(
+        RecipeIngredient(
             recipe_id=recipe_id,
             position=position,
             raw_text=raw,
-            term_id=term.id if term is not None else None,
-            needs_review=needs_review,
-            quantity=parsed.quantity,
-            quantity_max=parsed.quantity_max,
-            dimension=parsed.dimension,
-            base_unit=parsed.base_unit,
-            original_quantity_text=parsed.original_quantity_text,
-            original_unit=parsed.original_unit,
-            preparation=parsed.preparation,
-            size=parsed.size,
-            note=parsed.note,
-            optional=parsed.optional,
-            parse_confidence=parsed.parse_confidence,
-            grams=grams,
-            grams_max=grams_max,
-            grams_source=grams_source,
-            conversion_id=conversion_id,
+            parse_status="failed",
         )
-        session.add(line)
-        session.flush()  # the row's id is needed by the alternative rows
-        for alternative in parsed.alternatives:
-            alternative_term = _resolve_term(alternative, None, session)
-            session.add(
-                RecipeIngredient(
-                    recipe_id=recipe_id,
-                    position=position,
-                    raw_text=raw,
-                    term_id=(
-                        alternative_term.id if alternative_term is not None else None
-                    ),
-                    alternative_of=line.id,
-                )
+    )
+
+
+def _store_line(
+    parsed: ParsedLine,
+    raw: str,
+    recipe_id: int,
+    position: int,
+    overrides: dict[str, str],
+    site: SiteConfig,
+    session: Session,
+) -> None:
+    """One good parse: the main row (with grams when the line's
+    ingredient is known) and its alternative rows, in the caller's
+    transaction."""
+    override = overrides.get(" ".join(raw.lower().split()))
+    alt_parsed = None if parsed.alternatives else _split_or_alternative(raw, site)
+    needs_review = override is None and line_needs_review(raw, parsed, alt_parsed)
+    term = _resolve_term(
+        override if override is not None else parsed.name,
+        parsed.fdc_id,
+        session,
+    )
+    line = _line_row(parsed, raw, recipe_id, position, needs_review, term, session)
+    session.add(line)
+    session.flush()  # the row's id is needed by the alternative rows
+    _store_alternatives(parsed, alt_parsed, raw, recipe_id, position, line.id, session)
+
+
+def _line_row(
+    parsed: ParsedLine,
+    raw: str,
+    recipe_id: int,
+    position: int,
+    needs_review: bool,
+    term: IngredientTerm | None,
+    session: Session,
+) -> RecipeIngredient:
+    """The main recipe_ingredients row, with grams when the line has
+    an effective ingredient to convert against."""
+    # Stored as the heuristic says; a seeded term overrides it in
+    # effective_ingredient_id, so a later seed still wins.
+    ingredient_id = repository.effective_ingredient_id(needs_review, term)
+    grams = grams_max = None
+    grams_source = None
+    conversion_id = None
+    if ingredient_id is not None:
+        grams, grams_max, grams_source, conversion_id = _line_grams(
+            parsed.quantity,
+            parsed.quantity_max,
+            parsed.dimension,
+            parsed.base_unit,
+            parsed.original_unit,
+            parsed.preparation,
+            parsed.size,
+            ingredient_id,
+            session,
+        )
+    return RecipeIngredient(
+        recipe_id=recipe_id,
+        position=position,
+        raw_text=raw,
+        term_id=term.id if term is not None else None,
+        needs_review=needs_review,
+        quantity=parsed.quantity,
+        quantity_max=parsed.quantity_max,
+        dimension=parsed.dimension,
+        base_unit=parsed.base_unit,
+        original_quantity_text=parsed.original_quantity_text,
+        original_unit=parsed.original_unit,
+        preparation=parsed.preparation,
+        size=parsed.size,
+        note=parsed.note,
+        optional=parsed.optional,
+        parse_confidence=parsed.parse_confidence,
+        grams=grams,
+        grams_max=grams_max,
+        grams_source=grams_source,
+        conversion_id=conversion_id,
+    )
+
+
+def _store_alternatives(
+    parsed: ParsedLine,
+    alt_parsed: ParsedLine | None,
+    raw: str,
+    recipe_id: int,
+    position: int,
+    line_id: int,
+    session: Session,
+) -> None:
+    """Alternative rows pointing back at the main row: the parser's
+    own alternatives, then the second option of an unhandled "or"."""
+    for alternative in parsed.alternatives:
+        alternative_term = _resolve_term(alternative, None, session)
+        session.add(
+            RecipeIngredient(
+                recipe_id=recipe_id,
+                position=position,
+                raw_text=raw,
+                term_id=(alternative_term.id if alternative_term is not None else None),
+                alternative_of=line_id,
             )
-        # The parser handles bare "X or Y" name alternatives itself,
-        # but drops the second option of "2 tsp vanilla or 1 tsp
-        # essential oil" into the note. Split it off here so it is
-        # still kept as an alternative row.
-        if alt_parsed is not None:
-            alternative_term = _resolve_term(
-                alt_parsed.name, alt_parsed.fdc_id, session
+        )
+    # The parser handles bare "X or Y" name alternatives itself,
+    # but drops the second option of "2 tsp vanilla or 1 tsp
+    # essential oil" into the note. Split it off here so it is
+    # still kept as an alternative row.
+    if alt_parsed is not None:
+        alternative_term = _resolve_term(alt_parsed.name, alt_parsed.fdc_id, session)
+        session.add(
+            RecipeIngredient(
+                recipe_id=recipe_id,
+                position=position,
+                raw_text=raw,
+                term_id=(alternative_term.id if alternative_term is not None else None),
+                quantity=alt_parsed.quantity,
+                quantity_max=alt_parsed.quantity_max,
+                dimension=alt_parsed.dimension,
+                base_unit=alt_parsed.base_unit,
+                alternative_of=line_id,
             )
-            session.add(
-                RecipeIngredient(
-                    recipe_id=recipe_id,
-                    position=position,
-                    raw_text=raw,
-                    term_id=(
-                        alternative_term.id if alternative_term is not None else None
-                    ),
-                    quantity=alt_parsed.quantity,
-                    quantity_max=alt_parsed.quantity_max,
-                    dimension=alt_parsed.dimension,
-                    base_unit=alt_parsed.base_unit,
-                    alternative_of=line.id,
-                )
-            )
+        )
 
 
 def _split_or_alternative(raw: str, site: SiteConfig) -> ParsedLine | None:

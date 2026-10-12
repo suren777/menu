@@ -35,7 +35,7 @@ from menu.nutrition.sources.fdc import FNDDS_URL, SR_URL, import_fdc
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
-    from menu.ingest.registry import SiteConfig
+    from menu.domain.site import SiteConfig
 
 logger = logging.getLogger(__name__)
 
@@ -186,15 +186,15 @@ def rebuild(
                 crawl_sitemap(site, offline=True)
             except FetchError as exc:
                 logger.warning(
-                    "%s: top-level sitemap not in the offline cache, "
-                    "site skipped: %s",
+                    "%s: top-level sitemap not in the offline cache, site skipped: %s",
                     site.name,
                     exc,
                 )
                 continue
             with get_session() as session:
                 summaries[site.name] = _site_summary(site, session)
-        derived = derive_all_nutrition()
+        with get_session() as session:
+            derived = derive_all_nutrition(session)
     engine.dispose()
 
     summary: dict[str, Any] = {

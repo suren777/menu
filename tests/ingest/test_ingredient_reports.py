@@ -1,7 +1,7 @@
 """Report tests: the hand-seeding candidates from the reference
 imports — a report, never an auto-merge."""
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pytest
@@ -13,12 +13,66 @@ from menu.db.database import (
     Ingredient,
     IngredientFoodRef,
     IngredientTerm,
+    Page,
+    Recipe,
     RecipeIngredient,
     RefFood,
 )
-from menu.db.ingredients import reports
+from menu.ingest import ingredient_reports as reports
 
-from .helpers import add_recipe, add_recipe_row, add_term
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
+
+def add_recipe(url: str) -> int:
+    """Insert a bare recipe row, reached through its page (the
+    ledger); the action opens its own session, so the seed must be
+    committed before it runs. (Inlined from the ingredient-test
+    helpers: tests/ingest is not a package.)"""
+    with get_session() as session:
+        page = Page(url=url, site="bbc_good_food")
+        session.add(page)
+        session.flush()
+        recipe = Recipe(
+            page_id=page.id,
+            name="Test",
+            data={},
+            data_sha256=url,
+            extractor="json_ld",
+        )
+        session.add(recipe)
+        session.flush()
+        return recipe.id
+
+
+def add_recipe_row(session: Session, url: str, name: str) -> Recipe:
+    """The same bare recipe, in the caller's transaction."""
+    page = Page(url=url, site="bbc_good_food")
+    session.add(page)
+    session.flush()
+    recipe = Recipe(
+        page_id=page.id, name=name, data={}, data_sha256=url, extractor="json_ld"
+    )
+    session.add(recipe)
+    session.flush()
+    return recipe
+
+
+def add_term(
+    session: Session,
+    term: str,
+    ingredient: Ingredient,
+    *,
+    variant: str | None = None,
+    resolution: str = "seed",
+) -> IngredientTerm:
+    """A term pointing at a concept, for hand-built lines."""
+    row = IngredientTerm(
+        term=term, ingredient_id=ingredient.id, variant=variant, resolution=resolution
+    )
+    session.add(row)
+    session.flush()
+    return row
 
 
 @pytest.mark.usefixtures("db_engine")
@@ -87,12 +141,13 @@ def test_fdc_id_conflicts_reported_not_merged() -> None:
             ]
         )
 
-    assert reports.fdc_id_conflicts() == [
-        (
-            "Almond, vanilla and rosewater extract",
-            ["almond", "rosewater", "vanilla"],
-        )
-    ]
+    with get_session() as session:
+        assert reports.fdc_id_conflicts(session) == [
+            (
+                "Almond, vanilla and rosewater extract",
+                ["almond", "rosewater", "vanilla"],
+            )
+        ]
 
     with get_session() as session:
         record = session.scalars(
@@ -105,7 +160,8 @@ def test_fdc_id_conflicts_reported_not_merged() -> None:
         )
 
     # The curated seed links the pair, so the group is no longer a conflict.
-    assert reports.fdc_id_conflicts() == []
+    with get_session() as session:
+        assert reports.fdc_id_conflicts(session) == []
 
 
 @pytest.mark.usefixtures("db_engine")
@@ -183,7 +239,10 @@ def test_ref_review_lists_unconfirmed() -> None:
             ]
         )
 
-    assert reports.ref_review() == [(2, "mystery powder", "Baobab powder", (), ())]
+    with get_session() as session:
+        assert reports.ref_review(session) == [
+            (2, "mystery powder", "Baobab powder", (), ())
+        ]
 
 
 @pytest.mark.usefixtures("db_engine")
@@ -230,7 +289,8 @@ def test_ref_review_excludes_rejected_candidates() -> None:
             )
         )
 
-    assert reports.ref_review() == [(1, "baobab powder", None, (), ())]
+    with get_session() as session:
+        assert reports.ref_review(session) == [(1, "baobab powder", None, (), ())]
 
 
 class _SameVector:
@@ -266,8 +326,9 @@ def test_ref_review_shows_embedding_neighbours() -> None:
             )
         )
 
-    ((_count, name, _candidate, matches, neighbours),) = reports.ref_review(
-        embedder=_SameVector()
-    )
+    with get_session() as session:
+        ((_count, name, _candidate, matches, neighbours),) = reports.ref_review(
+            session, embedder=_SameVector()
+        )
     assert (name, matches) == ("aubergine", ())
     assert neighbours == ("fdc 1: Eggplant, raw (1.00)",)

@@ -69,7 +69,7 @@ Today a site-wide block (402/403/429 challenge) would fail every URL. Each sitem
 
 ## Site PRs (one per site, in this order)
 
-Each one adds a frozen `SiteConfig` in `menu/ingest/sites/<name>.py` and registers it in `sites/__init__.py`. Each also needs saved-page fixtures, trimmed to the structured-data block, plus `tests/ingest/fixtures/<site>_lines.json` with ingredient lines taken verbatim from the cached pages, following `bbc_lines.json`. Run with `uv run menu-ingest <site>`.
+Each one adds a frozen `SiteConfig` in `menu/ingest/sites/<name>.py` and registers it in `sites/__init__.py`. Each also needs saved-page fixtures, trimmed to the structured-data block, plus `tests/ingest/fixtures/<site>_lines.json` with ingredient lines taken verbatim from the cached pages, following `bbc_lines.json`. Run with `uv run menu-ingest crawl <site>`.
 
 ### A. King Arthur Baking: config only, which proves the multi-site path
 ```python
@@ -140,7 +140,7 @@ JSON-LD works as it is. `sitemap_urls=("https://www.epicurious.com/sitemap.xml",
 - After each PR: `uv run pytest`, `uv run mypy menu tests`, `uv run ruff check .`.
 - Optional cross-check for a new site: run `uv run --no-project --with recipe-scrapers` over its saved fixtures with `scrape_html(..., supported_only=False)`, and compare name, yield and ingredient lines with our `extract_recipe_data`. Don't add it as a dependency.
 - Before a full site crawl, do a smoke run capped to one sub-sitemap. Check that stored/fetched is plausible, then look at the review queue (`ingredient_id IS NULL`) for the new site.
-- `uv run menu-ingest <site> --reparse` after alias seeding, to re-resolve without re-fetching.
+- `uv run menu-ingest reparse <site>` after alias seeding, to re-resolve without re-fetching.
 
 ## Order and size
 1. Generic PR (#1–#5): the biggest piece, with no new site.

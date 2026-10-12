@@ -1,6 +1,6 @@
 """Ottolenghi site config."""
 
-from menu.ingest.registry import SiteConfig
+from menu.domain.site import SiteConfig
 
 OTTOLENGHI = SiteConfig(
     name="ottolenghi",

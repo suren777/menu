@@ -8,12 +8,12 @@ if TYPE_CHECKING:
 
 
 def test_set_status(session: Session) -> None:
-    """set_status opens its own session on the (patched) default
-    engine, so the row must be committed for it to be visible."""
     session.add(Sitemap(url="http://test.com", site="test", status="pending"))
-    session.commit()
+    session.flush()
 
-    actions.set_status("http://test.com", "test", "failed", error="ParseError: junk")
+    actions.set_status(
+        "http://test.com", "test", "failed", session, error="ParseError: junk"
+    )
 
     model = repository.find_by_url("http://test.com", session)
     assert model is not None

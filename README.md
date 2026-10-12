@@ -45,7 +45,7 @@ Useful during development: `uv run pytest`, `uv run mypy menu tests`,
 
 - `uv` for package management, Python 3.14+
 - Pydantic v2, SQLAlchemy 2
-- `ruff` for linting, `black` + `isort` for formatting
+- `ruff` for linting, import sorting and formatting
 - strict `mypy`
 
 ## The old database

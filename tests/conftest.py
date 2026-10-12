@@ -18,10 +18,11 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 from testcontainers.community.postgres import PostgresContainer
 
-import menu.db.connection
+from menu.db.connection import use_engine
 from menu.db.database import initialise
 from menu.db.engine import make_engine
-from menu.db.ingredients import review_inputs, suggestions
+from menu.domain import suggestions
+from menu.ingest import review_inputs
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -139,18 +140,18 @@ def temp_embeddings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 def db_engine(
     template_database: str,
     pg_container: PostgresContainer,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[Engine]:
     """A fresh database cloned from the template, dropped after the
     test.
 
-    It is also installed as the default engine, so actions that open
-    their own session (via get_session) operate on the same database.
+    It is also installed as the default engine (use_engine), so actions
+    that open their own session (via get_session) operate on the same
+    database.
     """
     name = f"t_{uuid.uuid4().hex}"
     engine = _clone(pg_container, template_database, name)
-    monkeypatch.setattr(menu.db.connection, "default_engine", engine)
-    yield engine
+    with use_engine(engine):
+        yield engine
     engine.dispose()
     _drop(pg_container, name)
 

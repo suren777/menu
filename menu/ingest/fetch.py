@@ -24,12 +24,12 @@ from menu.ingest.errors import (
     FetchError,
     NotCachedError,
 )
-from menu.ingest.http import USER_AGENT, session
+from menu.ingest.http import USER_AGENT, http_session
 
 if TYPE_CHECKING:
     from requests import Response
 
-    from menu.ingest.registry import SiteConfig
+    from menu.domain.site import SiteConfig
 
 # Anchored to the project root so the cache doesn't depend on the
 # directory the crawl is started from.
@@ -73,7 +73,7 @@ class _Robots:
         parser = RobotFileParser()
         robots_url = f"{base_url.rstrip('/')}/robots.txt"
         try:
-            response = session.get(robots_url, timeout=10)
+            response = http_session().get(robots_url, timeout=10)
         except RetryError:
             # The session's retries ran out on 5xx: unobtainable
             # robots.txt (RFC 9309) disallows everything.
@@ -148,12 +148,12 @@ def fetch_page(
     except ValueError:  # a garbage crawl-delay: fall back to our own
         delay = site.politeness_delay
     _politeness.wait(site.base_url, delay)
-    response = session.get(url, timeout=10)
+    response = http_session().get(url, timeout=10)
     if response.status_code == 429:
         # Rate-limited: wait out the site's own pacing once, then a
         # second 429 is a block.
         time.sleep(_retry_after(response))
-        response = session.get(url, timeout=10)
+        response = http_session().get(url, timeout=10)
         if response.status_code == 429:
             raise BlockedError(f"Still rate-limited: {url!r}", status_code=429)
     if response.status_code in (401, 402, 403):

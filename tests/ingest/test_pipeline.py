@@ -17,9 +17,10 @@ from menu.db.database import (
     RecipeIngredient,
     Sitemap,
 )
-from menu.db.ingredients import suggestions
 from menu.db.pages import repository as pages_repository
 from menu.db.sitemaps import actions as sitemap_actions
+from menu.domain import suggestions
+from menu.domain.site import SiteConfig
 from menu.ingest import pipeline
 from menu.ingest.discover import SitemapEntry
 from menu.ingest.errors import (
@@ -27,7 +28,8 @@ from menu.ingest.errors import (
     DisallowedError,
     FetchError,
 )
-from menu.ingest.llm_review import Usage
+from menu.ingest.http import http_session
+from menu.ingest.llm_review import Usage, prompt_hash
 from menu.ingest.pipeline import (
     CrawlReport,
     crawl_sitemap,
@@ -35,7 +37,7 @@ from menu.ingest.pipeline import (
     process_url,
     reparse_site,
 )
-from menu.ingest.registry import SiteConfig, get_site
+from menu.ingest.registry import get_site
 from menu.ingest.sites.bbc_good_food import BBC_GOOD_FOOD
 
 if TYPE_CHECKING:
@@ -143,7 +145,10 @@ def test_import_sitemap_rerun_adds_new_children(mock_request_xml: MagicMock) -> 
         [SitemapEntry(loc="https://test.com/old.xml")],
     )
     import_sitemap(SITE)
-    sitemap_actions.set_status("https://test.com/old.xml", SITE.name, "done")
+    with get_session() as session:
+        sitemap_actions.set_status(
+            "https://test.com/old.xml", SITE.name, "done", session
+        )
     mock_request_xml.return_value = (
         "sitemapindex",
         [
@@ -719,7 +724,7 @@ def test_changed_data_replaces_the_recipe_and_lines(
 
 
 @pytest.mark.usefixtures("db_engine")
-@patch("menu.ingest.http.session.get")
+@patch.object(http_session(), "get")
 def test_offline_crawl_leaves_an_uncached_page_queued(mock_get: MagicMock) -> None:
     """Offline a page the cache doesn't hold wasn't replayable: it
     stays queued with no attempt recorded, for the next live crawl."""
@@ -738,7 +743,7 @@ def test_offline_crawl_leaves_an_uncached_page_queued(mock_get: MagicMock) -> No
 
 
 @pytest.mark.usefixtures("db_engine")
-@patch("menu.ingest.http.session.get")
+@patch.object(http_session(), "get")
 def test_offline_crawl_leaves_an_uncached_sitemap_pending(
     mock_get: MagicMock,
 ) -> None:
@@ -903,7 +908,7 @@ def test_suggest_appends_new_verdicts_and_skips_reviewed(
         input="queue",
         kind="ok",
         subject="cake tin or tray",
-        proposal={},
+        proposal=suggestions.OkProposal(),
         evidence={"reason": "earlier"},
         model={"llm": "human"},
         status="rejected",
@@ -923,7 +928,11 @@ def test_suggest_appends_new_verdicts_and_skips_reviewed(
         ("bundt tin and tray", "not_food", "pending"),
         ("cake tin or tray", "ok", "rejected"),
     ]
-    assert ledger[0].model == {"llm": "fake/llm", "embedding": "fake/hash"}
+    assert ledger[0].model == {
+        "llm": "fake/llm",
+        "prompt": prompt_hash("queue"),
+        "embedding": "fake/hash",
+    }
 
 
 @pytest.mark.usefixtures("db_engine")

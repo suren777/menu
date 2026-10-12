@@ -1,7 +1,8 @@
 import pytest
 from pydantic import ValidationError
 
-from menu.ingest.registry import SiteConfig, get_site
+from menu.domain.site import SiteConfig
+from menu.ingest.registry import get_site
 from menu.ingest.sites.bbc_good_food import BBC_GOOD_FOOD
 
 

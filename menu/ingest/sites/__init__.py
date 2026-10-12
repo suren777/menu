@@ -8,7 +8,7 @@ from menu.ingest.sites.ottolenghi import OTTOLENGHI
 from menu.ingest.sites.smitten_kitchen import SMITTEN_KITCHEN
 
 if TYPE_CHECKING:
-    from menu.ingest.registry import SiteConfig
+    from menu.domain.site import SiteConfig
 
 REGISTRY: dict[str, SiteConfig] = {
     BBC_GOOD_FOOD.name: BBC_GOOD_FOOD,

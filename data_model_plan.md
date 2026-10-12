@@ -142,7 +142,7 @@ Each phase ends with a rebuild, `uv run pytest`, `uv run mypy menu tests`, `uv r
 Shipped in `77b72a2`, `74e3e01`, `cb18ecd`. The baseline is `metrics/baseline-2026-10-05.json`, not `-10-04`.
 
 - `engine.py`: a `connect` event listener that sets `PRAGMA foreign_keys=ON`, `journal_mode=WAL` and `synchronous=NORMAL`. Add a test that the pragma is on.
-- `menu-ingest --metrics` writes a JSON snapshot:
+- `menu-ingest metrics <PATH>` writes a JSON snapshot:
   - row counts per table
   - lines with grams, broken down by `grams_source`
   - lines with `ingredient_id` NULL
@@ -228,7 +228,7 @@ These four steps run in order. After each one, the metrics snapshot records revi
 
 **4c. LLM review (Gemini 3.8 Flash)**
 - `menu/ingest/llm_review.py::suggest(items) -> list[Suggestion]`, with the provider and model as config. Before building, confirm the model offers schema-constrained JSON output and a discounted batch mode; neither has been checked yet.
-- `menu-ingest --suggest` is an explicit command that never runs inside a crawl. It groups about 50 items per request under one fixed prompt, submits them through batch mode, and skips any item already in `suggestions.json` (any status). Four input sets, all as distinct texts:
+- `menu-ingest suggest` is an explicit command that never runs inside a crawl. It groups about 50 items per request under one fixed prompt, submits them through batch mode, and skips any item already in `suggestions.json` (any status). Four input sets, all as distinct texts:
   1. **Queue:** review-queue terms with their raw lines. What is the ingredient, and is there an alternative or equipment in the line?
   2. **Audit:** single-use `auto` concepts (4,963) with their line. Is the parsed name right, was the right alternative kept, is it food? This catches the silent misparses ("beef gravy", "12-hole mini bundt tin").
   3. **Pairs from 4b:** same, variant or different.
@@ -244,7 +244,7 @@ These four steps run in order. After each one, the metrics snapshot records revi
   - "ok" on a food-ref item was read as "this candidate is fine", so the no-match answer is `none` on the wire.
   - Smoke run, 7 items across all four sets: about 1,150 prompt and 400–540 completion tokens, 5–19 s. Every verdict was right, including coriander / ground coriander (different), whole milk (variant of milk), aubergine (alias of eggplant), icing sugar (FDC "Sugars, powdered") and rapeseed oil (no candidate). The first batch over real data is still to be measured.
 
-- **Status (2026-10-11):** built and tested offline — `review_inputs.py` builds the four sets, `menu-ingest --suggest` runs them (with `--dry-run` and `--suggest-limit`), `--ref-review` shows embedding neighbours, and accepted entries seed like hand seeds (4d). The first real batch and its token cost wait for the recrawl and the reference imports.
+- **Status (2026-10-11):** built and tested offline — `review_inputs.py` builds the four sets, `menu-ingest suggest` runs them (with `--dry-run` and `--limit`), `report ref-review` shows embedding neighbours, and accepted entries seed like hand seeds (4d). The first real batch and its token cost wait for the recrawl and the reference imports.
 
 **4d. Accept**
 - Review the `suggestions.json` diff and set `status`. Seeding loads accepted entries, and `--re-resolve` applies them without reparsing.

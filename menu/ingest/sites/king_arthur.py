@@ -1,6 +1,6 @@
 """King Arthur Baking site config."""
 
-from menu.ingest.registry import SiteConfig
+from menu.domain.site import SiteConfig
 
 KING_ARTHUR = SiteConfig(
     name="king_arthur",

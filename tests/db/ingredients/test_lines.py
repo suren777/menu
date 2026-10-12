@@ -21,17 +21,17 @@ from menu.db.database import (
 from menu.db.ingredients import lines as lines_module
 from menu.db.ingredients import repository
 from menu.db.ingredients import seed as seed_module
-from menu.db.ingredients import suggestions as suggestions_module
 from menu.db.ingredients.seed import seed_ingredient_data
-from menu.ingest.ingredients import parse_line
+from menu.domain import suggestions as suggestions_module
+from menu.domain.ingredients import parse_line
 
 from .helpers import add_recipe, store_lines
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from menu.ingest.ingredients import ParsedLine
-    from menu.ingest.registry import SiteConfig
+    from menu.domain.ingredients import ParsedLine
+    from menu.domain.site import SiteConfig
 
 
 def _write_suggestions(

@@ -77,7 +77,8 @@ def test_aggregate_folds_volume_into_mass_with_density() -> None:
             )
         )
 
-    lines = aggregate.aggregate([recipe_id])
+    with get_session() as session:
+        lines = aggregate.aggregate([recipe_id], session)
 
     assert len(lines) == 2
     flour_line = next(line for line in lines if line.label == "flour")
@@ -142,7 +143,8 @@ def test_aggregate_skips_optional_and_alternative_lines() -> None:
             )
         )
 
-    lines = aggregate.aggregate([recipe_id])
+    with get_session() as session:
+        lines = aggregate.aggregate([recipe_id], session)
 
     # Resolved lines sort before unresolved ones; the quantified milk
     # line also covers rosewater's bare "as needed" entry.
@@ -152,7 +154,8 @@ def test_aggregate_skips_optional_and_alternative_lines() -> None:
     ]
     assert lines[0].total == 250.0
 
-    included = aggregate.aggregate([recipe_id], include_optional=True)
+    with get_session() as session:
+        included = aggregate.aggregate([recipe_id], session, include_optional=True)
     assert any(line.label == "desiccated coconut" for line in included)
 
 
@@ -177,7 +180,8 @@ def test_aggregate_scales_by_servings() -> None:
             )
         )
 
-    lines = aggregate.aggregate([recipe_id], servings_scale=2.0)
+    with get_session() as session:
+        lines = aggregate.aggregate([recipe_id], session, servings_scale=2.0)
 
     assert lines[0].total == 500.0
 
@@ -193,13 +197,17 @@ def test_variant_recorded_and_keep_variants_splits() -> None:
     store_lines(basbousa_id, {"recipeIngredient": ["240ml warm milk"]})
     store_lines(shokupan_id, {"recipeIngredient": ["500ml whole milk"]})
 
-    lines = aggregate.aggregate([basbousa_id, shokupan_id])
+    with get_session() as session:
+        lines = aggregate.aggregate([basbousa_id, shokupan_id], session)
     assert len(lines) == 1
     assert (lines[0].label, lines[0].variant) == ("milk", None)
     # Every line converted (seeded milk density): one gram line.
     assert lines[0].total == pytest.approx((240 + 500) * 1.03)
 
-    split = aggregate.aggregate([basbousa_id, shokupan_id], keep_variants=True)
+    with get_session() as session:
+        split = aggregate.aggregate(
+            [basbousa_id, shokupan_id], session, keep_variants=True
+        )
     assert sorted((line.label, line.total) for line in split) == pytest.approx(
         [("milk (warm)", 240 * 1.03), ("milk (whole)", 500 * 1.03)]
     )
@@ -213,7 +221,8 @@ def test_aggregate_uses_range_upper_end() -> None:
 
     store_lines(recipe_id, {"recipeIngredient": ["2-3 large onions, sliced"]})
 
-    lines = aggregate.aggregate([recipe_id])
+    with get_session() as session:
+        lines = aggregate.aggregate([recipe_id], session)
 
     onion = next(line for line in lines if line.label == "onion")
     assert (onion.dimension, onion.total, onion.base_unit) == ("count", 3.0, "piece")
@@ -257,7 +266,8 @@ def test_aggregate_uses_grams_when_every_line_has_them() -> None:
             )
         )
 
-    lines = aggregate.aggregate([recipe_id])
+    with get_session() as session:
+        lines = aggregate.aggregate([recipe_id], session)
 
     assert len(lines) == 1
     assert (lines[0].label, lines[0].dimension, lines[0].base_unit) == (
@@ -293,7 +303,8 @@ def test_not_food_line_stored_but_not_shopping() -> None:
         assert term.resolution == "not_food"
         assert term.ingredient_id is None
 
-    lines = aggregate.aggregate([recipe_id])
+    with get_session() as session:
+        lines = aggregate.aggregate([recipe_id], session)
 
     assert [line.label for line in lines] == ["milk"]
     assert lines[0].total == pytest.approx(250 * 1.03)
@@ -315,7 +326,8 @@ def test_aggregate_real_cached_cordon_bleu() -> None:
 
     store_lines(recipe_id, {"recipeIngredient": case["lines"]})
 
-    lines = aggregate.aggregate([recipe_id])
+    with get_session() as session:
+        lines = aggregate.aggregate([recipe_id], session)
 
     flour = next(line for line in lines if line.label == "flour")
     assert flour.total == pytest.approx(100 + 2 * 17.7581640625 * 0.55)

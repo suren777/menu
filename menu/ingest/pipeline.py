@@ -212,26 +212,29 @@ def process_url(page: PageModel, site: SiteConfig, offline: bool = False) -> str
     Returns the recorded status, so the crawl can count stores and
     failures; a BlockedError is re-raised for the block-streak logic.
     """
+
+    def _record(status: str, **outcome: Any) -> None:
+        """One ledger write, one transaction: the outcome survives
+        everything that happens later — including the raises below."""
+        with get_session() as session:
+            page_actions.record_outcome(page.id, status, session, **outcome)
+
     try:
         content = fetch_page(page.url, site, offline=offline)
     except NotCachedError:
         logger.info("Offline: %s not cached, stays queued", page.url)
         return "queued"
     except DisallowedError as exc:
-        page_actions.record_outcome(page.id, "disallowed", error=_exc_text(exc))
+        _record("disallowed", error=_exc_text(exc))
         return "disallowed"
     except BlockedError as exc:
-        page_actions.record_outcome(
-            page.id, "blocked", http_status=exc.status_code, error=_exc_text(exc)
-        )
+        _record("blocked", http_status=exc.status_code, error=_exc_text(exc))
         raise
     except FetchError as exc:
-        page_actions.record_outcome(
-            page.id, "failed", http_status=exc.status_code, error=_exc_text(exc)
-        )
+        _record("failed", http_status=exc.status_code, error=_exc_text(exc))
         return "failed"
     except Exception as exc:  # noqa: BLE001 - a bad URL must not stop the crawl
-        page_actions.record_outcome(page.id, "failed", error=_exc_text(exc))
+        _record("failed", error=_exc_text(exc))
         return "failed"
 
     content_sha = hashlib.sha256(content).hexdigest()
@@ -240,8 +243,7 @@ def process_url(page: PageModel, site: SiteConfig, offline: bool = False) -> str
     try:
         _store_recipe(page, site, soup, recipe)
     except Exception as exc:  # noqa: BLE001 - a bad recipe must not stop the crawl
-        page_actions.record_outcome(
-            page.id,
+        _record(
             "failed",
             http_status=200,
             content_sha256=content_sha,
@@ -250,8 +252,7 @@ def process_url(page: PageModel, site: SiteConfig, offline: bool = False) -> str
         return "failed"
 
     status = "fetched" if recipe is not None else "no_recipe"
-    page_actions.record_outcome(
-        page.id,
+    _record(
         status,
         http_status=200,
         content_sha256=content_sha,
@@ -323,9 +324,10 @@ def crawl_sitemap(site: SiteConfig, *, offline: bool = False) -> CrawlReport:
         try:
             _walk_sitemap(sitemap, site, offline=offline)
         except BlockedError as exc:
-            sitemap_actions.set_status(
-                sitemap.url, site.name, "blocked", error=_exc_text(exc)
-            )
+            with get_session() as session:
+                sitemap_actions.set_status(
+                    sitemap.url, site.name, "blocked", session, error=_exc_text(exc)
+                )
             logger.error(
                 "Stopping %s: sitemap %s blocked: %s", site.name, sitemap.url, exc
             )
@@ -336,9 +338,10 @@ def crawl_sitemap(site: SiteConfig, *, offline: bool = False) -> CrawlReport:
             continue
         # A dead sitemap must not stop the crawl.
         except Exception as exc:  # noqa: BLE001
-            sitemap_actions.set_status(
-                sitemap.url, site.name, "failed", error=_exc_text(exc)
-            )
+            with get_session() as session:
+                sitemap_actions.set_status(
+                    sitemap.url, site.name, "failed", session, error=_exc_text(exc)
+                )
             report.failed += 1
             logger.warning(
                 "Skipping sitemap %s: %s: %s", sitemap.url, type(exc).__name__, exc
@@ -525,7 +528,8 @@ def _cmd_reparse(args: Namespace) -> None:
 
 
 def _cmd_re_resolve(_args: Namespace) -> None:
-    terms_changed, regrammed, pruned = re_resolve()
+    with get_session() as session:
+        terms_changed, regrammed, pruned = re_resolve(session)
     print(
         f"Re-resolved: {terms_changed} terms changed, "
         f"{regrammed} lines regrammed, {pruned} concepts pruned"
@@ -537,18 +541,22 @@ def _cmd_suggest(args: Namespace) -> None:
 
 
 def _cmd_derive_nutrition(_args: Namespace) -> None:
-    print(f"Derived nutrition for {derive_all_nutrition()} recipes")
+    with get_session() as session:
+        count = derive_all_nutrition(session)
+    print(f"Derived nutrition for {count} recipes")
 
 
 def _cmd_report_fdc_conflicts(_args: Namespace) -> None:
-    for food, names in fdc_id_conflicts():
+    with get_session() as session:
+        conflicts = fdc_id_conflicts(session)
+    for food, names in conflicts:
         print(f"{food}: {', '.join(names)}")
 
 
 def _cmd_report_ref_review(_args: Namespace) -> None:
-    for count, name, candidate, matches, neighbours in ref_review(
-        embedder=suggest_embedder()
-    ):
+    with get_session() as session:
+        rows = ref_review(session, embedder=suggest_embedder())
+    for count, name, candidate, matches, neighbours in rows:
         head = f"{count:5d}  {name}:"
         if candidate is not None:
             head += f" parser candidate: {candidate}"
@@ -560,17 +568,21 @@ def _cmd_report_ref_review(_args: Namespace) -> None:
 
 
 def _cmd_report_validate_nutrition(_args: Namespace) -> None:
-    validation_report()
+    with get_session() as session:
+        validation_report(session)
 
 
 def _cmd_report_coverage(_args: Namespace) -> None:
-    coverage_report()
+    with get_session() as session:
+        coverage_report(session)
 
 
 def _cmd_metrics(args: Namespace) -> None:
+    with get_session() as session:
+        metrics = collect_metrics(session)
     path = Path(args.path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(collect_metrics(), indent=2, sort_keys=True) + "\n")
+    path.write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n")
     print(f"Metrics snapshot written to {path}")
 
 

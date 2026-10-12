@@ -3,7 +3,7 @@
 import hashlib
 import json
 from typing import TYPE_CHECKING, Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import numpy as np
 import pytest
@@ -147,7 +147,10 @@ def test_import_sitemap_rerun_adds_new_children(mock_request_xml: MagicMock) -> 
         [SitemapEntry(loc="https://test.com/old.xml")],
     )
     import_sitemap(SITE)
-    sitemap_actions.set_status("https://test.com/old.xml", SITE.name, "done")
+    with get_session() as session:
+        sitemap_actions.set_status(
+            "https://test.com/old.xml", SITE.name, "done", session
+        )
     mock_request_xml.return_value = (
         "sitemapindex",
         [
@@ -1008,7 +1011,7 @@ def test_main_re_resolve_prints_the_counts(
 ) -> None:
     main(["re-resolve"])
 
-    mock_re_resolve.assert_called_once_with()
+    mock_re_resolve.assert_called_once_with(ANY)
     assert (
         "Re-resolved: 1 terms changed, 2 lines regrammed, 3 concepts pruned"
         in capsys.readouterr().out
@@ -1074,7 +1077,7 @@ def test_main_derive_nutrition_prints_the_count(
 ) -> None:
     main(["derive-nutrition"])
 
-    mock_derive.assert_called_once_with()
+    mock_derive.assert_called_once_with(ANY)
     assert "Derived nutrition for 7 recipes" in capsys.readouterr().out
 
 
@@ -1117,7 +1120,7 @@ def test_main_report_ref_review_prints_the_rows(
 def test_main_report_validate_nutrition_dispatches(mock_report: MagicMock) -> None:
     main(["report", "validate-nutrition"])
 
-    mock_report.assert_called_once_with()
+    mock_report.assert_called_once_with(ANY)
 
 
 @pytest.mark.usefixtures("no_db")
@@ -1125,7 +1128,7 @@ def test_main_report_validate_nutrition_dispatches(mock_report: MagicMock) -> No
 def test_main_report_coverage_dispatches(mock_report: MagicMock) -> None:
     main(["report", "coverage"])
 
-    mock_report.assert_called_once_with()
+    mock_report.assert_called_once_with(ANY)
 
 
 @pytest.mark.usefixtures("no_db")
@@ -1139,6 +1142,6 @@ def test_main_metrics_writes_the_snapshot(
 
     main(["metrics", str(path)])
 
-    mock_metrics.assert_called_once_with()
+    mock_metrics.assert_called_once_with(ANY)
     assert path.read_text() == '{\n  "recipes": 3\n}\n'
     assert f"Metrics snapshot written to {path}" in capsys.readouterr().out

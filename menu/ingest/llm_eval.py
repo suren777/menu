@@ -15,6 +15,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from menu.db.ingredients.suggestions import (
+    AliasProposal,
+    FoodRefProposal,
+    LineOverrideProposal,
+    VariantProposal,
+)
 from menu.ingest import llm_review
 from menu.ingest.llm_review import (
     DEFAULT_MODEL,
@@ -121,19 +127,16 @@ def load_fixture(path: Path = FIXTURE_PATH) -> list[EvalItem]:
     return items
 
 
-_TARGET_FIELDS = {
-    "alias": "target",
-    "variant": "target",
-    "line_override": "name",
-    "food_ref": "source_food_id",
-}
-
-
 def _target_of(suggestion: Suggestion) -> str | None:
-    """The proposal value an expected_target compares against."""
-    key = _TARGET_FIELDS.get(suggestion.kind)
-    value = suggestion.proposal.get(key) if key else None
-    return value if isinstance(value, str) else None
+    """The proposal attribute an expected_target compares against."""
+    proposal = suggestion.proposal
+    if isinstance(proposal, AliasProposal | VariantProposal):
+        return proposal.target
+    if isinstance(proposal, LineOverrideProposal):
+        return proposal.name
+    if isinstance(proposal, FoodRefProposal):
+        return proposal.source_food_id
+    return None
 
 
 def evaluate(items: Sequence[EvalItem], client: LLMClient) -> dict[str, EvalResult]:

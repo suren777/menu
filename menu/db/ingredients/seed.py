@@ -20,7 +20,7 @@ own globals.
 """
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
@@ -45,12 +45,18 @@ from menu.db.ingredients.seed_data import (
     PREPARED_FORMS,
     UNIT_WEIGHTS_G,
 )
+from menu.db.ingredients.suggestions import (
+    AliasProposal,
+    FoodRefProposal,
+    LineOverrideProposal,
+    NotFoodProposal,
+    Suggestion,
+    VariantProposal,
+)
 from menu.ingest.units import singular, unit_ml
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
-
-    from menu.db.ingredients.suggestions import Suggestion
 
 logger = logging.getLogger(__name__)
 
@@ -76,44 +82,31 @@ def conversion_rank(source_name: str) -> int:
     return len(CONVERSION_SOURCES)
 
 
-def _proposal(entry: Suggestion, *keys: str) -> dict[str, Any] | None:
-    """The suggestion's proposal, or None (logged) when a required key
-    is missing: a malformed accepted entry is drift in a git-reviewed
-    file, never a seeding crash."""
-    missing = [key for key in keys if key not in entry.proposal]
-    if missing:
-        logger.warning(
-            "Skipping malformed %s suggestion for %r: no %s in the proposal",
-            entry.kind,
-            entry.subject,
-            " or ".join(repr(key) for key in missing),
-        )
-        return None
-    return entry.proposal
-
-
 def aliases(
     entries: list[Suggestion] | None = None,
 ) -> list[tuple[str, str, str | None]]:
     """The hand ALIASES plus accepted alias and variant suggestions as
     (term, canonical, variant) tuples; a hand entry wins when both name
     the same term. An accepted alias with new: true creates its target
-    as a seed concept exactly like an ALIASES target."""
+    as a seed concept exactly like an ALIASES target. A malformed
+    accepted entry cannot load: the ledger validates the proposal."""
     if entries is None:
         entries = suggestions.load()
     merged = {term: (term, target, variant) for term, target, variant in ALIASES}
     for entry in suggestions.accepted(entries, "alias"):
-        proposal = _proposal(entry, "term", "target")
-        if proposal is None:
+        proposal = entry.proposal
+        if not isinstance(proposal, AliasProposal):
             continue
-        term = proposal["term"]
-        merged.setdefault(term, (term, proposal["target"], proposal.get("variant")))
+        merged.setdefault(
+            proposal.term, (proposal.term, proposal.target, proposal.variant)
+        )
     for entry in suggestions.accepted(entries, "variant"):
-        proposal = _proposal(entry, "term", "target", "variant")
-        if proposal is None:
+        proposal = entry.proposal
+        if not isinstance(proposal, VariantProposal):
             continue
-        term = proposal["term"]
-        merged.setdefault(term, (term, proposal["target"], proposal["variant"]))
+        merged.setdefault(
+            proposal.term, (proposal.term, proposal.target, proposal.variant)
+        )
     return list(merged.values())
 
 
@@ -125,11 +118,11 @@ def line_overrides(entries: list[Suggestion] | None = None) -> dict[str, str]:
         entries = suggestions.load()
     merged: dict[str, str] = {}
     for entry in suggestions.accepted(entries, "line_override"):
-        proposal = _proposal(entry, "line", "name")
-        if proposal is None:
+        proposal = entry.proposal
+        if not isinstance(proposal, LineOverrideProposal):
             continue
         # The key is normalised the same way as the lookup.
-        merged[" ".join(proposal["line"].lower().split())] = proposal["name"]
+        merged[" ".join(proposal.line.lower().split())] = proposal.name
     merged.update(LINE_OVERRIDES)
     return merged
 
@@ -140,9 +133,11 @@ def not_food(entries: list[Suggestion] | None = None) -> list[str]:
         entries = suggestions.load()
     merged = list(NOT_FOOD)
     for entry in suggestions.accepted(entries, "not_food"):
-        proposal = _proposal(entry, "term")
-        if proposal is not None and proposal["term"] not in merged:
-            merged.append(proposal["term"])
+        proposal = entry.proposal
+        if not isinstance(proposal, NotFoodProposal):
+            continue
+        if proposal.term not in merged:
+            merged.append(proposal.term)
     return merged
 
 
@@ -157,10 +152,10 @@ def food_refs(
     merged = {name: list(refs) for name, refs in FOOD_REFS.items()}
     hand = {(name, source) for name, refs in FOOD_REFS.items() for source, _, _ in refs}
     for entry in suggestions.accepted(entries, "food_ref"):
-        proposal = _proposal(entry, "ingredient", "source", "source_food_id")
-        if proposal is None:
+        proposal = entry.proposal
+        if not isinstance(proposal, FoodRefProposal):
             continue
-        name, source = proposal["ingredient"], proposal["source"]
+        name, source = proposal.ingredient, proposal.source
         if (name, source) in hand:
             continue
         hand.add((name, source))
@@ -168,7 +163,7 @@ def food_refs(
         if source in CONVERSION_SOURCES:
             roles.insert(0, "conversion")
         merged.setdefault(name, []).extend(
-            (source, proposal["source_food_id"], role) for role in roles
+            (source, proposal.source_food_id, role) for role in roles
         )
     return merged
 
@@ -185,11 +180,10 @@ def rejected_refs(
     for entry in entries:
         if entry.status != "rejected" or entry.kind != "food_ref":
             continue
-        proposal = _proposal(entry, "ingredient", "source", "source_food_id")
-        if proposal is not None:
-            rejected.append(
-                (proposal["ingredient"], proposal["source"], proposal["source_food_id"])
-            )
+        proposal = entry.proposal
+        if not isinstance(proposal, FoodRefProposal):
+            continue
+        rejected.append((proposal.ingredient, proposal.source, proposal.source_food_id))
     return rejected
 
 

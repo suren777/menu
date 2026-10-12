@@ -10,7 +10,7 @@ is an empty ledger, not an error.
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 import pydantic
 
@@ -22,6 +22,88 @@ SUGGESTIONS_PATH = Path(__file__).with_name("suggestions.json")
 
 Status = Literal["pending", "accepted", "rejected"]
 
+Kind = Literal["alias", "variant", "line_override", "not_food", "food_ref", "ok"]
+"""What a proposal is; also the discriminator on every proposal model.
+
+The ledger stores the kind only at the top level of an entry; loading
+copies it into the proposal dict so the union can discriminate (see
+Suggestion._tag_proposal), and it is excluded from every dump."""
+
+
+class AliasProposal(pydantic.BaseModel):
+    """alias: the term names the same food as `target`."""
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["alias"] = pydantic.Field(default="alias", exclude=True)
+    term: str
+    target: str
+    variant: str | None = None
+    new: bool = False
+
+
+class VariantProposal(pydantic.BaseModel):
+    """variant: the term is `target`'s food in a distinct `variant`."""
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["variant"] = pydantic.Field(default="variant", exclude=True)
+    term: str
+    target: str
+    variant: str
+
+
+class LineOverrideProposal(pydantic.BaseModel):
+    """line_override: the raw `line` should parse as `name`."""
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["line_override"] = pydantic.Field(
+        default="line_override", exclude=True
+    )
+    line: str
+    name: str
+
+
+class NotFoodProposal(pydantic.BaseModel):
+    """not_food: the term is equipment or otherwise inedible."""
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["not_food"] = pydantic.Field(default="not_food", exclude=True)
+    term: str
+
+
+class FoodRefProposal(pydantic.BaseModel):
+    """food_ref: the ingredient maps to this reference food."""
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["food_ref"] = pydantic.Field(default="food_ref", exclude=True)
+    ingredient: str
+    source: str
+    source_food_id: str
+
+
+class OkProposal(pydantic.BaseModel):
+    """ok: the parse is right and nothing needs to change."""
+
+    model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["ok"] = pydantic.Field(default="ok", exclude=True)
+
+
+Proposal = Annotated[
+    AliasProposal
+    | VariantProposal
+    | LineOverrideProposal
+    | NotFoodProposal
+    | FoodRefProposal
+    | OkProposal,
+    pydantic.Field(discriminator="kind"),
+]
+"""The six proposal shapes, discriminated by their `kind`."""
+
 
 class Suggestion(pydantic.BaseModel):
     """One model proposal, reviewed by editing `status` in git."""
@@ -30,14 +112,35 @@ class Suggestion(pydantic.BaseModel):
 
     input: str
     """The InputSet that produced it."""
-    kind: str
+    kind: Kind
     subject: str
-    proposal: dict[str, Any]
+    proposal: Proposal
     evidence: dict[str, Any]
     """At least {"reason": str}; the embedding wave adds neighbours."""
     model: dict[str, str]
     """{"llm": model id, ...} — the models that produced it."""
     status: Status = "pending"
+
+    @pydantic.model_validator(mode="before")
+    @classmethod
+    def _tag_proposal(cls, data: Any) -> Any:
+        """Copy the entry's kind into a dict proposal: the ledger keeps
+        the kind only at the top level, and the discriminated union
+        reads it from the proposal. A proposal that carries its own,
+        different kind stays untouched and fails the check below."""
+        if isinstance(data, dict):
+            proposal = data.get("proposal")
+            if isinstance(proposal, dict) and "kind" not in proposal:
+                data = {**data, "proposal": {**proposal, "kind": data.get("kind")}}
+        return data
+
+    @pydantic.model_validator(mode="after")
+    def _kinds_agree(self) -> Suggestion:
+        """A proposal naming a different kind than its entry cannot
+        load: the ledger's kind is the only one."""
+        if self.proposal.kind != self.kind:
+            raise ValueError("proposal kind does not match the entry kind")
+        return self
 
 
 def load(path: Path | None = None) -> list[Suggestion]:

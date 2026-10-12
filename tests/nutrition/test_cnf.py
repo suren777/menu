@@ -1,11 +1,14 @@
 """CNF bulk import against a hand-picked CSV slice; never downloads."""
 
+import io
 import logging
+import shutil
+import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from menu.db.database import (
     FoodSource,
@@ -16,9 +19,12 @@ from menu.db.database import (
     RefNutrient,
     RefPortion,
 )
-from menu.nutrition.sources.cnf import _parse_measure, import_cnf
+from menu.nutrition.sources import cnf
+from menu.nutrition.sources.cnf import CNF_URL, _parse_measure, import_cnf
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from sqlalchemy.orm import Session
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "cnf_sample"
@@ -168,6 +174,8 @@ def test_fraction_portion(session: Session) -> None:
         ("1/6 cake (20cm dia)", (0.1667, "cake", "(20cm dia)")),
         ("1 fish (500 g)", (1.0, "fish", "(500 g)")),
         ("250ml water + powder", (250.0, "ml", "water + powder")),
+        # a bare number leaves conversion no unit to match
+        ("2", None),
         # real descriptions conversion can never match on
         ("dough for 1", None),
         ("kellogg's", None),
@@ -299,3 +307,109 @@ def test_fdc_rows_untouched(session: Session) -> None:
     )
     # the nutrient_map replacement only touched CNF's own rows
     assert len(session.scalars(select(NutrientMap)).all()) == 8
+
+
+class FakeResponse:
+    """requests.Response stand-in: one payload, usable as a block."""
+
+    def __init__(self, payload: bytes) -> None:
+        self.payload = payload
+
+    def __enter__(self) -> FakeResponse:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def iter_content(self, chunk_size: int) -> Iterator[bytes]:
+        for start in range(0, len(self.payload), chunk_size):
+            yield self.payload[start : start + chunk_size]
+
+
+def _release_zip(directory: Path, name: str) -> bytes:
+    """A release download: a zip whose entries sit under `name`/ — the
+    layout _extract unpacks into the dataset directory."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for path in sorted(directory.iterdir()):
+            archive.write(path, arcname=f"{name}/{path.name}")
+    return buffer.getvalue()
+
+
+@pytest.fixture
+def fake_get(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, bytes]:
+    """`requests.get` answered from a dict, the importer's cache pointed
+    at tmp_path: nothing touches the network or the real .cache."""
+    payloads: dict[str, bytes] = {}
+
+    def get(url: str, **_kwargs: object) -> FakeResponse:
+        return FakeResponse(payloads[url])
+
+    monkeypatch.setattr("menu.nutrition.sources.cnf.requests.get", get)
+    monkeypatch.setattr("menu.nutrition.sources.cnf.CACHE_DIR", tmp_path / "cache")
+    return payloads
+
+
+def test_download_writes_the_release_into_the_cache(
+    fake_get: dict[str, bytes],
+) -> None:
+    fake_get[CNF_URL] = b"zip-bytes"
+    target = cnf._download(CNF_URL)
+    assert target == cnf.CACHE_DIR / Path(CNF_URL).name
+    assert target.read_bytes() == b"zip-bytes"
+
+    fake_get.clear()  # a second fetch would KeyError: the cache must serve
+    assert cnf._download(CNF_URL) == target
+
+
+def test_extract_unzips_next_to_the_archive(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("menu.nutrition.sources.cnf.CACHE_DIR", tmp_path)
+    archive_path = tmp_path / "release.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("release/FOOD NAME.csv", "FoodID,FoodDescription\n2,Food\n")
+
+    dataset_dir = cnf._extract(archive_path)
+    assert dataset_dir == tmp_path / "release"
+    assert (dataset_dir / "FOOD NAME.csv").exists()
+
+    (dataset_dir / "FOOD NAME.csv").unlink()
+    assert cnf._extract(archive_path) == dataset_dir
+    assert not (dataset_dir / "FOOD NAME.csv").exists()  # not re-extracted
+
+
+def test_unusable_factor_and_nutrient_rows_are_skipped(
+    tmp_path: Path, session: Session
+) -> None:
+    """A conversion factor whose measure has no leading amount, and
+    nutrient rows with an unknown id or no value, are skipped rather
+    than stored."""
+    release = tmp_path / "cnf"
+    shutil.copytree(FIXTURE_DIR, release)
+    with (release / "CONVERSION FACTOR.csv").open("a", encoding="latin-1") as handle:
+        handle.write("2,999,0.5,2000-01-01\n")  # measure 999: not in MEASURE NAME
+    with (release / "NUTRIENT AMOUNT.csv").open("a", encoding="latin-1") as handle:
+        handle.write("2,9999,1.0,0,0,102,2010-04-16\n")  # unknown nutrient id
+        handle.write("2,203,,0,0,102,2010-04-16\n")  # no value
+
+    counts = import_cnf(release, session)
+    assert counts == {"foods": 3, "portions": 18, "nutrients": 24, "kept_missing": 0}
+
+
+def test_main_downloads_extracts_and_imports(
+    fake_get: dict[str, bytes],
+    session: Session,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The release downloads (faked), unzips into the cache and imports
+    into the database the use_engine override points at."""
+    fake_get[CNF_URL] = _release_zip(FIXTURE_DIR, Path(CNF_URL).stem)
+
+    cnf.main()
+
+    assert "CNF imported: 3 foods, 18 portions, 24 nutrients" in capsys.readouterr().out
+    assert session.scalar(select(func.count()).select_from(RefFood)) == 3

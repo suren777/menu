@@ -1,12 +1,18 @@
 """LLM eval tests: a fake client, never the network."""
 
 import json
-from typing import Any
+import sys
+from typing import TYPE_CHECKING, Any
 
-from menu.domain.review import InputSet, ReviewItem
+import pytest
+
+from menu.domain.review import FoodCandidate, InputSet, ReviewItem
 from menu.ingest import llm_eval, llm_review
 from menu.ingest.llm_eval import EvalItem
 from menu.ingest.llm_review import Usage
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class KindClient:
@@ -107,3 +113,141 @@ def test_fixture_loads_with_valid_items_and_kinds() -> None:
         per_set[entry.item.input] = per_set.get(entry.item.input, 0) + 1
     assert set(per_set) == {"queue", "audit", "pair", "food_ref"}
     assert all(count >= 8 for count in per_set.values())
+
+
+class SubjectClient:
+    """One canned verdict per subject, whatever the set chunking does."""
+
+    model_id = "fake/model"
+
+    def __init__(self, verdicts: dict[str, dict[str, Any]]) -> None:
+        self.verdicts = verdicts
+        self.calls: list[tuple[str, str, dict[str, Any], int]] = []
+
+    def complete(
+        self, system: str, user: str, schema: dict[str, Any], *, max_tokens: int
+    ) -> tuple[str, Usage]:
+        self.calls.append((system, user, schema, max_tokens))
+        subjects = [
+            line.split(": ", 1)[1] for line in user.splitlines() if line[:1].isdigit()
+        ]
+        items = [
+            {"index": index, **self.verdicts[subject]}
+            for index, subject in enumerate(subjects)
+        ]
+        return json.dumps({"items": items}), Usage(1, 1)
+
+
+def _fixture_file(tmp_path: Path, entries: list[dict[str, Any]]) -> Path:
+    path = tmp_path / "fixture.json"
+    path.write_text(json.dumps(entries))
+    return path
+
+
+def test_load_fixture_rejects_an_unknown_input_set(tmp_path: Path) -> None:
+    path = _fixture_file(
+        tmp_path, [{"input": "bogus", "subject": "s", "expected_kind": "ok"}]
+    )
+    with pytest.raises(ValueError, match="unknown input set: 'bogus'"):
+        llm_eval.load_fixture(path)
+
+
+def test_load_fixture_rejects_a_kind_invalid_for_the_set(tmp_path: Path) -> None:
+    path = _fixture_file(
+        tmp_path, [{"input": "pair", "subject": "a | b", "expected_kind": "not_food"}]
+    )
+    with pytest.raises(ValueError, match="is not valid for pair"):
+        llm_eval.load_fixture(path)
+
+
+def test_load_fixture_rejects_duplicate_subjects(tmp_path: Path) -> None:
+    entry: dict[str, Any] = {"input": "queue", "subject": "milk", "expected_kind": "ok"}
+    path = _fixture_file(tmp_path, [entry, dict(entry)])
+    with pytest.raises(ValueError, match="duplicate fixture item"):
+        llm_eval.load_fixture(path)
+
+
+def test_evaluate_compares_line_override_and_food_ref_targets() -> None:
+    """_target_of reads each proposal's own attribute: the override's
+    name and the food ref's source_food_id."""
+    items = [
+        EvalItem(
+            ReviewItem(
+                input="queue", subject="milk", lines=("70g milk roughly chopped",)
+            ),
+            "line_override",
+            "milk",
+        ),
+        EvalItem(
+            ReviewItem(
+                input="food_ref",
+                subject="icing sugar",
+                candidates=(FoodCandidate("fdc", "171287", "Icing sugar"),),
+            ),
+            "food_ref",
+            "171287",
+        ),
+    ]
+    client = SubjectClient(
+        {
+            "milk": {
+                "kind": "line_override",
+                "line": "70g milk roughly chopped",
+                "name": "milk",
+                "reason": "r",
+            },
+            "icing sugar": {
+                "kind": "food_ref",
+                "source": "fdc",
+                "source_food_id": "171287",
+                "reason": "r",
+            },
+        }
+    )
+
+    results = llm_eval.evaluate(items, client)
+
+    assert results["queue"].accuracy == 1.0
+    assert results["food_ref"].accuracy == 1.0
+
+
+def test_report_prints_per_set_scores_and_misses(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    results = llm_eval.evaluate(_items(), KindClient({"kind": "ok", "reason": "r"}))
+
+    llm_eval.report(results, "fake/model")
+
+    out = capsys.readouterr().out
+    assert "LLM review accuracy (fake/model" in out
+    assert "queue: 1/2 = 0.500" in out
+    assert "miss: 'wrong kind': expected alias -> milk, got ok -> None" in out
+
+
+def test_main_scores_the_requested_sets(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The real fixture runs through the suggest path on a fake client;
+    --sets keeps only the named sets."""
+    constructed: list[str] = []
+
+    def fake_client(*, model_id: str) -> KindClient:
+        constructed.append(model_id)
+        return KindClient({"kind": "ok", "reason": "r"})
+
+    monkeypatch.setattr(llm_eval, "FireworksClient", fake_client)
+    monkeypatch.setattr(sys, "argv", ["menu-llm-eval", "--sets", "queue,pair"])
+
+    llm_eval.main()
+
+    out = capsys.readouterr().out
+    assert constructed == [llm_review.DEFAULT_MODEL]
+    assert "queue:" in out
+    assert "pair:" in out
+    assert "audit:" not in out  # --sets filtered the other sets out
+
+
+def test_main_rejects_an_unknown_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["menu-llm-eval", "--sets", "bogus"])
+    with pytest.raises(SystemExit):
+        llm_eval.main()

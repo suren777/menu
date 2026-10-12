@@ -5,6 +5,8 @@ session's get raises, so any network call fails the test.
 """
 
 import logging
+import shutil
+import sys
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -19,7 +21,10 @@ from menu.db.engine import database_url, make_engine
 from menu.domain.site import SiteConfig
 from menu.ingest.fetch import _cache_path
 from menu.ingest.http import http_session
-from menu.scripts.rebuild import rebuild
+from menu.nutrition.sources.cnf import CNF_URL
+from menu.nutrition.sources.cofid import COFID_URL
+from menu.nutrition.sources.fdc import FNDDS_URL, SR_URL
+from menu.scripts.rebuild import DEFAULT_TARGET, main, rebuild
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -178,3 +183,76 @@ def test_rebuild_force_builds_into_its_target_not_the_default(
 
     with Session(db_engine) as session:
         assert session.scalar(select(func.count()).select_from(Page)) == 0
+
+
+NUTRITION_FIXTURES = Path(__file__).resolve().parent.parent / "nutrition" / "fixtures"
+
+
+@pytest.fixture
+def releases(tmp_path: Path) -> Path:
+    """A sources dir laid out the way _import_source reads it: the FDC
+    and CNF extracted dataset directories, the CoFID workbook itself."""
+    sources = tmp_path / "sources"
+    shutil.copytree(
+        NUTRITION_FIXTURES / "fdc_sample" / "sr", sources / "fdc" / Path(SR_URL).stem
+    )
+    shutil.copytree(
+        NUTRITION_FIXTURES / "fdc_sample" / "survey",
+        sources / "fdc" / Path(FNDDS_URL).stem,
+    )
+    shutil.copytree(
+        NUTRITION_FIXTURES / "cnf_sample", sources / "cnf" / Path(CNF_URL).stem
+    )
+    (sources / "cofid").mkdir(parents=True)
+    shutil.copy(
+        NUTRITION_FIXTURES / "cofid_sample.xlsx",
+        sources / "cofid" / Path(COFID_URL).name,
+    )
+    return sources
+
+
+@pytest.mark.usefixtures("test_registry", "no_network")
+def test_rebuild_imports_the_reference_releases(
+    releases: Path,
+    drop_database: Callable[[str], None],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Releases on disk are imported into the fresh target; a site whose
+    top-level sitemap is not in the offline cache is skipped with a
+    warning naming it."""
+    target = _target()
+    drop_database(target)  # no-op unless the rebuild leaked it
+    try:
+        with caplog.at_level(logging.WARNING, logger="menu.scripts.rebuild"):
+            summary = rebuild(target, sources_dir=releases)
+
+        assert summary["sources"] == {
+            "imported": ["fdc", "cofid", "cnf"],
+            "skipped": [],
+        }
+        assert summary["sites"] == {}  # the sitemap is not in the cache
+        assert "testsite" in caplog.text
+        assert "top-level sitemap not in the offline cache" in caplog.text
+    finally:
+        drop_database(target)
+
+
+def test_main_passes_the_target_and_force_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """--target/--force flow into rebuild(); the default target stays
+    menu_rebuilt."""
+    calls: list[tuple[str, bool]] = []
+
+    def fake_rebuild(target: str, force: bool = False) -> None:
+        calls.append((target, force))
+
+    monkeypatch.setattr("menu.scripts.rebuild.rebuild", fake_rebuild)
+
+    monkeypatch.setattr(sys, "argv", ["menu-rebuild", "--target", "other", "--force"])
+    main()
+    assert calls == [("other", True)]
+
+    monkeypatch.setattr(sys, "argv", ["menu-rebuild"])
+    main()
+    assert calls == [("other", True), (DEFAULT_TARGET, False)]

@@ -26,7 +26,7 @@ from menu.db.database import (
     RefFood,
 )
 from menu.domain.review import FoodCandidate, ReviewItem
-from menu.ingest.embeddings import EMBEDDINGS_DIR, embed, nearest
+from menu.ingest.embeddings import embed, nearest
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
@@ -131,8 +131,8 @@ def _nearest_names(
     if not query_texts or not corpus_texts:
         return [[] for _ in query_texts]
     hits = nearest(
-        embed(query_texts, embedder=embedder, cache_dir=EMBEDDINGS_DIR),
-        embed(corpus_texts, embedder=embedder, cache_dir=EMBEDDINGS_DIR),
+        embed(query_texts, embedder=embedder),
+        embed(corpus_texts, embedder=embedder),
         k=k,
     )
     return [[corpus_names[index] for index, _score in row] for row in hits]
@@ -251,7 +251,6 @@ def pair_items(
     vectors = embed(
         [text for _id, _name, _origin, text in concepts],
         embedder=embedder,
-        cache_dir=EMBEDDINGS_DIR,
     )
     hits = nearest(vectors, vectors, k=k + 1)  # +1 for self, dropped below
     joined = {
@@ -351,7 +350,7 @@ def ref_neighbours(
         )
         queries.append(concept_text(name, _top_text(raws)))
     hits = nearest(
-        embed(queries, embedder=embedder, cache_dir=EMBEDDINGS_DIR),
+        embed(queries, embedder=embedder),
         embed(
             [
                 (
@@ -362,7 +361,6 @@ def ref_neighbours(
                 for food in foods
             ],
             embedder=embedder,
-            cache_dir=EMBEDDINGS_DIR,
         ),
         k=len(foods),
     )

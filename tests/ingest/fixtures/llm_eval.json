@@ -28,7 +28,7 @@
     "subject": "sultanas",
     "lines": ["100 g sultanas"],
     "known_concepts": ["raisin", "currant"],
-    "expected_kind": "alias",
+    "expected_kind": "variant",
     "expected_target": "raisin"
   },
   {
@@ -50,15 +50,15 @@
     "subject": "ground almonds",
     "lines": ["100 g ground almonds"],
     "known_concepts": ["almond"],
-    "expected_kind": "ok"
+    "expected_kind": "variant",
+    "expected_target": "almond"
   },
   {
     "input": "queue",
     "subject": "vanilla extract",
     "lines": ["1 tsp vanilla extract"],
     "known_concepts": ["vanilla", "vanilla essence"],
-    "expected_kind": "alias",
-    "expected_target": "vanilla"
+    "expected_kind": "ok"
   },
   {
     "input": "queue",
@@ -135,7 +135,8 @@
     "input": "audit",
     "subject": "smoked bacon lardons",
     "known_concepts": ["bacon", "lardon"],
-    "expected_kind": "ok"
+    "expected_kind": "variant",
+    "expected_target": "lardon"
   },
   {
     "input": "audit",

@@ -9,18 +9,40 @@ is an empty ledger, not an error.
 """
 
 import json
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 import pydantic
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Iterator
 
 SUGGESTIONS_PATH = (
     Path(__file__).resolve().parents[1] / "db/ingredients/suggestions.json"
 )
 """The committed suggestions ledger, under menu/db/ingredients/."""
+
+_ledger_override: ContextVar[Path | None] = ContextVar("ledger_override", default=None)
+
+
+def ledger_path() -> Path:
+    """The ledger load()/save() act on by default: a `use_ledger`
+    override > the committed SUGGESTIONS_PATH."""
+    return _ledger_override.get() or SUGGESTIONS_PATH
+
+
+@contextmanager
+def use_ledger(path: Path) -> Iterator[None]:
+    """Make `path` the default ledger for load()/save() calls with no
+    explicit path run in the block — and only there."""
+    token = _ledger_override.set(path)
+    try:
+        yield
+    finally:
+        _ledger_override.reset(token)
+
 
 Status = Literal["pending", "accepted", "rejected"]
 
@@ -146,10 +168,10 @@ class Suggestion(pydantic.BaseModel):
 
 
 def load(path: Path | None = None) -> list[Suggestion]:
-    """Read the ledger; a missing file is an empty one. The default
-    path is resolved at call time, so tests can repoint it."""
+    """Read the ledger; a missing file is an empty one. A path of None
+    resolves through ledger_path()."""
     if path is None:
-        path = SUGGESTIONS_PATH
+        path = ledger_path()
     if not path.exists():
         return []
     entries: list[Any] = json.loads(path.read_text(encoding="utf-8"))
@@ -158,9 +180,9 @@ def load(path: Path | None = None) -> list[Suggestion]:
 
 def save(suggestions: Iterable[Suggestion], path: Path | None = None) -> None:
     """Write the ledger deterministically: sorted, indented, atomic.
-    The default path is resolved at call time, so tests can repoint it."""
+    A path of None resolves through ledger_path()."""
     if path is None:
-        path = SUGGESTIONS_PATH
+        path = ledger_path()
     ordered = sorted(
         suggestions, key=lambda entry: (entry.input, entry.subject, entry.kind)
     )

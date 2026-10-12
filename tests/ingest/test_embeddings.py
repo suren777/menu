@@ -92,6 +92,13 @@ def test_cache_is_per_model(tmp_path: Path) -> None:
     ]
 
 
+def test_embed_defaults_to_the_scoped_dir(tmp_path: Path) -> None:
+    """embed() with no cache_dir caches into use_embeddings_dir's."""
+    with embeddings.use_embeddings_dir(tmp_path):
+        embed(["butter"], embedder=FakeEmbedder())
+    assert sorted(p.name for p in tmp_path.glob("*.npz")) == ["fake__model.npz"]
+
+
 def test_nearest_topk_and_floor() -> None:
     # Unit vectors at 0, 60 and 90 degrees from the query axis; the
     # dot products below are exact in float32.

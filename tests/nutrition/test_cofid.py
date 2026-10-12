@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from menu.db.database import (
     FoodSource,
@@ -14,9 +14,12 @@ from menu.db.database import (
     RefFood,
     RefNutrient,
 )
-from menu.nutrition.sources.cofid import import_cofid
+from menu.nutrition.sources import cofid
+from menu.nutrition.sources.cofid import COFID_URL, import_cofid
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from sqlalchemy.orm import Session
 
 FIXTURE = Path(__file__).parent / "fixtures" / "cofid_sample.xlsx"
@@ -211,3 +214,66 @@ def test_fdc_rows_untouched(session: Session) -> None:
     ).all()
     assert egg_nutrients == []
     assert len(session.scalars(select(RefFood)).all()) == 4
+
+
+class FakeResponse:
+    """requests.Response stand-in: one payload, usable as a block."""
+
+    def __init__(self, payload: bytes) -> None:
+        self.payload = payload
+
+    def __enter__(self) -> FakeResponse:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def iter_content(self, chunk_size: int) -> Iterator[bytes]:
+        for start in range(0, len(self.payload), chunk_size):
+            yield self.payload[start : start + chunk_size]
+
+
+@pytest.fixture
+def fake_get(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, bytes]:
+    """`requests.get` answered from a dict, the importer's cache pointed
+    at tmp_path: nothing touches the network or the real .cache."""
+    payloads: dict[str, bytes] = {}
+
+    def get(url: str, **_kwargs: object) -> FakeResponse:
+        return FakeResponse(payloads[url])
+
+    monkeypatch.setattr("menu.nutrition.sources.cofid.requests.get", get)
+    monkeypatch.setattr("menu.nutrition.sources.cofid.CACHE_DIR", tmp_path / "cache")
+    return payloads
+
+
+def test_download_writes_the_workbook_into_the_cache(
+    fake_get: dict[str, bytes],
+) -> None:
+    fake_get[COFID_URL] = FIXTURE.read_bytes()
+    path = cofid._download(COFID_URL)
+    assert path == cofid.CACHE_DIR / Path(COFID_URL).name
+    assert path.read_bytes() == FIXTURE.read_bytes()
+
+    fake_get.clear()  # a second fetch would KeyError: the cache must serve
+    assert cofid._download(COFID_URL) == path
+
+
+def test_main_downloads_and_imports(
+    fake_get: dict[str, bytes],
+    session: Session,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The workbook downloads (faked) into the cache and imports into
+    the database the use_engine override points at."""
+    fake_get[COFID_URL] = FIXTURE.read_bytes()
+
+    cofid.main()
+
+    assert (
+        "CoFID imported: 3 foods, 0 portions, 22 nutrients" in capsys.readouterr().out
+    )
+    assert session.scalar(select(func.count()).select_from(RefFood)) == 3

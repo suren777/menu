@@ -15,6 +15,8 @@ ingest time. `embed` is the only entry point the rest of the code
 uses; `nearest` is a numpy dot product, no vector store.
 """
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
@@ -23,6 +25,7 @@ from fastembed import TextEmbedding
 from menu.ingest.fetch import DEFAULT_CACHE_DIR
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from pathlib import Path
 
 DEFAULT_MODEL = "BAAI/bge-small-en-v1.5"
@@ -30,6 +33,28 @@ MODELS_DIR = DEFAULT_CACHE_DIR / "models"
 """Where model weights are downloaded once (fastembed's cache_dir)."""
 EMBEDDINGS_DIR = DEFAULT_CACHE_DIR / "embeddings"
 """Where per-model vector caches live, next to the page cache."""
+
+_dir_override: ContextVar[Path | None] = ContextVar(
+    "embeddings_dir_override", default=None
+)
+
+
+def embeddings_dir() -> Path:
+    """The directory embed() caches into by default: a
+    `use_embeddings_dir` override > EMBEDDINGS_DIR."""
+    return _dir_override.get() or EMBEDDINGS_DIR
+
+
+@contextmanager
+def use_embeddings_dir(path: Path) -> Iterator[None]:
+    """Make `path` the default vector-cache directory for embed() calls
+    in the block that pass no cache_dir — and only there."""
+    token = _dir_override.set(path)
+    try:
+        yield
+    finally:
+        _dir_override.reset(token)
+
 
 _BLOCK_ROWS = 512
 
@@ -91,19 +116,22 @@ def embed(
     texts: list[str],
     *,
     embedder: Embedder | None = None,
-    cache_dir: Path = EMBEDDINGS_DIR,
+    cache_dir: Path | None = None,
 ) -> np.ndarray:
     """L2-normalised float32 vectors for `texts`, in input order.
 
     The only entry point the rest of the code uses. Vectors are
     cached per model in `<cache_dir>/<model id>.npz` (arrays `texts`
-    and `vectors`); only texts missing from the cache are embedded,
+    and `vectors`); a cache_dir of None resolves through
+    embeddings_dir(). Only texts missing from the cache are embedded,
     and the file is rewritten atomically (tmp file + replace).
     Empty input returns an empty array without loading any model.
     """
     if not texts:
         return np.zeros((0, 0), np.float32)
     worker = FastEmbedder() if embedder is None else embedder
+    if cache_dir is None:
+        cache_dir = embeddings_dir()
     path = _cache_path(cache_dir, worker.model_id)
     cached_texts: list[str] = []
     vectors_by_text: dict[str, np.ndarray] = {}

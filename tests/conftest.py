@@ -22,7 +22,7 @@ from menu.db.connection import use_engine
 from menu.db.database import initialise
 from menu.db.engine import make_engine
 from menu.domain import suggestions
-from menu.ingest import review_inputs
+from menu.ingest import embeddings
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -124,16 +124,18 @@ def template_database(pg_container: PostgresContainer) -> str:
 
 
 @pytest.fixture(autouse=True)
-def empty_suggestions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def empty_suggestions(tmp_path: Path) -> Iterator[None]:
     """Seeding reads suggestions.json; tests start from an empty ledger
     so accepted entries committed to the real file can't change them."""
-    monkeypatch.setattr(suggestions, "SUGGESTIONS_PATH", tmp_path / "suggestions.json")
+    with suggestions.use_ledger(tmp_path / "suggestions.json"):
+        yield
 
 
 @pytest.fixture(autouse=True)
-def temp_embeddings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def temp_embeddings(tmp_path: Path) -> Iterator[None]:
     """Embedding caches written by tests stay out of the real .cache."""
-    monkeypatch.setattr(review_inputs, "EMBEDDINGS_DIR", tmp_path / "embeddings")
+    with embeddings.use_embeddings_dir(tmp_path / "embeddings"):
+        yield
 
 
 @pytest.fixture

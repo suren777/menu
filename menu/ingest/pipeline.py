@@ -435,9 +435,7 @@ def suggest_command(
             else:  # pragma: no cover - the CLI validates the names
                 raise ValueError(f"unknown input set: {name}")
 
-    # path= by keyword, resolved through the module at call time, so
-    # tests can point the ledger at a temp file.
-    ledger = suggestions.load(path=suggestions.SUGGESTIONS_PATH)
+    ledger = suggestions.load()
     reviewed = suggestions.reviewed_keys(ledger)
     fresh = {
         name: [item for item in group if (item.input, item.subject) not in reviewed]
@@ -466,7 +464,7 @@ def suggest_command(
         if entry.input == "pair" and entry.subject in pair_similarity:
             evidence = {**evidence, "similarity": pair_similarity[entry.subject]}
         written.append(entry.model_copy(update={"model": model, "evidence": evidence}))
-    suggestions.save([*ledger, *written], path=suggestions.SUGGESTIONS_PATH)
+    suggestions.save([*ledger, *written])
 
     print(f"Suggestions written: {len(written)}")
     for kind, count in sorted(Counter(entry.kind for entry in written).items()):

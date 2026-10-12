@@ -26,18 +26,13 @@ from menu.domain import suggestions as suggestions_module
 from .helpers import add_recipe, add_term, store_lines
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from menu.domain.ingredients import ParsedLine
 
 
-def _write_suggestions(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: dict[str, Any]
-) -> None:
-    """Point the suggestions ledger at a temp file holding one entry."""
-    path = tmp_path / "suggestions.json"
-    path.write_text(json.dumps([entry]), encoding="utf-8")
-    monkeypatch.setattr(suggestions_module, "SUGGESTIONS_PATH", path)
+def _write_suggestions(entry: dict[str, Any]) -> None:
+    """Write one entry into the ledger the autouse empty_suggestions
+    fixture scopes (per-test tmp, so tests stay isolated)."""
+    suggestions_module.ledger_path().write_text(json.dumps([entry]), encoding="utf-8")
 
 
 def _alias(term: str, target: str, variant: str | None = None) -> dict[str, Any]:
@@ -179,17 +174,13 @@ def test_re_resolve_repoints_terms_without_reparse(
 
 @pytest.mark.usefixtures("db_engine")
 def test_accepted_alias_repoints_lines_on_re_resolve(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An accepted alias suggestion acts exactly like a hand ALIASES
     entry: re-resolve re-points the stored auto term's lines — the
     parser is never called."""
     store_lines(add_recipe("https://x/1"), {"recipeIngredient": ["240ml oat milk"]})
-    _write_suggestions(
-        tmp_path,
-        monkeypatch,
-        _alias("oat milk", "milk", "oat"),
-    )
+    _write_suggestions(_alias("oat milk", "milk", "oat"))
 
     def boom(*_args: object, **_kwargs: object) -> ParsedLine:
         raise AssertionError("re-resolve must not parse")
@@ -205,13 +196,11 @@ def test_accepted_alias_repoints_lines_on_re_resolve(
 
 
 @pytest.mark.usefixtures("db_engine")
-def test_re_resolve_keeps_an_accepted_alias(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_re_resolve_keeps_an_accepted_alias() -> None:
     """An accepted alias is a curated decision: a second re-resolve
     does not revert the term to the heuristics as stale."""
     store_lines(add_recipe("https://x/1"), {"recipeIngredient": ["240ml oat milk"]})
-    _write_suggestions(tmp_path, monkeypatch, _alias("oat milk", "milk", "oat"))
+    _write_suggestions(_alias("oat milk", "milk", "oat"))
 
     with get_session() as session:
         resolve.re_resolve(session)

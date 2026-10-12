@@ -20,11 +20,11 @@ dependencies = [
 ]
 
 [project.scripts]
-menu-ingest = "menu.ingest.pipeline:main"
+menu-ingest = "menu.scripts.ingest:main"
 menu-fdc-import = "menu.nutrition.sources.fdc:main"
 menu-cofid-import = "menu.nutrition.sources.cofid:main"
 menu-cnf-import = "menu.nutrition.sources.cnf:main"
-menu-rebuild = "menu.db.rebuild:main"
+menu-rebuild = "menu.scripts.rebuild:main"
 menu-embed-eval = "menu.ingest.embeddings_eval:main"
 menu-llm-eval = "menu.ingest.llm_eval:main"
 

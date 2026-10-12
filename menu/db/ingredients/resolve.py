@@ -15,7 +15,7 @@ from menu.db.database import (
 from menu.db.ingredients import repository, seed
 from menu.db.ingredients.grams import ingredient_conversions, to_grams
 from menu.db.ingredients.seed import seed_ingredient_data
-from menu.ingest.ingredients import name_needs_review
+from menu.domain.ingredients import name_needs_review
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session

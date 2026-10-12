@@ -20,15 +20,15 @@ from menu.db.database import (
 from menu.db.ingredients import lines as lines_module
 from menu.db.ingredients import repository, resolve
 from menu.db.ingredients import seed as seed_module
-from menu.db.ingredients import suggestions as suggestions_module
 from menu.db.ingredients.seed import seed_ingredient_data
+from menu.domain import suggestions as suggestions_module
 
 from .helpers import add_recipe, add_term, store_lines
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from menu.ingest.ingredients import ParsedLine
+    from menu.domain.ingredients import ParsedLine
 
 
 def _write_suggestions(

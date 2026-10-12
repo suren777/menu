@@ -11,7 +11,7 @@ from menu.db.database import (
     RecipeIngredient,
     RecipeNutrition,
 )
-from menu.db.metrics import collect_metrics
+from menu.scripts.metrics import collect_metrics
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session

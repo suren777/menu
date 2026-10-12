@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 import pytest
 from ingredient_parser import UREG
 
-from menu.ingest.units import (
+from menu.domain.units import (
     COUNT,
     MASS,
     VOLUME,

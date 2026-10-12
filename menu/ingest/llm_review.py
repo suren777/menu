@@ -18,14 +18,14 @@ import os
 import re
 from collections import Counter
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import requests
 from requests import Session
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 
-from menu.db.ingredients.suggestions import (
+from menu.domain.suggestions import (
     AliasProposal,
     FoodRefProposal,
     Kind,
@@ -42,6 +42,8 @@ if TYPE_CHECKING:
 
     from urllib3 import BaseHTTPResponse
 
+    from menu.domain.review import InputSet, ReviewItem
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "https://api.fireworks.ai/inference/v1"
@@ -57,8 +59,6 @@ _MAX_RETRY_AFTER_SECONDS = 60
 _BASE_TOKENS = 1_000
 _TOKENS_PER_ITEM = 150
 _SCHEMA_NAME = "menu_review"
-
-InputSet = Literal["queue", "audit", "pair", "food_ref"]
 
 
 class _CappedRetry(Retry):
@@ -109,26 +109,6 @@ class _PostSession(Protocol):
 
 class LLMError(RuntimeError):
     """The LLM request could not be made or answered unusably."""
-
-
-@dataclass(frozen=True)
-class FoodCandidate:
-    """One reference-food row an ingredient might map to."""
-
-    source: str  # "fdc" | "cofid" | "cnf"
-    source_food_id: str
-    description: str
-
-
-@dataclass(frozen=True)
-class ReviewItem:
-    """One item to classify, with the context the model may use."""
-
-    input: InputSet
-    subject: str  # term text; for "pair": "a | b"; for "food_ref": the ingredient name
-    lines: tuple[str, ...] = ()  # raw recipe lines that use the subject
-    candidates: tuple[FoodCandidate, ...] = ()  # food_ref only
-    known_concepts: tuple[str, ...] = ()  # existing concept names an alias may target
 
 
 @dataclass(frozen=True)

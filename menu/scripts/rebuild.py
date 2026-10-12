@@ -35,7 +35,7 @@ from menu.nutrition.sources.fdc import FNDDS_URL, SR_URL, import_fdc
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
-    from menu.ingest.registry import SiteConfig
+    from menu.domain.site import SiteConfig
 
 logger = logging.getLogger(__name__)
 

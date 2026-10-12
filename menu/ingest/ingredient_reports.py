@@ -13,7 +13,8 @@ from menu.db.database import (
     RecipeIngredient,
     RefFood,
 )
-from menu.db.ingredients import repository, review_inputs
+from menu.db.ingredients import repository
+from menu.ingest import review_inputs
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session

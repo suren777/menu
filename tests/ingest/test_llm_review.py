@@ -13,7 +13,8 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3 import HTTPResponse
 
-from menu.db.ingredients.suggestions import (
+from menu.domain.review import FoodCandidate, InputSet, ReviewItem
+from menu.domain.suggestions import (
     AliasProposal,
     FoodRefProposal,
     LineOverrideProposal,
@@ -23,10 +24,7 @@ from menu.db.ingredients.suggestions import (
 from menu.ingest import llm_review
 from menu.ingest.llm_review import (
     FireworksClient,
-    FoodCandidate,
-    InputSet,
     LLMError,
-    ReviewItem,
     SuggestResult,
     Usage,
     suggest,

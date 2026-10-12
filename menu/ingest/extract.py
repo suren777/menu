@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from bs4 import BeautifulSoup
 
-    from menu.ingest.registry import SiteConfig
+    from menu.domain.site import SiteConfig
 
 JSON_LD_TYPE = "application/ld+json"
 

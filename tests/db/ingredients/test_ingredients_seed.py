@@ -18,8 +18,8 @@ from menu.db.database import (
     RefPortion,
 )
 from menu.db.ingredients import repository
-from menu.db.ingredients import suggestions as suggestions_module
 from menu.db.ingredients.seed import ALIASES, NOT_FOOD, seed_ingredient_data
+from menu.domain import suggestions as suggestions_module
 
 if TYPE_CHECKING:
     from pathlib import Path

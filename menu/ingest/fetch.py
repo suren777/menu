@@ -29,7 +29,7 @@ from menu.ingest.http import USER_AGENT, http_session
 if TYPE_CHECKING:
     from requests import Response
 
-    from menu.ingest.registry import SiteConfig
+    from menu.domain.site import SiteConfig
 
 # Anchored to the project root so the cache doesn't depend on the
 # directory the crawl is started from.

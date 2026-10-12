@@ -11,7 +11,7 @@ from typing import cast
 import pytest
 
 from menu.db.ingredients.lines import _split_or_alternative
-from menu.ingest.ingredients import (
+from menu.domain.ingredients import (
     canonical_name,
     line_needs_review,
     name_needs_review,
@@ -24,7 +24,7 @@ from menu.ingest.sites.smitten_kitchen import SMITTEN_KITCHEN
 
 US = BBC_GOOD_FOOD.model_copy(update={"unit_system": "us"})
 
-FIXTURE = Path(__file__).parent / "fixtures" / "bbc_lines.json"
+FIXTURE = Path(__file__).resolve().parents[1] / "ingest/fixtures/bbc_lines.json"
 
 
 @pytest.mark.parametrize(
@@ -327,7 +327,9 @@ def test_parse_line_strip_leaves_other_sites_alone() -> None:
     assert "king arthur" in parsed.name
 
 
-KAB_FIXTURE = Path(__file__).parent / "fixtures" / "king_arthur_lines.json"
+KAB_FIXTURE = (
+    Path(__file__).resolve().parents[1] / "ingest/fixtures/king_arthur_lines.json"
+)
 
 
 def _kab_cases() -> list[dict[str, object]]:
@@ -344,7 +346,9 @@ def test_king_arthur_cached_lines_parse(case: dict[str, object]) -> None:
         assert parsed.raw_text == line
 
 
-OTTOLENGHI_FIXTURE = Path(__file__).parent / "fixtures" / "ottolenghi_lines.json"
+OTTOLENGHI_FIXTURE = (
+    Path(__file__).resolve().parents[1] / "ingest/fixtures/ottolenghi_lines.json"
+)
 
 
 def _ottolenghi_cases() -> list[dict[str, object]]:
@@ -365,7 +369,7 @@ def test_ottolenghi_cached_lines_parse(case: dict[str, object]) -> None:
 
 
 SMITTEN_KITCHEN_FIXTURE = (
-    Path(__file__).parent / "fixtures" / "smitten_kitchen_lines.json"
+    Path(__file__).resolve().parents[1] / "ingest/fixtures/smitten_kitchen_lines.json"
 )
 
 

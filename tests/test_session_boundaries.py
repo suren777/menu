@@ -14,10 +14,10 @@ MENU_DIR = Path(__file__).resolve().parent.parent / "menu"
 
 # The entrypoints and jobs that may open their own session: the CLI
 # and crawl pipeline, the rebuild job, the reference importers, the
-# eval scripts, and connection.py, which defines the factories.
+# eval scripts, and connection.py, which defines the factories. The
+# whole scripts layer is entrypoints and top-level jobs by definition.
 ALLOWED = {
     "menu/db/connection.py",
-    "menu/db/rebuild.py",
     "menu/ingest/embeddings_eval.py",
     "menu/ingest/llm_eval.py",
     "menu/ingest/pipeline.py",
@@ -25,6 +25,7 @@ ALLOWED = {
     "menu/nutrition/sources/cofid.py",
     "menu/nutrition/sources/fdc.py",
 }
+ALLOWED_PACKAGE = "menu/scripts/"
 
 SESSION_FACTORIES = {"get_session", "get_ro_session"}
 
@@ -48,7 +49,11 @@ def test_library_code_never_opens_its_own_session() -> None:
             if not isinstance(node, ast.Call):
                 continue
             name = _called_name(node)
-            if name in SESSION_FACTORIES and module not in ALLOWED:
+            if (
+                name in SESSION_FACTORIES
+                and module not in ALLOWED
+                and not module.startswith(ALLOWED_PACKAGE)
+            ):
                 offenders.append(f"{module}:{node.lineno}")
     assert not offenders, (
         "Library functions must take `session: Session` from the caller; "

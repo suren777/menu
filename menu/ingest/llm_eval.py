@@ -15,7 +15,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from menu.db.ingredients.suggestions import (
+from menu.domain.review import FoodCandidate, InputSet, ReviewItem
+from menu.domain.suggestions import (
     AliasProposal,
     FoodRefProposal,
     LineOverrideProposal,
@@ -25,17 +26,14 @@ from menu.ingest import llm_review
 from menu.ingest.llm_review import (
     DEFAULT_MODEL,
     FireworksClient,
-    FoodCandidate,
-    InputSet,
     LLMClient,
-    ReviewItem,
     suggest,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from menu.db.ingredients.suggestions import Suggestion
+    from menu.domain.suggestions import Suggestion
 
 FIXTURE_PATH = (
     Path(__file__).resolve().parents[2] / "tests/ingest/fixtures/llm_eval.json"

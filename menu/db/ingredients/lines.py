@@ -18,7 +18,7 @@ from menu.db.database import (
 )
 from menu.db.ingredients import repository, seed
 from menu.db.ingredients.grams import _line_grams
-from menu.ingest.ingredients import (
+from menu.domain.ingredients import (
     canonical_name,
     line_needs_review,
     name_needs_review,
@@ -28,8 +28,8 @@ from menu.ingest.ingredients import (
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
-    from menu.ingest.ingredients import ParsedLine
-    from menu.ingest.registry import SiteConfig
+    from menu.domain.ingredients import ParsedLine
+    from menu.domain.site import SiteConfig
 
 logger = logging.getLogger(__name__)
 

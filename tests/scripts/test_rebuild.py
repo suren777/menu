@@ -16,10 +16,10 @@ from sqlalchemy.orm import Session
 
 from menu.db.database import Page, Recipe, RecipeIngredient
 from menu.db.engine import database_url, make_engine
-from menu.db.rebuild import rebuild
+from menu.domain.site import SiteConfig
 from menu.ingest.fetch import _cache_path
 from menu.ingest.http import http_session
-from menu.ingest.registry import SiteConfig
+from menu.scripts.rebuild import rebuild
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -107,7 +107,7 @@ def test_rebuild_replays_the_cache_offline(
     target = _target()
     drop_database(target)  # no-op unless the rebuild leaked it
     try:
-        with caplog.at_level(logging.WARNING, logger="menu.db.rebuild"):
+        with caplog.at_level(logging.WARNING, logger="menu.scripts.rebuild"):
             summary = rebuild(target, sources_dir=tmp_path / "sources")
 
         assert summary["sources"] == {

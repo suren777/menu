@@ -21,7 +21,8 @@ from testcontainers.community.postgres import PostgresContainer
 from menu.db.connection import use_engine
 from menu.db.database import initialise
 from menu.db.engine import make_engine
-from menu.db.ingredients import review_inputs, suggestions
+from menu.domain import suggestions
+from menu.ingest import review_inputs
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator

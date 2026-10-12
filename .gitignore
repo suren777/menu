@@ -166,3 +166,5 @@ cython_debug/
 /database.db
 GEMINI.md
 database.db-journal
+database.db-shm
+database.db-wal

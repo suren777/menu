@@ -16,7 +16,7 @@ import hashlib
 import json
 import logging
 import re
-from argparse import ArgumentParser
+from argparse import ArgumentParser, ArgumentTypeError
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -58,6 +58,7 @@ from menu.nutrition.reports import (
 )
 
 if TYPE_CHECKING:
+    from argparse import Namespace
     from collections.abc import Sequence
 
     from menu.db.ingredients.suggestions import Suggestion
@@ -490,88 +491,180 @@ def suggest_command(
     )
 
 
-def main() -> None:
-    logging.basicConfig()
+def _comma_sets(value: str) -> list[str]:
+    """The --sets comma list: deduplicated, with unknown names rejected
+    so argparse reports them like any other bad argument."""
+    names = list(dict.fromkeys(value.split(",")))
+    unknown = [name for name in names if name not in _SUGGEST_SETS]
+    if unknown:
+        raise ArgumentTypeError(f"unknown input set(s): {', '.join(unknown)}")
+    return names
+
+
+def _positive_int(value: str) -> int:
+    """A --limit value of at least 1."""
+    number = int(value)
+    if number < 1:
+        raise ArgumentTypeError("must be at least 1")
+    return number
+
+
+def _cmd_crawl(args: Namespace) -> None:
+    site = get_site(args.site)
+    try:
+        import_sitemap(site)
+        crawl_sitemap(site)
+    except BlockedError as exc:
+        # A blocked sitemap or crawl is a site-wide block: stop cleanly
+        # instead of a traceback. Unfinished pages stay queued.
+        raise SystemExit(f"{site.name}: blocked: {exc}") from exc
+
+
+def _cmd_reparse(args: Namespace) -> None:
+    reparse_site(get_site(args.site))
+
+
+def _cmd_re_resolve(_args: Namespace) -> None:
+    terms_changed, regrammed, pruned = re_resolve()
+    print(
+        f"Re-resolved: {terms_changed} terms changed, "
+        f"{regrammed} lines regrammed, {pruned} concepts pruned"
+    )
+
+
+def _cmd_suggest(args: Namespace) -> None:
+    suggest_command(args.sets, limit=args.limit, dry_run=args.dry_run)
+
+
+def _cmd_derive_nutrition(_args: Namespace) -> None:
+    print(f"Derived nutrition for {derive_all_nutrition()} recipes")
+
+
+def _cmd_report_fdc_conflicts(_args: Namespace) -> None:
+    for food, names in fdc_id_conflicts():
+        print(f"{food}: {', '.join(names)}")
+
+
+def _cmd_report_ref_review(_args: Namespace) -> None:
+    for count, name, candidate, matches, neighbours in ref_review(
+        embedder=suggest_embedder()
+    ):
+        head = f"{count:5d}  {name}:"
+        if candidate is not None:
+            head += f" parser candidate: {candidate}"
+        else:
+            head += " no parser candidate"
+        print(" | ".join([head, *matches]))
+        if neighbours:
+            print(f"    {' | '.join(neighbours)}")
+
+
+def _cmd_report_validate_nutrition(_args: Namespace) -> None:
+    validation_report()
+
+
+def _cmd_report_coverage(_args: Namespace) -> None:
+    coverage_report()
+
+
+def _cmd_metrics(args: Namespace) -> None:
+    path = Path(args.path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(collect_metrics(), indent=2, sort_keys=True) + "\n")
+    print(f"Metrics snapshot written to {path}")
+
+
+def _build_parser() -> ArgumentParser:
     parser = ArgumentParser(description="Ingest recipes for a registered site.")
-    parser.add_argument(
-        "site",
-        nargs="?",
-        help="site name from the registry (not needed for the " "nutrition reports)",
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    crawl_parser = subparsers.add_parser(
+        "crawl", help="import the site's sitemaps and crawl its queued pages"
     )
-    parser.add_argument(
-        "--reparse",
-        action="store_true",
-        help="re-parse stored ingredient lines without re-fetching",
+    crawl_parser.add_argument("site", help="site name from the registry")
+    crawl_parser.set_defaults(handler=_cmd_crawl)
+
+    reparse_parser = subparsers.add_parser(
+        "reparse", help="re-parse stored ingredient lines without re-fetching"
     )
-    parser.add_argument(
-        "--re-resolve",
-        action="store_true",
+    reparse_parser.add_argument("site", help="site name from the registry")
+    reparse_parser.set_defaults(handler=_cmd_reparse)
+
+    re_resolve_parser = subparsers.add_parser(
+        "re-resolve",
         help="re-apply the seeds and review heuristics to the terms "
-        "without re-running the parser, then exit",
+        "without re-running the parser",
     )
-    parser.add_argument(
-        "--fdc-report",
-        action="store_true",
-        help="list canonical ingredients sharing a reference food with "
-        "no alias between them (candidates to hand-seed), then exit",
+    re_resolve_parser.set_defaults(handler=_cmd_re_resolve)
+
+    suggest_parser = subparsers.add_parser(
+        "suggest",
+        help="send the review input sets through the LLM and append the "
+        "verdicts to suggestions.json",
     )
-    parser.add_argument(
-        "--ref-review",
-        action="store_true",
-        help="list the top ingredients without a confirmed reference "
-        "by ingredient line count, with text and embedding "
-        "neighbours, then exit",
-    )
-    parser.add_argument(
-        "--suggest",
-        nargs="?",
-        const=",".join(_SUGGEST_SETS),
-        default=None,
+    suggest_parser.add_argument(
+        "--sets",
+        type=_comma_sets,
+        default=list(_SUGGEST_SETS),
         metavar="SETS",
-        help="send the review input sets (comma list of queue,audit,"
-        "pair,food_ref; default all four) through the LLM and append "
-        "the verdicts to suggestions.json, then exit",
+        help="comma list of queue,audit,pair,food_ref (default all four)",
     )
-    parser.add_argument(
-        "--suggest-limit",
-        type=int,
+    suggest_parser.add_argument(
+        "--limit",
+        type=_positive_int,
         metavar="N",
-        help="cap the items per input set (with --suggest)",
+        help="cap the items per input set",
     )
-    parser.add_argument(
+    suggest_parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="with --suggest, print per-set item counts and an "
-        "estimated token budget without calling the LLM",
+        help="print per-set item counts and an estimated token budget "
+        "without calling the LLM",
     )
-    parser.add_argument(
-        "--derive-nutrition",
-        action="store_true",
-        help="derive nutrition for every stored recipe and backfill "
-        "published rows, then exit",
-    )
-    parser.add_argument(
-        "--validate-nutrition",
-        action="store_true",
-        help="compare derived vs published nutrition per serving, " "then exit",
-    )
-    parser.add_argument(
-        "--coverage-report",
-        action="store_true",
-        help="list high-frequency ingredients with no confirmed "
-        "nutrition reference, then exit",
-    )
-    parser.add_argument(
-        "--metrics",
-        metavar="PATH",
-        help="write a JSON metrics snapshot to PATH, then exit",
-    )
-    args = parser.parse_args()
+    suggest_parser.set_defaults(handler=_cmd_suggest)
 
-    if args.dry_run and args.suggest is None:
-        parser.error("--dry-run only applies to --suggest")
-    if args.suggest_limit is not None and args.suggest is None:
-        parser.error("--suggest-limit only applies to --suggest")
+    derive_parser = subparsers.add_parser(
+        "derive-nutrition",
+        help="derive nutrition for every stored recipe and backfill " "published rows",
+    )
+    derive_parser.set_defaults(handler=_cmd_derive_nutrition)
+
+    report_parser = subparsers.add_parser("report", help="read-only reports")
+    reports = report_parser.add_subparsers(dest="report", required=True)
+    fdc_parser = reports.add_parser(
+        "fdc-conflicts",
+        help="list canonical ingredients sharing a reference food with "
+        "no alias between them (candidates to hand-seed)",
+    )
+    fdc_parser.set_defaults(handler=_cmd_report_fdc_conflicts)
+    ref_review_parser = reports.add_parser(
+        "ref-review",
+        help="list the top ingredients without a confirmed reference by "
+        "ingredient line count, with text and embedding neighbours",
+    )
+    ref_review_parser.set_defaults(handler=_cmd_report_ref_review)
+    validate_parser = reports.add_parser(
+        "validate-nutrition",
+        help="compare derived vs published nutrition per serving",
+    )
+    validate_parser.set_defaults(handler=_cmd_report_validate_nutrition)
+    coverage_parser = reports.add_parser(
+        "coverage",
+        help="list high-frequency ingredients with no confirmed " "nutrition reference",
+    )
+    coverage_parser.set_defaults(handler=_cmd_report_coverage)
+
+    metrics_parser = subparsers.add_parser(
+        "metrics", help="write a JSON metrics snapshot"
+    )
+    metrics_parser.add_argument("path", metavar="PATH", help="where to write it")
+    metrics_parser.set_defaults(handler=_cmd_metrics)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    logging.basicConfig()
+    args = _build_parser().parse_args(argv)
 
     initialise()
     # Seed before parsing or reparsing: the aliases decide canonical
@@ -580,67 +673,7 @@ def main() -> None:
     # unseeded.
     with get_session() as session:
         seed_ingredient_data(session)
-    if args.fdc_report:
-        for food, names in fdc_id_conflicts():
-            print(f"{food}: {', '.join(names)}")
-        return
-    if args.ref_review:
-        for count, name, candidate, matches, neighbours in ref_review(
-            embedder=suggest_embedder()
-        ):
-            head = f"{count:5d}  {name}:"
-            if candidate is not None:
-                head += f" parser candidate: {candidate}"
-            else:
-                head += " no parser candidate"
-            print(" | ".join([head, *matches]))
-            if neighbours:
-                print(f"    {' | '.join(neighbours)}")
-        return
-    if args.suggest is not None:
-        sets = list(dict.fromkeys(args.suggest.split(",")))
-        unknown = [name for name in sets if name not in _SUGGEST_SETS]
-        if unknown:
-            parser.error(f"unknown input set(s): {', '.join(unknown)}")
-        if args.suggest_limit is not None and args.suggest_limit < 1:
-            parser.error("--suggest-limit must be at least 1")
-        suggest_command(sets, limit=args.suggest_limit, dry_run=args.dry_run)
-        return
-    if args.derive_nutrition:
-        print(f"Derived nutrition for {derive_all_nutrition()} recipes")
-        return
-    if args.validate_nutrition:
-        validation_report()
-        return
-    if args.coverage_report:
-        coverage_report()
-        return
-    if args.metrics:
-        path = Path(args.metrics)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(collect_metrics(), indent=2, sort_keys=True) + "\n")
-        print(f"Metrics snapshot written to {path}")
-        return
-    if args.re_resolve:
-        terms_changed, regrammed, pruned = re_resolve()
-        print(
-            f"Re-resolved: {terms_changed} terms changed, "
-            f"{regrammed} lines regrammed, {pruned} concepts pruned"
-        )
-        return
-    if args.site is None:
-        parser.error("a site is required unless a report flag is given")
-    site = get_site(args.site)
-    if args.reparse:
-        reparse_site(site)
-        return
-    try:
-        import_sitemap(site)
-        crawl_sitemap(site)
-    except BlockedError as exc:
-        # A blocked sitemap or crawl is a site-wide block: stop cleanly
-        # instead of a traceback. Unfinished pages stay queued.
-        raise SystemExit(f"{site.name}: blocked: {exc}") from exc
+    args.handler(args)
 
 
 if __name__ == "__main__":

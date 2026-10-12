@@ -27,7 +27,7 @@ from menu.ingest.errors import (
     DisallowedError,
     FetchError,
 )
-from menu.ingest.llm_review import Usage
+from menu.ingest.llm_review import Usage, prompt_hash
 from menu.ingest.pipeline import (
     CrawlReport,
     crawl_sitemap,
@@ -923,7 +923,11 @@ def test_suggest_appends_new_verdicts_and_skips_reviewed(
         ("bundt tin and tray", "not_food", "pending"),
         ("cake tin or tray", "ok", "rejected"),
     ]
-    assert ledger[0].model == {"llm": "fake/llm", "embedding": "fake/hash"}
+    assert ledger[0].model == {
+        "llm": "fake/llm",
+        "prompt": prompt_hash("queue"),
+        "embedding": "fake/hash",
+    }
 
 
 @pytest.mark.usefixtures("db_engine")

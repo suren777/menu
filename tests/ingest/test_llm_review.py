@@ -186,7 +186,10 @@ def test_numbers_from_the_raw_line_survive() -> None:
         "name": "70g chocolate",
     }
     assert suggestion.evidence == {"reason": "brand stripped"}
-    assert suggestion.model == {"llm": "fake/model"}
+    assert suggestion.model == {
+        "llm": "fake/model",
+        "prompt": llm_review.prompt_hash("queue"),
+    }
     assert suggestion.status == "pending"
 
 
@@ -390,6 +393,21 @@ def test_system_prompts_carry_the_language_only_rules() -> None:
         assert "Never output quantities, weights or nutrients" in system
         assert '"Related" is not "same"' in system
         assert "UK and US names are both in use" in system
+
+
+def test_prompt_hash_is_stable_and_distinct_per_input_set() -> None:
+    assert llm_review.prompt_hash("queue") == llm_review.prompt_hash("queue")
+    assert len(llm_review.prompt_hash("queue")) == 12
+    assert (
+        len({llm_review.prompt_hash(s) for s in ("queue", "audit", "pair", "food_ref")})
+        == 4
+    )
+
+
+def test_suggestions_record_the_prompt_hash() -> None:
+    result = _run(_queue_item(), [{"index": 0, "kind": "ok", "reason": "right"}])
+    (suggestion,) = result.suggestions
+    assert suggestion.model["prompt"] == llm_review.prompt_hash("queue")
 
 
 def _reply(content: str) -> FakeResponse:

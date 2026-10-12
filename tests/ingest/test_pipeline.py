@@ -910,7 +910,7 @@ def test_suggest_appends_new_verdicts_and_skips_reviewed(
         input="queue",
         kind="ok",
         subject="cake tin or tray",
-        proposal={},
+        proposal=suggestions.OkProposal(),
         evidence={"reason": "earlier"},
         model={"llm": "human"},
         status="rejected",

@@ -18,14 +18,24 @@ import os
 import re
 from collections import Counter
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 import requests
 from requests import Session
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 
-from menu.db.ingredients.suggestions import Suggestion
+from menu.db.ingredients.suggestions import (
+    AliasProposal,
+    FoodRefProposal,
+    Kind,
+    LineOverrideProposal,
+    NotFoodProposal,
+    OkProposal,
+    Proposal,
+    Suggestion,
+    VariantProposal,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
@@ -49,9 +59,6 @@ _TOKENS_PER_ITEM = 150
 _SCHEMA_NAME = "menu_review"
 
 InputSet = Literal["queue", "audit", "pair", "food_ref"]
-SuggestionKind = Literal[
-    "alias", "variant", "line_override", "not_food", "food_ref", "ok"
-]
 
 
 class _CappedRetry(Retry):
@@ -411,11 +418,12 @@ def _string_values(value: Any) -> Iterator[str]:
             yield from _string_values(nested)
 
 
-def _numbers_ok(item: ReviewItem, proposal: dict[str, Any]) -> bool:
+def _numbers_ok(item: ReviewItem, proposal: Proposal) -> bool:
+    values = proposal.model_dump()
     if item.input in ("pair", "food_ref"):
         return all(
             not _NUMBER_RE.search(text)
-            for key, value in proposal.items()
+            for key, value in values.items()
             if key != "source_food_id"
             for text in _string_values(value)
         )
@@ -426,14 +434,14 @@ def _numbers_ok(item: ReviewItem, proposal: dict[str, Any]) -> bool:
     }
     return all(
         set(_NUMBER_RE.findall(text)) <= allowed
-        for value in proposal.values()
+        for value in values.values()
         for text in _string_values(value)
     )
 
 
 def _concept_proposal(
     item: ReviewItem, kind: str, verdict: dict[str, Any]
-) -> dict[str, Any] | str:
+) -> AliasProposal | VariantProposal | str:
     """alias/variant for queue and audit: the model picks the target."""
     target = verdict.get("target")
     variant = verdict.get("variant")
@@ -447,15 +455,15 @@ def _concept_proposal(
             return "kind"  # a variant proposal needs the variant word
         if target not in item.known_concepts:
             return "target"  # variants must target a known concept
-        return {"term": item.subject, "target": target, "variant": variant}
+        return VariantProposal(term=item.subject, target=target, variant=variant)
     if target not in item.known_concepts and not new:
         return "target"
-    return {"term": item.subject, "target": target, "variant": variant, "new": new}
+    return AliasProposal(term=item.subject, target=target, variant=variant, new=new)
 
 
 def _pair_proposal(
     item: ReviewItem, kind: str, verdict: dict[str, Any]
-) -> dict[str, Any] | str:
+) -> AliasProposal | VariantProposal | str:
     """alias/variant for pairs: the subject's halves are term and target."""
     head, _, tail = item.subject.partition(" | ")
     if not tail:
@@ -467,24 +475,22 @@ def _pair_proposal(
             return "kind"
         if tail not in item.known_concepts:
             return "target"
-        return {"term": head, "target": tail, "variant": variant}
+        return VariantProposal(term=head, target=tail, variant=variant)
     if tail not in item.known_concepts and not new:
         return "target"
-    return {"term": head, "target": tail, "variant": None, "new": new}
+    return AliasProposal(term=head, target=tail, variant=None, new=new)
 
 
-def _proposal(
-    item: ReviewItem, kind: str, verdict: dict[str, Any]
-) -> dict[str, Any] | str:
-    """The proposal dict, or the mechanical-check reason it is dropped."""
+def _proposal(item: ReviewItem, kind: str, verdict: dict[str, Any]) -> Proposal | str:
+    """The proposal, or the mechanical-check reason it is dropped."""
     if kind == "ok":
         # "None fits" that still names a candidate contradicts itself;
         # recording it as reviewed would hide the item for good.
         if item.input == "food_ref" and verdict.get("source_food_id") is not None:
             return "kind"
-        return {}
+        return OkProposal()
     if kind == "not_food":
-        return {"term": item.subject}
+        return NotFoodProposal(term=item.subject)
     if item.input in ("queue", "audit"):
         if kind == "line_override":
             line = verdict.get("line")
@@ -493,7 +499,7 @@ def _proposal(
                 return "kind"
             if line not in item.lines:
                 return "line"
-            return {"line": line, "name": name}
+            return LineOverrideProposal(line=line, name=name)
         return _concept_proposal(item, kind, verdict)
     if item.input == "pair":
         return _pair_proposal(item, kind, verdict)
@@ -506,11 +512,11 @@ def _proposal(
         for candidate in item.candidates
     ):
         return "candidate"
-    return {
-        "ingredient": item.subject,
-        "source": source,
-        "source_food_id": source_food_id,
-    }
+    return FoodRefProposal(
+        ingredient=item.subject,
+        source=source,
+        source_food_id=source_food_id,
+    )
 
 
 def _verdict_suggestion(
@@ -540,7 +546,8 @@ def _verdict_suggestion(
         return "numbers"
     return Suggestion(
         input=item.input,
-        kind=kind,
+        # the membership check above guarantees one of the six kinds
+        kind=cast("Kind", kind),
         subject=item.subject,
         proposal=proposal,
         evidence={"reason": str(verdict.get("reason") or "")},

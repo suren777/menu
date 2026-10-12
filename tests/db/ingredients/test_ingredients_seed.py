@@ -4,6 +4,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
+import pydantic
 import pytest
 from sqlalchemy import select
 
@@ -612,30 +613,22 @@ def test_hand_food_ref_beats_conflicting_accepted_suggestion(
     assert all(ref.ref_food_id == food_id and ref.status == "confirmed" for ref in refs)
 
 
-def test_malformed_accepted_suggestion_is_skipped(
+def test_malformed_accepted_entry_fails_to_load(
     session: Session,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A malformed accepted entry (a missing proposal key) is logged
-    and skipped, never a seeding crash."""
+    """A malformed accepted entry (a missing proposal key) is a
+    load-time ValidationError: the ledger cannot carry drift into
+    seeding."""
     _write_suggestions(
         tmp_path,
         monkeypatch,
         _entry("alias", "aubergine", {"term": "aubergine"}),  # no target
     )
 
-    with caplog.at_level(logging.WARNING):
+    with pytest.raises(pydantic.ValidationError):
         seed_ingredient_data(session)
-
-    assert "malformed" in caplog.text
-    assert (
-        session.scalars(
-            select(IngredientTerm).where(IngredientTerm.term == "aubergine")
-        ).first()
-        is None
-    )
 
 
 def test_seed_derives_from_fdc_before_cnf(session: Session) -> None:

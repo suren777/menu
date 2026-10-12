@@ -7,7 +7,7 @@ Run a site end-to-end with:
 Every URL's outcome is recorded on its `pages` row (the crawl
 ledger), so a re-run continues from the queued pages instead of
 re-walking sitemaps, and a recipe is written in the same transaction
-as its ingredient lines. The local SQLite database is scratch storage
+as its ingredient lines. The local Postgres database is scratch storage
 for experiments; it is never the source of truth. Code here graduates
 to food-guru's backend/app/ingest/ with minimal rework.
 """
@@ -82,8 +82,8 @@ class CrawlReport:
 
 
 def _utcnow() -> datetime:
-    """Naive UTC for fetched_at columns: SQLite's DateTime keeps no
-    timezone of its own (pages.actions.utcnow is the same shape)."""
+    """Naive UTC for fetched_at columns: they are `timestamp without
+    time zone` (pages.actions.utcnow is the same shape)."""
     return datetime.now(UTC).replace(tzinfo=None)
 
 

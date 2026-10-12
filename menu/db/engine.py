@@ -1,39 +1,32 @@
-"""Scratch SQLite engine.
+"""Scratch database engine.
 
-The database file lives at the project root (gitignored), not inside
-the package: it is throwaway experiment storage, rebuilt from scratch
-whenever the schema changes.
+The database lives on the Postgres 18 server from docker-compose.yml
+(`docker compose up -d db`): it is throwaway experiment storage,
+rebuilt from scratch whenever the schema changes.
 """
 
-from pathlib import Path
+import os
 from typing import TYPE_CHECKING
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine
 
 if TYPE_CHECKING:
     from sqlalchemy.engine import Engine
 
-DB_PATH = Path(__file__).resolve().parents[2] / "database.db"
-
-engine = create_engine(f"sqlite:///{DB_PATH}")
+DEFAULT_DATABASE_URL = "postgresql+psycopg://postgres:postgres@localhost:5433/menu"
 
 
-def _sqlite_pragmas(dbapi_connection: object, _record: object) -> None:
-    cursor = dbapi_connection.cursor()  # type: ignore[attr-defined]
-    for pragma in (
-        "PRAGMA foreign_keys=ON",
-        "PRAGMA journal_mode=WAL",
-        "PRAGMA synchronous=NORMAL",
-    ):
-        cursor.execute(pragma)
-    cursor.close()
+def database_url() -> str:
+    """The configured database URL: env DATABASE_URL, else the default
+    compose stack on localhost:5433."""
+    return os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL)
 
 
-def configure_sqlite(target: Engine) -> None:
-    """Make the database enforce what the schema's docstrings promise:
-    foreign keys are checked, not decorative — plus the WAL settings a
-    single-process lab wants."""
-    event.listen(target, "connect", _sqlite_pragmas)
+def make_engine(url: str | None = None) -> Engine:
+    """Build an engine for `url` (default: `database_url()`); the pool
+    pre-pings connections so a server restart doesn't surface as a
+    stale-connection error."""
+    return create_engine(url if url is not None else database_url(), pool_pre_ping=True)
 
 
-configure_sqlite(engine)
+engine = make_engine(database_url())

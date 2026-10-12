@@ -10,8 +10,8 @@ from menu.db.database import Page
 
 
 def utcnow() -> datetime:
-    """Naive UTC: SQLite's DateTime column keeps no timezone of its
-    own, and the phase-1 bootstrap stamps cache mtimes the same way."""
+    """Naive UTC: the DateTime columns are `timestamp without time
+    zone`, and the phase-1 bootstrap stamps cache mtimes the same way."""
     return datetime.now(UTC).replace(tzinfo=None)
 
 

@@ -244,6 +244,8 @@ These four steps run in order. After each one, the metrics snapshot records revi
   - "ok" on a food-ref item was read as "this candidate is fine", so the no-match answer is `none` on the wire.
   - Smoke run, 7 items across all four sets: about 1,150 prompt and 400–540 completion tokens, 5–19 s. Every verdict was right, including coriander / ground coriander (different), whole milk (variant of milk), aubergine (alias of eggplant), icing sugar (FDC "Sugars, powdered") and rapeseed oil (no candidate). The first batch over real data is still to be measured.
 
+- **Status (2026-10-11):** built and tested offline — `review_inputs.py` builds the four sets, `menu-ingest --suggest` runs them (with `--dry-run` and `--suggest-limit`), `--ref-review` shows embedding neighbours, and accepted entries seed like hand seeds (4d). The first real batch and its token cost wait for the recrawl and the reference imports.
+
 **4d. Accept**
 - Review the `suggestions.json` diff and set `status`. Seeding loads accepted entries, and `--re-resolve` applies them without reparsing.
 - Check, in the metrics diff:

@@ -40,16 +40,22 @@ class Suggestion(pydantic.BaseModel):
     status: Status = "pending"
 
 
-def load(path: Path = SUGGESTIONS_PATH) -> list[Suggestion]:
-    """Read the ledger; a missing file is an empty one."""
+def load(path: Path | None = None) -> list[Suggestion]:
+    """Read the ledger; a missing file is an empty one. The default
+    path is resolved at call time, so tests can repoint it."""
+    if path is None:
+        path = SUGGESTIONS_PATH
     if not path.exists():
         return []
     entries: list[Any] = json.loads(path.read_text(encoding="utf-8"))
     return [Suggestion.model_validate(entry) for entry in entries]
 
 
-def save(suggestions: Iterable[Suggestion], path: Path = SUGGESTIONS_PATH) -> None:
-    """Write the ledger deterministically: sorted, indented, atomic."""
+def save(suggestions: Iterable[Suggestion], path: Path | None = None) -> None:
+    """Write the ledger deterministically: sorted, indented, atomic.
+    The default path is resolved at call time, so tests can repoint it."""
+    if path is None:
+        path = SUGGESTIONS_PATH
     ordered = sorted(
         suggestions, key=lambda entry: (entry.input, entry.subject, entry.kind)
     )

@@ -1,7 +1,8 @@
 """Line-storage tests: parsing recipeYield, storing recipe_ingredients
 rows, and the review queue."""
 
-from typing import TYPE_CHECKING
+import json
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from sqlalchemy import select
@@ -20,14 +21,26 @@ from menu.db.database import (
 from menu.db.ingredients import lines as lines_module
 from menu.db.ingredients import repository
 from menu.db.ingredients import seed as seed_module
+from menu.db.ingredients import suggestions as suggestions_module
 from menu.db.ingredients.seed import seed_ingredient_data
 from menu.ingest.ingredients import parse_line
 
 from .helpers import add_recipe, store_lines
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from menu.ingest.ingredients import ParsedLine
     from menu.ingest.registry import SiteConfig
+
+
+def _write_suggestions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: dict[str, Any]
+) -> None:
+    """Point the suggestions ledger at a temp file holding one entry."""
+    path = tmp_path / "suggestions.json"
+    path.write_text(json.dumps([entry]), encoding="utf-8")
+    monkeypatch.setattr(suggestions_module, "SUGGESTIONS_PATH", path)
 
 
 @pytest.mark.usefixtures("db_engine")
@@ -475,6 +488,50 @@ def test_line_override_fixes_wrong_merge() -> None:
             select(RecipeIngredient)
             .where(RecipeIngredient.recipe_id == recipe_id)
             .order_by(RecipeIngredient.id)
+        ).all()
+        primary = next(line for line in lines if line.alternative_of is None)
+        term = session.get(IngredientTerm, primary.term_id)
+        assert term is not None
+        effective_id = repository.effective_ingredient_id(primary.needs_review, term)
+        assert effective_id is not None
+        ingredient = session.get(Ingredient, effective_id)
+        assert ingredient is not None
+        assert ingredient.name == "milk chocolate"
+
+
+@pytest.mark.usefixtures("db_engine")
+def test_accepted_line_override_fixes_a_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An accepted line_override suggestion acts like a LINE_OVERRIDES
+    entry: the newly stored line resolves through the override name,
+    matched case- and whitespace-insensitively."""
+    _write_suggestions(
+        tmp_path,
+        monkeypatch,
+        {
+            "input": "queue",
+            "kind": "line_override",
+            "subject": "100g milk or white chocolate chopped",
+            "proposal": {
+                "line": "100g Milk  or white chocolate chopped",
+                "name": "milk chocolate",
+            },
+            "evidence": {"reason": "test"},
+            "model": {"llm": "fake/model"},
+            "status": "accepted",
+        },
+    )
+    recipe_id = add_recipe("https://x/babka")
+
+    store_lines(
+        recipe_id,
+        {"recipeIngredient": ["100g  milk or white chocolate chopped"]},
+    )
+
+    with get_session() as session:
+        lines = session.scalars(
+            select(RecipeIngredient).where(RecipeIngredient.recipe_id == recipe_id)
         ).all()
         primary = next(line for line in lines if line.alternative_of is None)
         term = session.get(IngredientTerm, primary.term_id)

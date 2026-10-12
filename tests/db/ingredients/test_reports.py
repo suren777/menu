@@ -1,6 +1,9 @@
 """Report tests: the hand-seeding candidates from the reference
 imports — a report, never an auto-merge."""
 
+from typing import Any
+
+import numpy as np
 import pytest
 from sqlalchemy import select
 
@@ -15,7 +18,7 @@ from menu.db.database import (
 )
 from menu.db.ingredients import reports
 
-from .helpers import add_recipe, add_term
+from .helpers import add_recipe, add_recipe_row, add_term
 
 
 @pytest.mark.usefixtures("db_engine")
@@ -180,7 +183,7 @@ def test_ref_review_lists_unconfirmed() -> None:
             ]
         )
 
-    assert reports.ref_review() == [(2, "mystery powder", "Baobab powder", ())]
+    assert reports.ref_review() == [(2, "mystery powder", "Baobab powder", (), ())]
 
 
 @pytest.mark.usefixtures("db_engine")
@@ -227,4 +230,44 @@ def test_ref_review_excludes_rejected_candidates() -> None:
             )
         )
 
-    assert reports.ref_review() == [(1, "baobab powder", None, ())]
+    assert reports.ref_review() == [(1, "baobab powder", None, (), ())]
+
+
+class _SameVector:
+    model_id = "fake/same"
+
+    def embed(self, texts: list[str]) -> Any:
+        return np.ones((len(texts), 4), dtype=np.float32)
+
+
+@pytest.mark.usefixtures("db_engine")
+def test_ref_review_shows_embedding_neighbours() -> None:
+    with get_session() as session:
+        source = FoodSource(name="fdc", version="1", licence="pd", citation="FDC")
+        session.add(source)
+        session.flush()
+        session.add(
+            RefFood(
+                source_id=source.id, source_food_id="1", description="Eggplant, raw"
+            )
+        )
+        aubergine = Ingredient(name="aubergine", origin="auto")
+        session.add(aubergine)
+        session.flush()
+        term = IngredientTerm(
+            term="aubergine", ingredient_id=aubergine.id, resolution="auto"
+        )
+        session.add(term)
+        session.flush()
+        recipe_id = add_recipe_row(session, "https://x/a", "A").id
+        session.add(
+            RecipeIngredient(
+                recipe_id=recipe_id, position=0, raw_text="1 aubergine", term_id=term.id
+            )
+        )
+
+    ((_count, name, _candidate, matches, neighbours),) = reports.ref_review(
+        embedder=_SameVector()
+    )
+    assert (name, matches) == ("aubergine", ())
+    assert neighbours == ("fdc 1: Eggplant, raw (1.00)",)

@@ -1,4 +1,4 @@
-"""Models for the scratch SQLite database.
+"""Models for the scratch database.
 
 Typed 2.0-style columns (Mapped/mapped_column) so mypy sees the column
 types and call sites need no casts.
@@ -16,6 +16,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from menu.db.connection import current_engine
@@ -120,7 +121,9 @@ class Recipe(Base):
     )
     name: Mapped[str] = mapped_column(nullable=False)
     """The JSON-LD name; the page <title> when the data names nothing."""
-    data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    data: Mapped[dict[str, Any]] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=False
+    )
     data_sha256: Mapped[str] = mapped_column(nullable=False)
     extractor: Mapped[str] = mapped_column(nullable=False)
     """'json_ld' | 'test_id' | 'microdata' — what found the recipe."""
@@ -212,8 +215,9 @@ class IngredientFoodRef(Base):
     partial unique index makes the database enforce. 'candidate' rows
     are the parser's own suggestion (role NULL): they feed the
     --ref-review report, never conversion or nutrition. 'rejected'
-    rows were reviewed and turned down (seed.REJECTED_REFS), so they
-    leave the report too and a re-crawl cannot resurrect them.
+    rows were reviewed and turned down (rejected food_ref entries in
+    suggestions.json), so they leave the report too and a re-crawl
+    cannot resurrect them.
     `origin` records where the row came from.
     """
 
@@ -239,7 +243,7 @@ class IngredientFoodRef(Base):
 
     __table_args__ = (
         # The composite FK's parent key: (id, source_id) must be
-        # unique for SQLite to accept the reference to it.
+        # unique.
         UniqueConstraint("id", "source_id"),
         ForeignKeyConstraint(
             ["ref_food_id", "source_id"],
@@ -262,7 +266,7 @@ class IngredientFoodRef(Base):
             "role",
             "source_id",
             unique=True,
-            sqlite_where=text("status = 'confirmed'"),
+            postgresql_where=text("status = 'confirmed'"),
         ),
         Index("ix_ingredient_food_refs_ingredient", "ingredient_id"),
         CheckConstraint(

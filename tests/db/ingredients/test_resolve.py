@@ -1,7 +1,8 @@
 """Resolve tests: re-resolve re-pointing terms and regramming lines,
 and orphan pruning."""
 
-from typing import TYPE_CHECKING
+import json
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from sqlalchemy import select
@@ -19,12 +20,37 @@ from menu.db.database import (
 from menu.db.ingredients import lines as lines_module
 from menu.db.ingredients import repository, resolve
 from menu.db.ingredients import seed as seed_module
+from menu.db.ingredients import suggestions as suggestions_module
 from menu.db.ingredients.seed import seed_ingredient_data
 
 from .helpers import add_recipe, add_term, store_lines
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from menu.ingest.ingredients import ParsedLine
+
+
+def _write_suggestions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: dict[str, Any]
+) -> None:
+    """Point the suggestions ledger at a temp file holding one entry."""
+    path = tmp_path / "suggestions.json"
+    path.write_text(json.dumps([entry]), encoding="utf-8")
+    monkeypatch.setattr(suggestions_module, "SUGGESTIONS_PATH", path)
+
+
+def _alias(term: str, target: str, variant: str | None = None) -> dict[str, Any]:
+    """An accepted alias suggestion."""
+    return {
+        "input": "queue",
+        "kind": "alias",
+        "subject": term,
+        "proposal": {"term": term, "target": target, "variant": variant},
+        "evidence": {"reason": "test"},
+        "model": {"llm": "fake/model"},
+        "status": "accepted",
+    }
 
 
 def _effective_names() -> list[str | None]:
@@ -147,6 +173,52 @@ def test_re_resolve_repoints_terms_without_reparse(
             expected = 240.0 if line.recipe_id == basbousa_id else 500.0
             assert line.grams == pytest.approx(expected * 1.03)
             assert line.grams_source == "seed"
+
+
+@pytest.mark.usefixtures("db_engine")
+def test_accepted_alias_repoints_lines_on_re_resolve(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An accepted alias suggestion acts exactly like a hand ALIASES
+    entry: re-resolve re-points the stored auto term's lines — the
+    parser is never called."""
+    store_lines(add_recipe("https://x/1"), {"recipeIngredient": ["240ml oat milk"]})
+    _write_suggestions(
+        tmp_path,
+        monkeypatch,
+        _alias("oat milk", "milk", "oat"),
+    )
+
+    def boom(*_args: object, **_kwargs: object) -> ParsedLine:
+        raise AssertionError("re-resolve must not parse")
+
+    monkeypatch.setattr(lines_module, "parse_line", boom)
+
+    regrammed, pruned = resolve.re_resolve()[1:]
+
+    assert regrammed == 1
+    assert pruned == 1  # the orphaned auto concept "oat milk"
+    assert _effective_names() == ["milk"]
+
+
+@pytest.mark.usefixtures("db_engine")
+def test_re_resolve_keeps_an_accepted_alias(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An accepted alias is a curated decision: a second re-resolve
+    does not revert the term to the heuristics as stale."""
+    store_lines(add_recipe("https://x/1"), {"recipeIngredient": ["240ml oat milk"]})
+    _write_suggestions(tmp_path, monkeypatch, _alias("oat milk", "milk", "oat"))
+
+    resolve.re_resolve()
+    resolve.re_resolve()
+
+    assert _effective_names() == ["milk"]
+    with get_session() as session:
+        term = session.scalars(
+            select(IngredientTerm).where(IngredientTerm.term == "oat milk")
+        ).one()
+        assert term.resolution == "seed"
 
 
 @pytest.mark.usefixtures("db_engine")

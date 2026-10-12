@@ -6,7 +6,7 @@ freshly created tables."""
 from typing import TYPE_CHECKING
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
 from menu.db.database import (
@@ -445,3 +445,15 @@ def test_deleting_an_ingredient_cascades_its_conversions(session: Session) -> No
     session.delete(ingredient)
     session.flush()
     assert session.scalars(select(IngredientConversion)).all() == []
+
+
+def test_confirmed_reference_index_is_partial(session: Session) -> None:
+    """Only confirmed rows are unique per role per source: candidates and
+    rejected rows sit outside the index."""
+    definition = session.scalar(
+        text("SELECT indexdef FROM pg_indexes WHERE indexname = :name"),
+        {"name": "ix_ingredient_food_refs_confirmed_role_source"},
+    )
+    assert definition is not None
+    assert "WHERE" in definition
+    assert "'confirmed'" in definition

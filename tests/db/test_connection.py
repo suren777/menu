@@ -1,22 +1,26 @@
-"""Connection tests: the use_engine override and its resolution order."""
+"""Connection tests: the use_engine override and its resolution order,
+and the fixture teardown dropping its per-test databases."""
 
 from typing import TYPE_CHECKING
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 
 from menu.db.connection import get_session, use_engine
 
 if TYPE_CHECKING:
-    from pathlib import Path
+    from collections.abc import Callable
 
     from sqlalchemy.engine import Engine
+    from testcontainers.community.postgres import PostgresContainer
 
 
-def test_use_engine_binds_get_session(db_engine: Engine, tmp_path: Path) -> None:
+def test_use_engine_binds_get_session(
+    db_engine: Engine, make_database: Callable[[], Engine]
+) -> None:
     """Inside use_engine(e), get_session() binds to e without being
     told; after the block it is back to the default."""
-    override = create_engine(f"sqlite:///{tmp_path}/override.db")
+    override = make_database()
     with use_engine(override), get_session() as session:
         assert session.get_bind() is override
     with get_session() as session:
@@ -24,18 +28,37 @@ def test_use_engine_binds_get_session(db_engine: Engine, tmp_path: Path) -> None
 
 
 def test_use_engine_resets_after_an_exception(
-    db_engine: Engine, tmp_path: Path
+    db_engine: Engine, make_database: Callable[[], Engine]
 ) -> None:
     """The override does not leak when the body raises."""
-    override = create_engine(f"sqlite:///{tmp_path}/override.db")
+    override = make_database()
     with pytest.raises(RuntimeError, match="boom"), use_engine(override):
         raise RuntimeError("boom")
     with get_session() as session:
         assert session.get_bind() is db_engine
 
 
-def test_explicit_engine_beats_the_override(db_engine: Engine, tmp_path: Path) -> None:
+def test_explicit_engine_beats_the_override(
+    db_engine: Engine, make_database: Callable[[], Engine]
+) -> None:
     """An explicit argument wins over use_engine."""
-    explicit = create_engine(f"sqlite:///{tmp_path}/explicit.db")
+    explicit = make_database()
     with use_engine(explicit), get_session(db_engine) as session:
         assert session.get_bind() is db_engine
+
+
+def test_per_test_databases_are_dropped_after_their_test(
+    db_engine: Engine, pg_container: PostgresContainer
+) -> None:
+    """The fixture teardown drops its databases: the only t_ database
+    this test can see is its own — every earlier test's is gone."""
+    admin = create_engine(
+        pg_container.get_connection_url(), isolation_level="AUTOCOMMIT"
+    )
+    try:
+        with admin.connect() as conn:
+            rows = conn.execute(text("SELECT datname FROM pg_database")).all()
+            names = [name for (name,) in rows if name.startswith("t_")]
+    finally:
+        admin.dispose()
+    assert names == [db_engine.url.database]

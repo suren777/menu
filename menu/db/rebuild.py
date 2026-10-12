@@ -1,7 +1,8 @@
 """Rebuild the whole scratch database from local files only.
 
-`menu-rebuild` produces a fresh database from the disk cache of
-sitemaps and pages, the curated seeds and any downloaded reference
+`menu-rebuild` produces a fresh database on the same Postgres server
+as the live one (the docker-compose stack locally) from the disk cache
+of sitemaps and pages, the curated seeds and any downloaded reference
 releases — no network access (data_model_plan.md principle 6). Pages
 missing from the cache stay queued, so the next live crawl picks them
 up; a reference release that isn't downloaded is skipped with a
@@ -9,16 +10,18 @@ warning naming its import command.
 """
 
 import logging
+import re
 from argparse import ArgumentParser
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import create_engine, func, select, text
+from sqlalchemy.engine import make_url
 
 from menu.db.connection import get_session, use_engine
 from menu.db.database import Page, Recipe, initialise
-from menu.db.engine import DB_PATH, configure_sqlite
+from menu.db.engine import database_url, make_engine
 from menu.db.ingredients.seed import seed_ingredient_data
 from menu.ingest import sites
 from menu.ingest.errors import FetchError
@@ -37,7 +40,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # A rebuilt database must never be the live one by default.
-DEFAULT_TARGET = DB_PATH.with_name("database.rebuilt.db")
+DEFAULT_TARGET = "menu_rebuilt"
+
+# Target names are quoted into DDL, so validate the shape instead of
+# escaping it.
+TARGET_NAME = re.compile(r"^[a-z_][a-z0-9_]*$")
 
 
 @dataclass
@@ -47,6 +54,46 @@ class SiteSummary:
 
     pages: dict[str, int] = field(default_factory=dict)
     recipes: int = 0
+
+
+def _url_for(url: str, database: str) -> str:
+    """The URL's server, pointed at `database` instead."""
+    return make_url(url).set(database=database).render_as_string(hide_password=False)
+
+
+def _create_target(target: str, *, force: bool) -> None:
+    """Create the target database on the live database's server,
+    dropping an existing one only when force is set. The CREATE/DROP
+    run on an autocommit connection to the server's postgres database
+    — CREATE DATABASE cannot run inside a transaction."""
+    if not TARGET_NAME.fullmatch(target):
+        raise ValueError(
+            f"invalid target database name {target!r}: must match {TARGET_NAME.pattern}"
+        )
+    live = make_url(database_url()).database
+    if target == live:
+        raise ValueError(
+            f"refusing to rebuild into the live database {target!r} — "
+            "pass another --target"
+        )
+    admin = create_engine(
+        _url_for(database_url(), "postgres"), isolation_level="AUTOCOMMIT"
+    )
+    try:
+        with admin.connect() as conn:
+            exists = conn.execute(
+                text("SELECT 1 FROM pg_database WHERE datname = :name"),
+                {"name": target},
+            ).scalar()
+            if exists:
+                if not force:
+                    raise FileExistsError(
+                        f"database {target!r} already exists — drop it or pass --force"
+                    )
+                conn.execute(text(f'DROP DATABASE "{target}" WITH (FORCE)'))
+            conn.execute(text(f'CREATE DATABASE "{target}"'))
+    finally:
+        admin.dispose()
 
 
 def _skip_source(source: str, sources_dir: Path) -> None:
@@ -105,21 +152,22 @@ def _site_summary(site: SiteConfig, session: Session) -> SiteSummary:
 
 
 def rebuild(
-    target: Path, *, sources_dir: Path = DEFAULT_CACHE_DIR / "sources"
+    target: str = DEFAULT_TARGET,
+    *,
+    sources_dir: Path = DEFAULT_CACHE_DIR / "sources",
+    force: bool = False,
 ) -> dict[str, Any]:
-    """Build a complete database at target from local files only.
+    """Build a complete database named `target` on the live database's
+    server, from local files only.
 
-    Refuses to overwrite an existing target (delete it, or pass
-    --force on the command line). Returns a summary: per-site pages by
-    status and recipes stored, and which reference sources were
-    imported or skipped.
+    Refuses the live database's own name, and an existing target
+    unless force is set (it is dropped first). Returns a summary:
+    per-site pages by status and recipes stored, and which reference
+    sources were imported or skipped.
     """
-    target = Path(target)
-    if target.exists():
-        raise FileExistsError(f"{target} already exists — delete it or pass --force")
+    _create_target(target, force=force)
 
-    engine = create_engine(f"sqlite:///{target}")
-    configure_sqlite(engine)
+    engine = make_engine(_url_for(database_url(), target))
     imported: list[str] = []
     skipped: list[str] = []
     summaries: dict[str, SiteSummary] = {}
@@ -178,24 +226,16 @@ def main() -> None:
     )
     parser.add_argument(
         "--target",
-        type=Path,
         default=DEFAULT_TARGET,
-        help="database file to build (default: %(default)s)",
+        help="database to build on the live server (default: %(default)s)",
     )
     parser.add_argument(
         "--force",
         action="store_true",
-        help="delete an existing target database first",
+        help="drop an existing target database first",
     )
     args = parser.parse_args()
-    if args.force:
-        for path in (
-            args.target,
-            Path(f"{args.target}-wal"),
-            Path(f"{args.target}-shm"),
-        ):
-            path.unlink(missing_ok=True)
-    rebuild(args.target)
+    rebuild(args.target, force=args.force)
 
 
 if __name__ == "__main__":

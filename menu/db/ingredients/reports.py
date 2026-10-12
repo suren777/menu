@@ -1,6 +1,8 @@
 """Reports: hand-seeding candidates from the reference imports —
 a report, never an auto-merge."""
 
+from typing import TYPE_CHECKING
+
 from sqlalchemy import and_, func, select
 
 from menu.db.connection import get_session
@@ -12,7 +14,10 @@ from menu.db.database import (
     RecipeIngredient,
     RefFood,
 )
-from menu.db.ingredients import repository
+from menu.db.ingredients import repository, review_inputs
+
+if TYPE_CHECKING:
+    from menu.ingest.embeddings import Embedder
 
 
 def fdc_id_conflicts() -> list[tuple[str, list[str]]]:
@@ -63,15 +68,18 @@ def fdc_id_conflicts() -> list[tuple[str, list[str]]]:
 
 
 def ref_review(
-    limit: int = 100,
-) -> list[tuple[int, str, str | None, tuple[str, ...]]]:
+    limit: int = 100, *, embedder: Embedder | None = None
+) -> list[tuple[int, str, str | None, tuple[str, ...], tuple[str, ...]]]:
     """Top ingredients without a confirmed reference by line count,
     with the parser's candidate and the best text matches from each
     imported source, for hand-seeding into seed.FOOD_REFS. Candidates
-    that REJECTED_REFS turned down — and their foods as text matches —
-    stay out. Needs the reference import; a report, never an
+    a rejected food_ref suggestion turned down — and their foods as
+    text matches — stay out. Needs the reference import; a report, never an
     auto-merge. Lines count through their terms' effective ingredient
-    (repository.effective_ingredient_predicates)."""
+    (repository.effective_ingredient_predicates). With an embedder, a
+    fifth element carries the embedding neighbours per row — the top 3
+    reference foods per source (review_inputs.ref_neighbours), whose
+    similarity fills the dialect gaps the all-words text match can't."""
     with get_session() as session:
         rows = session.execute(
             select(func.count(RecipeIngredient.id), Ingredient.id, Ingredient.name)
@@ -108,6 +116,16 @@ def ref_review(
             ).all()
             for source in sources
         }
+        neighbours = (
+            review_inputs.ref_neighbours(
+                session,
+                [name for _count, _ingredient_id, name in rows],
+                embedder=embedder,
+                per_source=3,
+            )
+            if embedder is not None
+            else {}
+        )
         results = []
         for count, ingredient_id, name in rows:
             candidate_food = session.scalar(
@@ -125,7 +143,7 @@ def ref_review(
             )
             # Text match: descriptions containing every word of the
             # name, one candidate per source. A food this ingredient's
-            # REJECTED_REFS entry turned down is not offered again.
+            # rejected suggestion turned down is not offered again.
             words = name.lower().split()
             rejected_foods = rejected.get(ingredient_id, set())
             matches = []
@@ -137,5 +155,11 @@ def ref_review(
                     if all(word in text for word in words):
                         matches.append(f"{source.name} {source_food_id}: {description}")
                         break
-            results.append((count, name, candidate, tuple(matches)))
+            embedding = tuple(
+                f"{source} {source_food_id}: {description} ({score:.2f})"
+                for source, source_food_id, description, score in neighbours.get(
+                    name, []
+                )
+            )
+            results.append((count, name, candidate, tuple(matches), embedding))
     return results

@@ -7,7 +7,7 @@ Run a site end-to-end with:
 Every URL's outcome is recorded on its `pages` row (the crawl
 ledger), so a re-run continues from the queued pages instead of
 re-walking sitemaps, and a recipe is written in the same transaction
-as its ingredient lines. The local SQLite database is scratch storage
+as its ingredient lines. The local Postgres database is scratch storage
 for experiments; it is never the source of truth. Code here graduates
 to food-guru's backend/app/ingest/ with minimal rework.
 """
@@ -17,6 +17,7 @@ import json
 import logging
 import re
 from argparse import ArgumentParser
+from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -27,6 +28,7 @@ from sqlalchemy import select
 
 from menu.db.connection import get_session
 from menu.db.database import Page, Sitemap, initialise
+from menu.db.ingredients import review_inputs, suggestions
 from menu.db.ingredients.lines import store_recipe_ingredients
 from menu.db.ingredients.reports import fdc_id_conflicts, ref_review
 from menu.db.ingredients.resolve import prune_orphan_ingredients, re_resolve
@@ -37,6 +39,7 @@ from menu.db.pages import repository as pages
 from menu.db.sitemaps import actions as sitemap_actions
 from menu.db.sitemaps import repository as sitemaps
 from menu.ingest.discover import request_xml
+from menu.ingest.embeddings import FastEmbedder
 from menu.ingest.errors import (
     BlockedError,
     CrawlBlockedError,
@@ -46,6 +49,7 @@ from menu.ingest.errors import (
 )
 from menu.ingest.extract import extract_recipe
 from menu.ingest.fetch import fetch_page
+from menu.ingest.llm_review import FireworksClient, suggest
 from menu.ingest.registry import SiteConfig, get_site
 from menu.nutrition.reports import (
     coverage_report,
@@ -54,8 +58,13 @@ from menu.nutrition.reports import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from menu.db.ingredients.suggestions import Suggestion
     from menu.db.pages.repository import PageModel
     from menu.db.sitemaps.repository import SitemapModel
+    from menu.ingest.embeddings import Embedder
+    from menu.ingest.llm_review import LLMClient, ReviewItem
 
 logger = logging.getLogger(__name__)
 
@@ -73,8 +82,8 @@ class CrawlReport:
 
 
 def _utcnow() -> datetime:
-    """Naive UTC for fetched_at columns: SQLite's DateTime keeps no
-    timezone of its own (pages.actions.utcnow is the same shape)."""
+    """Naive UTC for fetched_at columns: they are `timestamp without
+    time zone` (pages.actions.utcnow is the same shape)."""
     return datetime.now(UTC).replace(tzinfo=None)
 
 
@@ -379,6 +388,108 @@ def reparse_site(site: SiteConfig) -> None:
     print(f"Reparsed: {stored} recipes, {failed} failed, {pruned} orphans pruned")
 
 
+_SUGGEST_SETS = ("queue", "audit", "pair", "food_ref")
+# llm_review sizes each chunk's max_tokens as 1,000 + 150 per item;
+# the --dry-run budget uses the same shape (chunk_size 50 there).
+_SUGGEST_CHUNK = 50
+_SUGGEST_BASE_TOKENS = 1_000
+_SUGGEST_TOKENS_PER_ITEM = 150
+
+
+def suggest_embedder() -> Embedder:
+    """The embedder --suggest builds its input sets with — a factory so
+    tests can inject a fake without any model downloading."""
+    return FastEmbedder()
+
+
+def suggest_client() -> LLMClient:
+    """The LLM client --suggest classifies with — a factory so tests
+    can inject a fake without any network call."""
+    return FireworksClient()
+
+
+def suggest_command(
+    sets: Sequence[str], *, limit: int | None = None, dry_run: bool = False
+) -> None:
+    """Build the review input sets, skip what the suggestions ledger
+    already covers, and either estimate the run (--dry-run) or classify
+    the rest through the LLM. Verdicts are merged into the ledger —
+    never written to resolution — every one stamped with the embedding
+    model, pairs with their similarity."""
+    embedder = suggest_embedder()
+    items: dict[str, list[ReviewItem]] = {}
+    pair_similarity: dict[str, float] = {}
+    with get_session() as session:
+        for name in sets:
+            if name == "queue":
+                items[name] = review_inputs.queue_items(
+                    session, embedder=embedder, limit=limit
+                )
+            elif name == "audit":
+                items[name] = review_inputs.audit_items(
+                    session, embedder=embedder, limit=limit
+                )
+            elif name == "pair":
+                pairs = review_inputs.pair_items(
+                    session, embedder=embedder, limit=limit
+                )
+                items[name] = pairs.items
+                pair_similarity = pairs.similarity
+            elif name == "food_ref":
+                items[name] = review_inputs.food_ref_items(
+                    session, embedder=embedder, limit=limit
+                )
+            else:  # pragma: no cover - the CLI validates the names
+                raise ValueError(f"unknown input set: {name}")
+
+    # path= by keyword, resolved through the module at call time, so
+    # tests can point the ledger at a temp file.
+    ledger = suggestions.load(path=suggestions.SUGGESTIONS_PATH)
+    reviewed = suggestions.reviewed_keys(ledger)
+    fresh = {
+        name: [item for item in group if (item.input, item.subject) not in reviewed]
+        for name, group in items.items()
+    }
+
+    if dry_run:
+        budget = 0
+        for name in sets:
+            count = len(fresh[name])
+            chunks = -(-count // _SUGGEST_CHUNK)
+            budget += chunks * _SUGGEST_BASE_TOKENS + count * _SUGGEST_TOKENS_PER_ITEM
+            print(f"{name}: {count} items")
+        print(f"Estimated token budget: {budget} tokens")
+        return
+
+    flat = [item for name in sets for item in fresh[name]]
+    if not flat:
+        print("Nothing to suggest")
+        return
+    result = suggest(flat, client=suggest_client())
+    written: list[Suggestion] = []
+    for entry in result.suggestions:
+        model = {**entry.model, "embedding": embedder.model_id}
+        evidence = entry.evidence
+        if entry.input == "pair" and entry.subject in pair_similarity:
+            evidence = {**evidence, "similarity": pair_similarity[entry.subject]}
+        written.append(entry.model_copy(update={"model": model, "evidence": evidence}))
+    suggestions.save([*ledger, *written], path=suggestions.SUGGESTIONS_PATH)
+
+    print(f"Suggestions written: {len(written)}")
+    for kind, count in sorted(Counter(entry.kind for entry in written).items()):
+        print(f"  {kind}: {count}")
+    if result.dropped:
+        dropped = ", ".join(
+            f"{reason}: {count}" for reason, count in sorted(result.dropped.items())
+        )
+        print(f"Dropped: {dropped}")
+    print(f"Failed chunks: {result.failed_chunks}")
+    print(
+        f"Tokens: {result.usage.prompt_tokens} prompt, "
+        f"{result.usage.completion_tokens} completion"
+    )
+
+
 def main() -> None:
     logging.basicConfig()
     parser = ArgumentParser(description="Ingest recipes for a registered site.")
@@ -408,7 +519,30 @@ def main() -> None:
         "--ref-review",
         action="store_true",
         help="list the top ingredients without a confirmed reference "
-        "by ingredient line count, then exit",
+        "by ingredient line count, with text and embedding "
+        "neighbours, then exit",
+    )
+    parser.add_argument(
+        "--suggest",
+        nargs="?",
+        const=",".join(_SUGGEST_SETS),
+        default=None,
+        metavar="SETS",
+        help="send the review input sets (comma list of queue,audit,"
+        "pair,food_ref; default all four) through the LLM and append "
+        "the verdicts to suggestions.json, then exit",
+    )
+    parser.add_argument(
+        "--suggest-limit",
+        type=int,
+        metavar="N",
+        help="cap the items per input set (with --suggest)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="with --suggest, print per-set item counts and an "
+        "estimated token budget without calling the LLM",
     )
     parser.add_argument(
         "--derive-nutrition",
@@ -434,6 +568,11 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.dry_run and args.suggest is None:
+        parser.error("--dry-run only applies to --suggest")
+    if args.suggest_limit is not None and args.suggest is None:
+        parser.error("--suggest-limit only applies to --suggest")
+
     initialise()
     # Seed before parsing or reparsing: the aliases decide canonical
     # resolution, so a fresh database must not parse unseeded. The
@@ -446,13 +585,26 @@ def main() -> None:
             print(f"{food}: {', '.join(names)}")
         return
     if args.ref_review:
-        for count, name, candidate, matches in ref_review():
+        for count, name, candidate, matches, neighbours in ref_review(
+            embedder=suggest_embedder()
+        ):
             head = f"{count:5d}  {name}:"
             if candidate is not None:
                 head += f" parser candidate: {candidate}"
             else:
                 head += " no parser candidate"
             print(" | ".join([head, *matches]))
+            if neighbours:
+                print(f"    {' | '.join(neighbours)}")
+        return
+    if args.suggest is not None:
+        sets = list(dict.fromkeys(args.suggest.split(",")))
+        unknown = [name for name in sets if name not in _SUGGEST_SETS]
+        if unknown:
+            parser.error(f"unknown input set(s): {', '.join(unknown)}")
+        if args.suggest_limit is not None and args.suggest_limit < 1:
+            parser.error("--suggest-limit must be at least 1")
+        suggest_command(sets, limit=args.suggest_limit, dry_run=args.dry_run)
         return
     if args.derive_nutrition:
         print(f"Derived nutrition for {derive_all_nutrition()} recipes")

@@ -1,0 +1,383 @@
+[
+  {
+    "input": "queue",
+    "subject": "courgette",
+    "lines": ["1 courgette, trimmed and sliced"],
+    "known_concepts": ["zucchini", "marrow", "onion"],
+    "expected_kind": "alias",
+    "expected_target": "zucchini"
+  },
+  {
+    "input": "queue",
+    "subject": "whole milk",
+    "lines": ["300 ml whole milk"],
+    "known_concepts": ["milk", "semi-skimmed milk"],
+    "expected_kind": "variant",
+    "expected_target": "milk"
+  },
+  {
+    "input": "queue",
+    "subject": "spring onions",
+    "lines": ["3 spring onions, finely sliced"],
+    "known_concepts": ["scallion", "onion", "chives"],
+    "expected_kind": "alias",
+    "expected_target": "scallion"
+  },
+  {
+    "input": "queue",
+    "subject": "sultanas",
+    "lines": ["100 g sultanas"],
+    "known_concepts": ["raisin", "currant"],
+    "expected_kind": "alias",
+    "expected_target": "raisin"
+  },
+  {
+    "input": "queue",
+    "subject": "garlic press",
+    "lines": ["crush the cloves using a garlic press"],
+    "known_concepts": ["garlic"],
+    "expected_kind": "not_food"
+  },
+  {
+    "input": "queue",
+    "subject": "milk",
+    "lines": ["70g milk or dark chocolate roughly chopped (optional)"],
+    "expected_kind": "line_override",
+    "expected_target": "milk chocolate"
+  },
+  {
+    "input": "queue",
+    "subject": "ground almonds",
+    "lines": ["100 g ground almonds"],
+    "known_concepts": ["almond"],
+    "expected_kind": "ok"
+  },
+  {
+    "input": "queue",
+    "subject": "vanilla extract",
+    "lines": ["1 tsp vanilla extract"],
+    "known_concepts": ["vanilla", "vanilla essence"],
+    "expected_kind": "alias",
+    "expected_target": "vanilla"
+  },
+  {
+    "input": "queue",
+    "subject": "castor sugar",
+    "lines": ["200 g castor sugar"],
+    "known_concepts": ["caster sugar", "sugar"],
+    "expected_kind": "alias",
+    "expected_target": "caster sugar"
+  },
+  {
+    "input": "queue",
+    "subject": "firm tofu",
+    "lines": ["400 g firm tofu, cubed"],
+    "known_concepts": ["tofu"],
+    "expected_kind": "variant",
+    "expected_target": "tofu"
+  },
+  {
+    "input": "queue",
+    "subject": "fish slice",
+    "lines": ["lift the fish with a fish slice"],
+    "expected_kind": "not_food"
+  },
+  {
+    "input": "queue",
+    "subject": "baby spinach",
+    "lines": ["100 g baby spinach"],
+    "known_concepts": ["spinach", "watercress"],
+    "expected_kind": "variant",
+    "expected_target": "spinach"
+  },
+  {
+    "input": "audit",
+    "subject": "aubergine",
+    "known_concepts": ["eggplant", "courgette"],
+    "expected_kind": "alias",
+    "expected_target": "eggplant"
+  },
+  {
+    "input": "audit",
+    "subject": "rocket",
+    "known_concepts": ["arugula", "lamb's lettuce"],
+    "expected_kind": "alias",
+    "expected_target": "arugula"
+  },
+  {
+    "input": "audit",
+    "subject": "king prawns",
+    "known_concepts": ["prawn", "tiger prawn"],
+    "expected_kind": "variant",
+    "expected_target": "prawn"
+  },
+  {
+    "input": "audit",
+    "subject": "baking soda",
+    "known_concepts": ["bicarbonate of soda", "baking powder"],
+    "expected_kind": "alias",
+    "expected_target": "bicarbonate of soda"
+  },
+  {
+    "input": "audit",
+    "subject": "wooden spoon",
+    "lines": ["stir with a wooden spoon"],
+    "expected_kind": "not_food"
+  },
+  {
+    "input": "audit",
+    "subject": "unsalted butter",
+    "known_concepts": ["butter", "salted butter"],
+    "expected_kind": "variant",
+    "expected_target": "butter"
+  },
+  {
+    "input": "audit",
+    "subject": "smoked bacon lardons",
+    "known_concepts": ["bacon", "lardon"],
+    "expected_kind": "ok"
+  },
+  {
+    "input": "audit",
+    "subject": "good splash",
+    "lines": ["a good splash of white wine vinegar"],
+    "expected_kind": "line_override",
+    "expected_target": "white wine vinegar"
+  },
+  {
+    "input": "audit",
+    "subject": "confectioners’ sugar",
+    "known_concepts": ["confectioners' sugar", "icing sugar"],
+    "expected_kind": "alias",
+    "expected_target": "confectioners' sugar"
+  },
+  {
+    "input": "audit",
+    "subject": "red wine vinegar",
+    "known_concepts": ["vinegar", "white wine vinegar"],
+    "expected_kind": "ok"
+  },
+  {
+    "input": "audit",
+    "subject": "plain flour",
+    "known_concepts": ["self-raising flour", "bread flour"],
+    "expected_kind": "ok"
+  },
+  {
+    "input": "audit",
+    "subject": "dried porcini",
+    "known_concepts": ["porcini", "chestnut mushroom"],
+    "expected_kind": "variant",
+    "expected_target": "porcini"
+  },
+  {
+    "input": "pair",
+    "subject": "rocket | arugula",
+    "known_concepts": ["arugula"],
+    "expected_kind": "alias",
+    "expected_target": "arugula"
+  },
+  {
+    "input": "pair",
+    "subject": "whole milk | milk",
+    "known_concepts": ["milk"],
+    "expected_kind": "variant",
+    "expected_target": "milk"
+  },
+  {
+    "input": "pair",
+    "subject": "coriander | ground coriander",
+    "known_concepts": ["ground coriander", "coriander"],
+    "expected_kind": "ok"
+  },
+  {
+    "input": "pair",
+    "subject": "baking soda | baking powder",
+    "known_concepts": ["baking powder", "baking soda"],
+    "expected_kind": "ok"
+  },
+  {
+    "input": "pair",
+    "subject": "courgette | zucchini",
+    "known_concepts": ["zucchini"],
+    "expected_kind": "alias",
+    "expected_target": "zucchini"
+  },
+  {
+    "input": "pair",
+    "subject": "caster sugar | icing sugar",
+    "known_concepts": ["icing sugar", "caster sugar"],
+    "expected_kind": "ok"
+  },
+  {
+    "input": "pair",
+    "subject": "plain flour | all-purpose flour",
+    "known_concepts": ["all-purpose flour"],
+    "expected_kind": "alias",
+    "expected_target": "all-purpose flour"
+  },
+  {
+    "input": "pair",
+    "subject": "fresh coriander | coriander",
+    "known_concepts": ["coriander"],
+    "expected_kind": "variant",
+    "expected_target": "coriander"
+  },
+  {
+    "input": "pair",
+    "subject": "smoked paprika | paprika",
+    "known_concepts": ["paprika"],
+    "expected_kind": "variant",
+    "expected_target": "paprika"
+  },
+  {
+    "input": "pair",
+    "subject": "spring onion | scallion",
+    "known_concepts": ["scallion"],
+    "expected_kind": "alias",
+    "expected_target": "scallion"
+  },
+  {
+    "input": "pair",
+    "subject": "groundnut oil | peanut oil",
+    "known_concepts": ["peanut oil"],
+    "expected_kind": "alias",
+    "expected_target": "peanut oil"
+  },
+  {
+    "input": "pair",
+    "subject": "creme fraiche | sour cream",
+    "known_concepts": ["sour cream", "creme fraiche"],
+    "expected_kind": "ok"
+  },
+  {
+    "input": "food_ref",
+    "subject": "icing sugar",
+    "candidates": [
+      {"source": "fdc", "source_food_id": "175079", "description": "Sugars, powdered"}
+    ],
+    "expected_kind": "food_ref",
+    "expected_target": "175079"
+  },
+  {
+    "input": "food_ref",
+    "subject": "maple syrup",
+    "candidates": [
+      {"source": "fdc", "source_food_id": "169661", "description": "Maple syrup"}
+    ],
+    "expected_kind": "food_ref",
+    "expected_target": "169661"
+  },
+  {
+    "input": "food_ref",
+    "subject": "whole milk",
+    "candidates": [
+      {
+        "source": "fdc",
+        "source_food_id": "171265",
+        "description": "Milk, whole, 3.25% milkfat, with added vitamin D"
+      }
+    ],
+    "expected_kind": "food_ref",
+    "expected_target": "171265"
+  },
+  {
+    "input": "food_ref",
+    "subject": "curly kale",
+    "candidates": [
+      {"source": "cnf", "source_food_id": "6265", "description": "Kale, curly, raw"}
+    ],
+    "expected_kind": "food_ref",
+    "expected_target": "6265"
+  },
+  {
+    "input": "food_ref",
+    "subject": "sesame oil",
+    "candidates": [
+      {
+        "source": "fdc",
+        "source_food_id": "4041",
+        "description": "Oil, sesame, salad or cooking"
+      }
+    ],
+    "expected_kind": "food_ref",
+    "expected_target": "4041"
+  },
+  {
+    "input": "food_ref",
+    "subject": "semolina",
+    "candidates": [
+      {"source": "cofid", "source_food_id": "14-4-02", "description": "Semolina, dry"}
+    ],
+    "expected_kind": "food_ref",
+    "expected_target": "14-4-02"
+  },
+  {
+    "input": "food_ref",
+    "subject": "gouda",
+    "candidates": [
+      {"source": "fdc", "source_food_id": "17278", "description": "Cheese, gouda"}
+    ],
+    "expected_kind": "food_ref",
+    "expected_target": "17278"
+  },
+  {
+    "input": "food_ref",
+    "subject": "dried thyme",
+    "candidates": [
+      {
+        "source": "fdc",
+        "source_food_id": "174778",
+        "description": "Spices, thyme, dried"
+      }
+    ],
+    "expected_kind": "food_ref",
+    "expected_target": "174778"
+  },
+  {
+    "input": "food_ref",
+    "subject": "self-raising flour",
+    "candidates": [
+      {
+        "source": "fdc",
+        "source_food_id": "168894",
+        "description": "Wheat flour, white, all-purpose, enriched"
+      },
+      {
+        "source": "cnf",
+        "source_food_id": "1123",
+        "description": "Flour, white, all-purpose"
+      }
+    ],
+    "expected_kind": "ok"
+  },
+  {
+    "input": "food_ref",
+    "subject": "malt vinegar",
+    "candidates": [
+      {"source": "fdc", "source_food_id": "2048", "description": "Vinegar, cider"}
+    ],
+    "expected_kind": "ok"
+  },
+  {
+    "input": "food_ref",
+    "subject": "smoked tofu",
+    "candidates": [
+      {
+        "source": "fdc",
+        "source_food_id": "16126",
+        "description": "Tofu, raw, firm, prepared with calcium sulfate"
+      }
+    ],
+    "expected_kind": "ok"
+  },
+  {
+    "input": "food_ref",
+    "subject": "demerara sugar",
+    "candidates": [
+      {"source": "fdc", "source_food_id": "169655", "description": "Sugars, granulated"},
+      {"source": "cnf", "source_food_id": "932", "description": "Sugars, brown"}
+    ],
+    "expected_kind": "ok"
+  }
+]

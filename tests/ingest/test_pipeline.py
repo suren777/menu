@@ -27,6 +27,7 @@ from menu.ingest.errors import (
     DisallowedError,
     FetchError,
 )
+from menu.ingest.http import http_session
 from menu.ingest.llm_review import Usage
 from menu.ingest.pipeline import (
     CrawlReport,
@@ -719,7 +720,7 @@ def test_changed_data_replaces_the_recipe_and_lines(
 
 
 @pytest.mark.usefixtures("db_engine")
-@patch("menu.ingest.http.session.get")
+@patch.object(http_session(), "get")
 def test_offline_crawl_leaves_an_uncached_page_queued(mock_get: MagicMock) -> None:
     """Offline a page the cache doesn't hold wasn't replayable: it
     stays queued with no attempt recorded, for the next live crawl."""
@@ -738,7 +739,7 @@ def test_offline_crawl_leaves_an_uncached_page_queued(mock_get: MagicMock) -> No
 
 
 @pytest.mark.usefixtures("db_engine")
-@patch("menu.ingest.http.session.get")
+@patch.object(http_session(), "get")
 def test_offline_crawl_leaves_an_uncached_sitemap_pending(
     mock_get: MagicMock,
 ) -> None:

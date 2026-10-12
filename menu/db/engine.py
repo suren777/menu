@@ -2,9 +2,11 @@
 
 The database lives on the Postgres 18 server from docker-compose.yml
 (`docker compose up -d db`): it is throwaway experiment storage,
-rebuilt from scratch whenever the schema changes.
+rebuilt from scratch whenever the schema changes. The default engine
+is built lazily on first use: importing this module builds nothing.
 """
 
+import functools
 import os
 from typing import TYPE_CHECKING
 
@@ -29,4 +31,7 @@ def make_engine(url: str | None = None) -> Engine:
     return create_engine(url if url is not None else database_url(), pool_pre_ping=True)
 
 
-engine = make_engine(database_url())
+@functools.cache
+def default_engine() -> Engine:
+    """The shared default engine: built once, on first use."""
+    return make_engine()

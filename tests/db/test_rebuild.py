@@ -18,6 +18,7 @@ from menu.db.database import Page, Recipe, RecipeIngredient
 from menu.db.engine import database_url, make_engine
 from menu.db.rebuild import rebuild
 from menu.ingest.fetch import _cache_path
+from menu.ingest.http import http_session
 from menu.ingest.registry import SiteConfig
 
 if TYPE_CHECKING:
@@ -76,7 +77,7 @@ def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("network call in an offline test")
 
-    monkeypatch.setattr("menu.ingest.http.session.get", boom)
+    monkeypatch.setattr(http_session(), "get", boom)
 
 
 def _target() -> str:

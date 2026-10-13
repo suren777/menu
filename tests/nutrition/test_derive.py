@@ -1,14 +1,16 @@
-"""Nutrition tests: the published-nutrition parser and derivation."""
+"""Nutrition tests: the published-nutrition parser, the pure
+derivation, and the stored derivation runs."""
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from sqlalchemy import select
 
 from menu.db.connection import get_session
 from menu.db.database import (
+    DerivationRun,
     FoodSource,
     Ingredient,
     IngredientFoodRef,
@@ -16,11 +18,19 @@ from menu.db.database import (
     Page,
     Recipe,
     RecipeIngredient,
-    RecipeNutrition,
+    RecipeNutrient,
+    RecipeNutritionRun,
+    RecipePublishedNutrient,
     RefFood,
     RefNutrient,
 )
-from menu.nutrition.derive import derive_nutrition, parse_published_nutrition
+from menu.nutrition.derive import (
+    NutritionData,
+    derive_recipe,
+    parse_published_nutrition,
+    published_nutrients,
+)
+from menu.nutrition.reports import derive_all_nutrition, prune_runs
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -64,6 +74,107 @@ def test_parse_published_nutrition_king_arthur() -> None:
 def test_parse_published_nutrition_missing_block() -> None:
     """Recipes without a nutrition block parse to nothing."""
     assert parse_published_nutrition({}) == {}
+
+
+def test_published_nutrients_keeps_the_raw_text() -> None:
+    """Each published nutrient keeps the JSON-LD string it was parsed
+    from, and parse_published_nutrition reads the same amounts."""
+    parsed = published_nutrients({"nutrition": {"calories": "350 calories"}})
+    assert parsed == {"energy_kcal": (350.0, "350 calories")}
+    assert parse_published_nutrition({"nutrition": {"calories": "350 calories"}}) == {
+        "energy_kcal": 350.0
+    }
+
+
+def _line(**kwargs: Any) -> RecipeIngredient:
+    """A hand-built (unstored) ingredient line for derive_recipe."""
+    defaults: dict[str, Any] = {
+        "recipe_id": 1,
+        "position": 0,
+        "raw_text": "line",
+        "parse_status": "ok",
+    }
+    return RecipeIngredient(**{**defaults, **kwargs})
+
+
+def _term(
+    ingredient_id: int | None = None,
+    variant: str | None = None,
+    resolution: str = "seed",
+) -> IngredientTerm:
+    return IngredientTerm(
+        term="t", ingredient_id=ingredient_id, variant=variant, resolution=resolution
+    )
+
+
+def test_derive_recipe_sums_the_mapped_lines() -> None:
+    """Hand-built lines and data, no database: ranges eat the
+    midpoint, per-nutrient definitions and sources are tracked, and
+    no-quantity, not_food and failed lines are not counted."""
+    data = NutritionData(
+        refs={1: {"fdc": 10}},
+        nutrients={
+            10: [("protein_g", 10.0, "by_weight"), ("energy_kcal", 100.0, "kcal")]
+        },
+        prepared_forms={},
+        names={1: "egg", 2: "salt", 3: "tin"},
+    )
+    lines = [
+        # 2-3 eggs: midpoint 75 g.
+        (
+            _line(
+                term_id=1,
+                quantity=2.0,
+                quantity_max=3.0,
+                base_unit="piece",
+                grams=50.0,
+                grams_max=100.0,
+            ),
+            _term(1),
+        ),
+        # No quantity: unconverted.
+        (_line(term_id=2, base_unit="piece"), _term(2)),
+        # Equipment: skipped outright.
+        (
+            _line(term_id=3, quantity=1.0, base_unit="piece", grams=100.0),
+            _term(None, resolution="not_food"),
+        ),
+        # Failed parse: skipped outright.
+        (_line(raw_text="unparseable", parse_status="failed"), None),
+    ]
+
+    derivation = derive_recipe(lines, ("fdc",), data)
+
+    assert derivation.nutrients["protein_g"].amount == pytest.approx(75.0 / 100 * 10.0)
+    assert derivation.nutrients["protein_g"].definitions == frozenset({"by_weight"})
+    assert derivation.nutrients["protein_g"].sources == frozenset({"fdc"})
+    assert derivation.nutrients["energy_kcal"].amount == pytest.approx(75.0)
+    assert derivation.coverage == 1.0
+    assert derivation.unconverted_lines == 1
+    assert derivation.sources == frozenset({"fdc"})
+    assert derivation.definitions_mixed is False
+
+
+def test_derive_recipe_falls_back_from_an_unloaded_prepared_form() -> None:
+    """A prepared form whose food has no loaded nutrient rows falls
+    back to the confirmed reference."""
+    data = NutritionData(
+        refs={1: {"fdc": 10}},
+        nutrients={10: [("protein_g", 12.56, "by_weight")]},
+        prepared_forms={("fdc", "172184"): 99},
+        names={1: "egg"},
+    )
+    derivation = derive_recipe(
+        [
+            (
+                _line(term_id=1, quantity=1.0, base_unit="piece", grams=34.0),
+                _term(1, variant="yolk"),
+            )
+        ],
+        ("fdc",),
+        data,
+    )
+    assert derivation.nutrients["protein_g"].amount == pytest.approx(34.0 / 100 * 12.56)
 
 
 def _add_term(
@@ -136,10 +247,31 @@ def _add_recipe(session: Session, url: str, name: str) -> Recipe:
     return recipe
 
 
+def _run_row(session: Session, run_id: int, recipe_id: int) -> RecipeNutritionRun:
+    return session.scalars(
+        select(RecipeNutritionRun).where(
+            RecipeNutritionRun.run_id == run_id,
+            RecipeNutritionRun.recipe_id == recipe_id,
+        )
+    ).one()
+
+
+def _amounts(
+    session: Session, run_id: int, recipe_id: int
+) -> dict[str, RecipeNutrient]:
+    rows = session.scalars(
+        select(RecipeNutrient).where(
+            RecipeNutrient.run_id == run_id,
+            RecipeNutrient.recipe_id == recipe_id,
+        )
+    ).all()
+    return {row.nutrient: row for row in rows}
+
+
 @pytest.mark.usefixtures("db_engine")
-def test_derive_nutrition_sums_confirmed_reference() -> None:
+def test_derive_all_nutrition_sums_confirmed_reference() -> None:
     """Each counted line contributes grams x per-100g; rerunning
-    updates the one derived row."""
+    stores a second run instead of overwriting the first."""
     with get_session() as session:
         food = _add_nutrition_food(
             session,
@@ -180,25 +312,24 @@ def test_derive_nutrition_sums_confirmed_reference() -> None:
         )
 
     with get_session() as session:
-        derive_nutrition(recipe_id, session)
-        derive_nutrition(recipe_id, session)
+        run_id = derive_all_nutrition(session).id
+        derive_all_nutrition(session)
     with get_session() as session:
-        rows = session.scalars(
-            select(RecipeNutrition).where(RecipeNutrition.recipe_id == recipe_id)
-        ).all()
-        assert len(rows) == 1
-        row = rows[0]
-        assert row.source == "derived"
-        assert row.protein_g == pytest.approx(50.0 / 100 * 12.56)
-        assert row.energy_kcal == pytest.approx(50.0 / 100 * 143.0)
+        assert len(session.scalars(select(DerivationRun)).all()) == 2
+        amounts = _amounts(session, run_id, recipe_id)
+        assert amounts["protein_g"].amount == pytest.approx(50.0 / 100 * 12.56)
+        assert amounts["protein_g"].definitions == ["by_weight"]
+        assert amounts["protein_g"].sources == ["fdc"]
+        assert amounts["energy_kcal"].amount == pytest.approx(50.0 / 100 * 143.0)
+        row = _run_row(session, run_id, recipe_id)
         assert row.coverage == 1.0
         assert row.unconverted_lines == 0
-        assert row.sources == "fdc"
+        assert row.sources == ["fdc"]
         assert row.definitions_mixed is False
 
 
 @pytest.mark.usefixtures("db_engine")
-def test_derive_nutrition_midpoint_and_skips() -> None:
+def test_derive_all_nutrition_midpoint_and_skips() -> None:
     """Ranges eat the midpoint; no-quantity lines count as
     unconverted; optional and alternative lines are skipped."""
     with get_session() as session:
@@ -280,20 +411,20 @@ def test_derive_nutrition_midpoint_and_skips() -> None:
         )
 
     with get_session() as session:
-        derive_nutrition(recipe_id, session)
+        run_id = derive_all_nutrition(session).id
     with get_session() as session:
-        row = session.scalars(
-            select(RecipeNutrition).where(RecipeNutrition.recipe_id == recipe_id)
-        ).one()
-        assert row.protein_g == pytest.approx(75.0 / 100 * 10.0)
+        amounts = _amounts(session, run_id, recipe_id)
+        assert amounts["protein_g"].amount == pytest.approx(75.0 / 100 * 10.0)
+        row = _run_row(session, run_id, recipe_id)
         assert row.coverage == 1.0
         assert row.unconverted_lines == 1
 
 
 @pytest.mark.usefixtures("db_engine")
-def test_derive_nutrition_coverage_and_definitions() -> None:
+def test_derive_all_nutrition_coverage_and_definitions() -> None:
     """Unmapped ingredients drag coverage down; nutrients summed from
-    differing definitions are flagged."""
+    differing definitions are flagged on the run and named on the
+    nutrient row."""
     with get_session() as session:
         egg_food = _add_nutrition_food(
             session, "171287", "Egg", [("protein_g", 12.56, "by_weight")]
@@ -348,20 +479,20 @@ def test_derive_nutrition_coverage_and_definitions() -> None:
             )
 
     with get_session() as session:
-        derive_nutrition(recipe_id, session)
+        run_id = derive_all_nutrition(session).id
     with get_session() as session:
-        row = session.scalars(
-            select(RecipeNutrition).where(RecipeNutrition.recipe_id == recipe_id)
-        ).one()
-        assert row.protein_g == pytest.approx(12.56 + 10.0)
+        amounts = _amounts(session, run_id, recipe_id)
+        assert amounts["protein_g"].amount == pytest.approx(12.56 + 10.0)
+        assert amounts["protein_g"].definitions == ["by_difference", "by_weight"]
+        row = _run_row(session, run_id, recipe_id)
         assert row.coverage == pytest.approx(200.0 / 300.0)
         assert row.unconverted_lines == 1
         assert row.definitions_mixed is True
-        assert row.sources == "fdc"
+        assert row.sources == ["fdc"]
 
 
 @pytest.mark.usefixtures("db_engine")
-def test_derive_nutrition_uses_prepared_form() -> None:
+def test_derive_all_nutrition_uses_prepared_form() -> None:
     """A line that resolved through the "yolk" variant term takes the
     yolk food's nutrients; a plain egg line keeps the whole egg's."""
     with get_session() as session:
@@ -422,17 +553,17 @@ def test_derive_nutrition_uses_prepared_form() -> None:
         recipe_id = recipe.id
 
     with get_session() as session:
-        derive_nutrition(recipe_id, session)
+        run_id = derive_all_nutrition(session).id
     with get_session() as session:
-        row = session.scalars(
-            select(RecipeNutrition).where(RecipeNutrition.recipe_id == recipe_id)
-        ).one()
-        assert row.protein_g == pytest.approx(34.0 / 100 * 15.86 + 50.0 / 100 * 12.56)
-        assert row.sources == "fdc"
+        amounts = _amounts(session, run_id, recipe_id)
+        assert amounts["protein_g"].amount == pytest.approx(
+            34.0 / 100 * 15.86 + 50.0 / 100 * 12.56
+        )
+        assert amounts["protein_g"].sources == ["fdc"]
 
 
 @pytest.mark.usefixtures("db_engine")
-def test_derive_nutrition_skips_not_food_lines() -> None:
+def test_derive_all_nutrition_skips_not_food_lines() -> None:
     """Equipment lines ("12-hole mini bundt tin" on its not_food term)
     stay stored but are not food: excluded from the totals and the
     coverage denominator."""
@@ -489,11 +620,123 @@ def test_derive_nutrition_skips_not_food_lines() -> None:
         )
 
     with get_session() as session:
-        derive_nutrition(recipe_id, session)
+        run_id = derive_all_nutrition(session).id
     with get_session() as session:
-        row = session.scalars(
-            select(RecipeNutrition).where(RecipeNutrition.recipe_id == recipe_id)
-        ).one()
-        assert row.protein_g == pytest.approx(50.0 / 100 * 12.56)
+        amounts = _amounts(session, run_id, recipe_id)
+        assert amounts["protein_g"].amount == pytest.approx(50.0 / 100 * 12.56)
+        row = _run_row(session, run_id, recipe_id)
         assert row.coverage == 1.0
         assert row.unconverted_lines == 0
+
+
+@pytest.mark.usefixtures("db_engine")
+def test_derive_all_nutrition_rows_recipes_with_no_lines() -> None:
+    """Every recipe gets its run row, also ones with no lines:
+    coverage NULL, nothing unconverted, no nutrient rows."""
+    with get_session() as session:
+        recipe = _add_recipe(session, "https://x/empty", "Empty")
+        recipe_id = recipe.id
+
+    with get_session() as session:
+        run_id = derive_all_nutrition(session).id
+    with get_session() as session:
+        row = _run_row(session, run_id, recipe_id)
+        assert row.coverage is None
+        assert row.unconverted_lines == 0
+        assert _amounts(session, run_id, recipe_id) == {}
+
+
+@pytest.mark.usefixtures("db_engine")
+def test_derive_all_nutrition_refreshes_published_rows() -> None:
+    """Published values are raw capture with their JSON-LD text; a
+    re-run replaces them, and a recipe that publishes nothing again
+    loses its rows."""
+    with get_session() as session:
+        recipe = _add_recipe(session, "https://x/pie", "Pie")
+        recipe.data = {"nutrition": {"calories": "350 calories"}}
+        recipe_id = recipe.id
+
+    with get_session() as session:
+        derive_all_nutrition(session)
+    with get_session() as session:
+        rows = session.scalars(
+            select(RecipePublishedNutrient).where(
+                RecipePublishedNutrient.recipe_id == recipe_id
+            )
+        ).all()
+        assert {(row.nutrient, row.amount, row.raw_text) for row in rows} == {
+            ("energy_kcal", 350.0, "350 calories")
+        }
+        stored = session.get(Recipe, recipe_id)
+        assert stored is not None
+        stored.data = {}
+
+    with get_session() as session:
+        derive_all_nutrition(session)
+    with get_session() as session:
+        assert session.scalars(select(RecipePublishedNutrient)).all() == []
+
+
+@pytest.mark.usefixtures("db_engine")
+def test_prune_runs_keeps_the_newest_with_its_rows() -> None:
+    """prune_runs(keep=1) drops the older run and cascades its
+    per-recipe and per-nutrient rows; the newest run's stay."""
+    with get_session() as session:
+        food = _add_nutrition_food(
+            session, "171287", "Egg", [("protein_g", 12.56, "by_weight")]
+        )
+        egg = Ingredient(name="egg")
+        session.add(egg)
+        recipe = _add_recipe(session, "https://x/omelette", "Omelette")
+        recipe_id = recipe.id
+        session.add(
+            IngredientFoodRef(
+                ingredient_id=egg.id,
+                ref_food_id=food.id,
+                source_id=food.source_id,
+                role="nutrition",
+                status="confirmed",
+                origin="seed",
+            )
+        )
+        egg_term = _add_term(session, "egg", egg)
+        session.add(
+            RecipeIngredient(
+                recipe_id=recipe.id,
+                position=0,
+                raw_text="1 egg",
+                term_id=egg_term.id,
+                quantity=1.0,
+                dimension="count",
+                base_unit="piece",
+                grams=50.0,
+                grams_source="seed",
+            )
+        )
+
+    with get_session() as session:
+        first_id = derive_all_nutrition(session).id
+    with get_session() as session:
+        second_id = derive_all_nutrition(session).id
+
+    with get_session() as session:
+        prune_runs(session, keep=1)
+    with get_session() as session:
+        assert session.get(DerivationRun, first_id) is None
+        assert (
+            session.scalars(
+                select(RecipeNutritionRun).where(RecipeNutritionRun.run_id == first_id)
+            ).all()
+            == []
+        )
+        assert (
+            session.scalars(
+                select(RecipeNutrient).where(RecipeNutrient.run_id == first_id)
+            ).all()
+            == []
+        )
+        assert session.get(DerivationRun, second_id) is not None
+        assert _run_row(session, second_id, recipe_id).coverage == 1.0
+        assert _amounts(session, second_id, recipe_id)["protein_g"].amount == (
+            pytest.approx(50.0 / 100 * 12.56)
+        )

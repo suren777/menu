@@ -126,14 +126,22 @@ def test_main_requires_a_subcommand() -> None:
 
 
 @pytest.mark.usefixtures("no_db")
-@patch("menu.scripts.ingest.derive_all_nutrition", return_value=7)
-def test_main_derive_nutrition_prints_the_count(
+@patch("menu.scripts.ingest.derive_all_nutrition")
+def test_main_derive_nutrition_prints_the_run(
     mock_derive: MagicMock, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    main(["derive-nutrition"])
+    with patch("menu.scripts.ingest.get_session") as mock_get_session:
+        session = MagicMock()
+        session.scalar.return_value = 42
+        mock_get_session.return_value.__enter__.return_value = session
+        run = MagicMock()
+        run.id = 7
+        mock_derive.return_value = run
 
-    mock_derive.assert_called_once_with(ANY)
-    assert "Derived nutrition for 7 recipes" in capsys.readouterr().out
+        main(["derive-nutrition", "--note", "baseline"])
+
+    mock_derive.assert_called_once_with(ANY, note="baseline")
+    assert "Derivation run 7: 42 recipes" in capsys.readouterr().out
 
 
 @pytest.mark.usefixtures("no_db")
@@ -175,7 +183,41 @@ def test_main_report_ref_review_prints_the_rows(
 def test_main_report_validate_nutrition_dispatches(mock_report: MagicMock) -> None:
     main(["report", "validate-nutrition"])
 
-    mock_report.assert_called_once_with(ANY)
+    mock_report.assert_called_once_with(ANY, run_id=None)
+
+
+@pytest.mark.usefixtures("no_db")
+@patch("menu.scripts.ingest.validation_report")
+def test_main_report_validate_nutrition_passes_the_run(
+    mock_report: MagicMock,
+) -> None:
+    main(["report", "validate-nutrition", "--run", "5"])
+
+    mock_report.assert_called_once_with(ANY, run_id=5)
+
+
+@pytest.mark.usefixtures("no_db")
+@patch("menu.scripts.ingest.latest_run_id", return_value=3)
+@patch("menu.scripts.ingest.run_comparison_report")
+def test_main_validate_nutrition_against_defaults_to_the_latest_run(
+    mock_report: MagicMock, mock_latest: MagicMock
+) -> None:
+    main(["report", "validate-nutrition", "--against", "2"])
+
+    mock_latest.assert_called_once_with(ANY)
+    mock_report.assert_called_once_with(ANY, 3, 2)
+
+
+@pytest.mark.usefixtures("no_db")
+@patch("menu.scripts.ingest.latest_run_id", return_value=3)
+@patch("menu.scripts.ingest.run_comparison_report")
+def test_main_validate_nutrition_against_uses_the_named_run(
+    mock_report: MagicMock, mock_latest: MagicMock
+) -> None:
+    main(["report", "validate-nutrition", "--run", "5", "--against", "2"])
+
+    mock_latest.assert_not_called()
+    mock_report.assert_called_once_with(ANY, 5, 2)
 
 
 @pytest.mark.usefixtures("no_db")

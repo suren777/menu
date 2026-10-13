@@ -15,8 +15,10 @@ from argparse import ArgumentParser, ArgumentTypeError
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from sqlalchemy import func, select
+
 from menu.db.connection import get_session
-from menu.db.database import initialise
+from menu.db.database import RecipeNutritionRun, initialise
 from menu.db.ingredients.resolve import re_resolve
 from menu.db.ingredients.seed import seed_ingredient_data
 from menu.ingest.errors import BlockedError
@@ -32,6 +34,8 @@ from menu.ingest.registry import get_site
 from menu.nutrition.reports import (
     coverage_report,
     derive_all_nutrition,
+    latest_run_id,
+    run_comparison_report,
     validation_report,
 )
 from menu.scripts.metrics import collect_metrics
@@ -89,10 +93,15 @@ def _cmd_suggest(args: Namespace) -> None:
     suggest_command(args.sets, limit=args.limit, dry_run=args.dry_run)
 
 
-def _cmd_derive_nutrition(_args: Namespace) -> None:
+def _cmd_derive_nutrition(args: Namespace) -> None:
     with get_session() as session:
-        count = derive_all_nutrition(session)
-    print(f"Derived nutrition for {count} recipes")
+        run = derive_all_nutrition(session, note=args.note)
+        recipes = session.scalar(
+            select(func.count())
+            .select_from(RecipeNutritionRun)
+            .where(RecipeNutritionRun.run_id == run.id)
+        )
+    print(f"Derivation run {run.id}: {recipes} recipes")
 
 
 def _cmd_report_fdc_conflicts(_args: Namespace) -> None:
@@ -116,9 +125,18 @@ def _cmd_report_ref_review(_args: Namespace) -> None:
             print(f"    {' | '.join(neighbours)}")
 
 
-def _cmd_report_validate_nutrition(_args: Namespace) -> None:
+def _cmd_report_validate_nutrition(args: Namespace) -> None:
     with get_session() as session:
-        validation_report(session)
+        if args.against is not None:
+            # --against compares --run (default: the latest) with run M
+            # instead of the published values.
+            run_id = args.run if args.run is not None else latest_run_id(session)
+            if run_id is None:
+                print("Nothing to validate: run derive-nutrition first")
+                return
+            run_comparison_report(session, run_id, args.against)
+        else:
+            validation_report(session, run_id=args.run)
 
 
 def _cmd_report_coverage(_args: Namespace) -> None:
@@ -186,7 +204,12 @@ def _build_parser() -> ArgumentParser:
 
     derive_parser = subparsers.add_parser(
         "derive-nutrition",
-        help="derive nutrition for every stored recipe and backfill published rows",
+        help="derive nutrition for every stored recipe as one run and "
+        "backfill the published rows",
+    )
+    derive_parser.add_argument(
+        "--note",
+        help="label the run (a baseline, an experiment) — stored on the run row",
     )
     derive_parser.set_defaults(handler=_cmd_derive_nutrition)
 
@@ -206,7 +229,20 @@ def _build_parser() -> ArgumentParser:
     ref_review_parser.set_defaults(handler=_cmd_report_ref_review)
     validate_parser = reports.add_parser(
         "validate-nutrition",
-        help="compare derived vs published nutrition per serving",
+        help="compare derived vs published nutrition per serving, or "
+        "two derivation runs with each other",
+    )
+    validate_parser.add_argument(
+        "--run",
+        type=int,
+        metavar="N",
+        help="the derivation run to validate (default: the latest)",
+    )
+    validate_parser.add_argument(
+        "--against",
+        type=int,
+        metavar="M",
+        help="compare run N with run M instead of the published values",
     )
     validate_parser.set_defaults(handler=_cmd_report_validate_nutrition)
     coverage_parser = reports.add_parser(

@@ -20,7 +20,7 @@ from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.engine import make_url
 
 from menu.db.connection import get_session, use_engine
-from menu.db.database import Page, Recipe, initialise
+from menu.db.database import Page, Recipe, RecipeNutritionRun, initialise
 from menu.db.engine import database_url, make_engine
 from menu.db.ingredients.seed import seed_ingredient_data
 from menu.ingest import sites
@@ -194,7 +194,12 @@ def rebuild(
             with get_session() as session:
                 summaries[site.name] = _site_summary(site, session)
         with get_session() as session:
-            derived = derive_all_nutrition(session)
+            run = derive_all_nutrition(session)
+            derived = session.scalar(
+                select(func.count())
+                .select_from(RecipeNutritionRun)
+                .where(RecipeNutritionRun.run_id == run.id)
+            )
     engine.dispose()
 
     summary: dict[str, Any] = {
@@ -203,7 +208,7 @@ def rebuild(
             for name, counts in summaries.items()
         },
         "sources": {"imported": imported, "skipped": skipped},
-        "nutrition_recipes": derived,
+        "nutrition_recipes": derived or 0,
     }
     for name, counts in summaries.items():
         counted = ", ".join(

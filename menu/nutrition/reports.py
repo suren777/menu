@@ -149,6 +149,11 @@ def derive_all_nutrition(
             session.execute(insert(RecipeNutrient), nutrient_rows)
         if published_rows:
             session.execute(insert(RecipePublishedNutrient), published_rows)
+        # Lines are read-only here; dropping them keeps memory at one
+        # batch instead of every line in the database.
+        for recipe_lines in lines.values():
+            for line, _term in recipe_lines:
+                session.expunge(line)
     prune_runs(session)
     return run
 
@@ -170,6 +175,18 @@ def prune_runs(session: Session, keep: int = 10) -> None:
         delete(DerivationRun).where(
             DerivationRun.kind == "nutrition", DerivationRun.id.not_in(keep_ids)
         )
+    )
+
+
+def run_recipe_count(session: Session, run_id: int) -> int:
+    """How many recipes the run derived."""
+    return (
+        session.scalar(
+            select(func.count())
+            .select_from(RecipeNutritionRun)
+            .where(RecipeNutritionRun.run_id == run_id)
+        )
+        or 0
     )
 
 

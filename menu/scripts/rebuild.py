@@ -20,14 +20,14 @@ from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.engine import make_url
 
 from menu.db.connection import get_session, use_engine
-from menu.db.database import Page, Recipe, RecipeNutritionRun, initialise
+from menu.db.database import Page, Recipe, initialise
 from menu.db.engine import database_url, make_engine
 from menu.db.ingredients.seed import seed_ingredient_data
 from menu.ingest import sites
 from menu.ingest.errors import FetchError
 from menu.ingest.fetch import DEFAULT_CACHE_DIR
 from menu.ingest.pipeline import crawl_sitemap, import_sitemap
-from menu.nutrition.reports import derive_all_nutrition
+from menu.nutrition.reports import derive_all_nutrition, run_recipe_count
 from menu.nutrition.sources.cnf import CNF_URL, import_cnf
 from menu.nutrition.sources.cofid import COFID_URL, import_cofid
 from menu.nutrition.sources.fdc import FNDDS_URL, SR_URL, import_fdc
@@ -195,11 +195,7 @@ def rebuild(
                 summaries[site.name] = _site_summary(site, session)
         with get_session() as session:
             run = derive_all_nutrition(session)
-            derived = session.scalar(
-                select(func.count())
-                .select_from(RecipeNutritionRun)
-                .where(RecipeNutritionRun.run_id == run.id)
-            )
+            derived = run_recipe_count(session, run.id)
     engine.dispose()
 
     summary: dict[str, Any] = {
@@ -208,7 +204,7 @@ def rebuild(
             for name, counts in summaries.items()
         },
         "sources": {"imported": imported, "skipped": skipped},
-        "nutrition_recipes": derived or 0,
+        "nutrition_recipes": derived,
     }
     for name, counts in summaries.items():
         counted = ", ".join(

@@ -15,10 +15,8 @@ from argparse import ArgumentParser, ArgumentTypeError
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from sqlalchemy import func, select
-
 from menu.db.connection import get_session
-from menu.db.database import RecipeNutritionRun, initialise
+from menu.db.database import initialise
 from menu.db.ingredients.resolve import re_resolve
 from menu.db.ingredients.seed import seed_ingredient_data
 from menu.ingest.errors import BlockedError
@@ -36,6 +34,7 @@ from menu.nutrition.reports import (
     derive_all_nutrition,
     latest_run_id,
     run_comparison_report,
+    run_recipe_count,
     validation_report,
 )
 from menu.scripts.metrics import collect_metrics
@@ -96,11 +95,7 @@ def _cmd_suggest(args: Namespace) -> None:
 def _cmd_derive_nutrition(args: Namespace) -> None:
     with get_session() as session:
         run = derive_all_nutrition(session, note=args.note)
-        recipes = session.scalar(
-            select(func.count())
-            .select_from(RecipeNutritionRun)
-            .where(RecipeNutritionRun.run_id == run.id)
-        )
+        recipes = run_recipe_count(session, run.id)
     print(f"Derivation run {run.id}: {recipes} recipes")
 
 

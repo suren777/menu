@@ -122,6 +122,8 @@ def test_rebuild_replays_the_cache_offline(
         assert summary["sites"] == {
             "testsite": {"pages": {"fetched": 1, "queued": 1}, "recipes": 1}
         }
+        # The derivation run stored the recipe's nutrition.
+        assert summary["nutrition_recipes"] == 1
         for source in ("fdc", "cofid", "cnf"):
             assert f"menu-{source}-import" in caplog.text
 

@@ -13,10 +13,10 @@ from menu.db.database import (
     Ingredient,
     IngredientTerm,
     RecipeIngredient,
-    RecipeNutrition,
+    RecipeNutritionRun,
 )
 from menu.db.ingredients import repository
-from menu.nutrition.reports import COMPARED, validation_comparisons
+from menu.nutrition.reports import COMPARED, latest_run_id, validation_comparisons
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -80,12 +80,14 @@ def collect_metrics(session: Session) -> dict[str, Any]:
     distinct_ingredients = session.scalar(
         select(func.count(func.distinct(Ingredient.name)))
     )
+    # Coverages from the latest derivation run: run_id NULL (no run
+    # yet) matches nothing, so the list stays empty.
     coverages = [
         coverage
         for coverage in session.scalars(
-            select(RecipeNutrition.coverage).where(
-                RecipeNutrition.source == "derived",
-                RecipeNutrition.coverage.is_not(None),
+            select(RecipeNutritionRun.coverage).where(
+                RecipeNutritionRun.run_id == latest_run_id(session),
+                RecipeNutritionRun.coverage.is_not(None),
             )
         )
         if coverage is not None

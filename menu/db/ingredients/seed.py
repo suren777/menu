@@ -19,7 +19,10 @@ seed.<NAME>, so every function here reads them through this module's
 own globals.
 """
 
+import hashlib
+import json
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select
@@ -199,6 +202,21 @@ def prepared_form(ingredient_name: str, *texts: str | None) -> tuple[str, str] |
         if canonical == ingredient_name and keyword in haystack:
             return form
     return None
+
+
+def seed_digest() -> str:
+    """First 12 hex chars of sha256 over seed_data.py's bytes plus the
+    JSON of the accepted suggestions: changes when a hand seed or an
+    accepted suggestion changes, so a derivation run can name the
+    seed state that produced its numbers."""
+    digest = hashlib.sha256((Path(__file__).parent / "seed_data.py").read_bytes())
+    accepted = [
+        entry.model_dump(mode="json")
+        for entry in suggestions.load()
+        if entry.status == "accepted"
+    ]
+    digest.update(json.dumps(accepted, sort_keys=True).encode())
+    return digest.hexdigest()[:12]
 
 
 # An ingredient_conversions unique key: what _upsert_conversion upserts

@@ -261,6 +261,7 @@ These four steps run in order. After each one, the metrics snapshot records revi
 - Check: the metrics diff should show lines with grams ≥ 56,889. Size-specific egg weights may change grams on egg lines, and this phase should list those changes explicitly.
 
 ### Phase 6: derivation runs and set-based nutrition
+*Code done 2026-10-13; the check below waits for a recrawl (the DB and `.cache/` are empty). Deviations: one transaction per run (batches of 500 for reads and writes) instead of one per batch, since the caller owns the transaction and a run is then all-or-nothing; `recipe_nutrition_runs` also stores `sources` and `definitions_mixed`; `seed_digest` hashes `seed_data.py` plus the accepted `suggestions.json` entries; the CLI is `menu-ingest derive-nutrition [--note]` and `report validate-nutrition [--run N] [--against M]`.*
 - `derivation_runs`, `recipe_nutrition_runs`, `recipe_nutrients` and `recipe_published_nutrients` replace `recipe_nutrition`.
 - `derive_all_nutrition` reads the confirmed references, their nutrients, the prepared forms and the site preferences into memory once, then streams recipes in batches of 500 per transaction. No query per line.
 - `--validate-nutrition [--run N] [--against M]` compares a run with the published values, or two runs with each other.

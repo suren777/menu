@@ -10,6 +10,7 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
 from menu.db.database import (
+    DerivationRun,
     FoodSource,
     Ingredient,
     IngredientConversion,
@@ -18,7 +19,8 @@ from menu.db.database import (
     Page,
     Recipe,
     RecipeIngredient,
-    RecipeNutrition,
+    RecipeNutrient,
+    RecipeNutritionRun,
     RefFood,
     Sitemap,
 )
@@ -56,16 +58,76 @@ def test_unknown_dimension_is_refused(session: Session) -> None:
         session.flush()
 
 
-def test_unknown_nutrition_source_is_refused(session: Session) -> None:
+def test_unknown_derivation_run_kind_is_refused(session: Session) -> None:
+    """Only 'nutrition' runs exist today; the CHECK keeps the column
+    an enum, not free text."""
     session.add(
-        RecipeNutrition(
-            recipe_id=_add_recipe(session).id,
-            source="guessed",  # only derived | published
-            energy_kcal=1.0,
+        DerivationRun(
+            kind="guessing",  # only nutrition
+            parser_version="1",
+            seed_digest="d",
+            sources={},
         )
     )
     with pytest.raises(IntegrityError):
         session.flush()
+
+
+def test_recipe_nutrient_without_run_is_refused(session: Session) -> None:
+    """A nutrient row hangs off its run's per-recipe row through the
+    composite FK: no recipe_nutrition_runs row, no recipe_nutrients
+    row."""
+    recipe = _add_recipe(session)
+    session.flush()
+    session.add(
+        RecipeNutrient(
+            run_id=999,  # no derivation run 999
+            recipe_id=recipe.id,
+            nutrient="energy_kcal",
+            amount=1.0,
+            definitions=["kcal"],
+            sources=["fdc"],
+        )
+    )
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_deleting_a_run_cascades_its_nutrient_rows(session: Session) -> None:
+    """A derived nutrient exists only through its run (ondelete
+    CASCADE through recipe_nutrition_runs)."""
+    recipe = _add_recipe(session)
+    session.flush()
+    run = DerivationRun(
+        kind="nutrition", parser_version="1", seed_digest="d", sources={}
+    )
+    session.add(run)
+    session.flush()
+    session.add(
+        RecipeNutritionRun(
+            run_id=run.id,
+            recipe_id=recipe.id,
+            coverage=None,
+            unconverted_lines=0,
+            sources=[],
+            definitions_mixed=False,
+        )
+    )
+    session.flush()
+    session.add(
+        RecipeNutrient(
+            run_id=run.id,
+            recipe_id=recipe.id,
+            nutrient="energy_kcal",
+            amount=1.0,
+            definitions=["kcal"],
+            sources=["fdc"],
+        )
+    )
+    session.flush()
+    session.delete(run)
+    session.flush()
+    assert session.scalars(select(RecipeNutrient)).all() == []
 
 
 def test_unknown_page_status_is_refused(session: Session) -> None:

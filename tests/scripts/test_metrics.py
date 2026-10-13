@@ -4,12 +4,15 @@ against."""
 from typing import TYPE_CHECKING
 
 from menu.db.database import (
+    DerivationRun,
     Ingredient,
     IngredientTerm,
     Page,
     Recipe,
     RecipeIngredient,
-    RecipeNutrition,
+    RecipeNutrient,
+    RecipeNutritionRun,
+    RecipePublishedNutrient,
 )
 from menu.scripts.metrics import collect_metrics
 
@@ -61,15 +64,42 @@ def test_collect_metrics_snapshot(session: Session) -> None:
                 raw_text="unparseable line",
                 parse_status="failed",
             ),
-            RecipeNutrition(
-                recipe_id=recipe.id,
-                source="derived",
-                energy_kcal=250.0,
-                coverage=0.95,
-                sources="fdc",
-            ),
-            RecipeNutrition(recipe_id=recipe.id, source="published", energy_kcal=100.0),
         ]
+    )
+    # Coverages and validation medians come from the latest run's rows.
+    run = DerivationRun(
+        kind="nutrition", parser_version="test", seed_digest="d", sources={}
+    )
+    session.add(run)
+    session.flush()
+    session.add(
+        RecipeNutritionRun(
+            run_id=run.id,
+            recipe_id=recipe.id,
+            coverage=0.95,
+            unconverted_lines=0,
+            sources=["fdc"],
+            definitions_mixed=False,
+        )
+    )
+    session.flush()
+    session.add(
+        RecipeNutrient(
+            run_id=run.id,
+            recipe_id=recipe.id,
+            nutrient="energy_kcal",
+            amount=250.0,
+            definitions=["kcal"],
+            sources=["fdc"],
+        )
+    )
+    session.add(
+        RecipePublishedNutrient(
+            recipe_id=recipe.id,
+            nutrient="energy_kcal",
+            amount=100.0,
+            raw_text="100 calories",
+        )
     )
     # collect_metrics reads through the caller's session: the fixture
     # rows are visible uncommitted.
@@ -77,6 +107,7 @@ def test_collect_metrics_snapshot(session: Session) -> None:
 
     assert metrics["row_counts"]["pages"] == 1
     assert metrics["row_counts"]["recipes"] == 1
+    assert metrics["row_counts"]["derivation_runs"] == 1
     assert metrics["lines_with_grams_by_source"] == {"seed": 1}
     assert metrics["lines_with_ingredient_id_null"] == 2
     assert metrics["lines_parse_failed"] == 1

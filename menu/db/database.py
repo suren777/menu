@@ -10,10 +10,12 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import (
     JSON,
     CheckConstraint,
+    DateTime,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
     UniqueConstraint,
+    func,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -140,50 +142,108 @@ class Recipe(Base):
     )
 
 
-class RecipeNutrition(Base):
-    """Nutrition totals for one recipe, derived or as published.
+class DerivationRun(Base):
+    """One pass of derivation over the whole database, with the
+    versions that produced it: rerunning is a new row, not an
+    overwrite, so a seed or logic change can be compared against the
+    numbers it replaced. `parser_version` is the ingredient parser's,
+    `seed_digest` the hash of seed_data.py plus the accepted
+    suggestions, `sources` the {name: version} of every imported
+    reference source."""
 
-    Published rows are parsed from the JSON-LD nutrition block;
-    derived rows are summed from ingredient lines and carry coverage
-    metadata. A NULL nutrient means not reported, never zero.
-    """
-
-    __tablename__ = "recipe_nutrition"
+    __tablename__ = "derivation_runs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    recipe_id: Mapped[int] = mapped_column(ForeignKey("recipes.id"))
-    source: Mapped[str]
-    """\"derived\" | \"published\" — never mixed in one row."""
-    energy_kcal: Mapped[float | None]
-    protein_g: Mapped[float | None]
-    fat_g: Mapped[float | None]
-    saturated_fat_g: Mapped[float | None]
-    carbohydrate_g: Mapped[float | None]
-    sugars_g: Mapped[float | None]
-    fibre_g: Mapped[float | None]
-    sodium_mg: Mapped[float | None]
-    coverage: Mapped[float | None]
-    """Share of the recipe's grams that came from mapped lines
-    (derived rows). Low coverage is marked, not trusted."""
-    unconverted_lines: Mapped[int | None]
-    """Lines with no quantity or no conversion (derived rows)."""
-    sources: Mapped[str | None]
-    """Reference sources used, comma-separated (derived rows)."""
-    definitions_mixed: Mapped[bool | None]
-    """True when the summed values mix nutrient definitions."""
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(nullable=False)
+    """Which derivation produced the run — 'nutrition' today."""
+    parser_version: Mapped[str] = mapped_column(nullable=False)
+    seed_digest: Mapped[str] = mapped_column(nullable=False)
+    sources: Mapped[dict[str, str]] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=False
+    )
+    note: Mapped[str | None]
 
     __table_args__ = (
-        Index(
-            "ix_recipe_nutrition_recipe_source",
-            "recipe_id",
-            "source",
-            unique=True,
-        ),
-        CheckConstraint(
-            "source IN ('derived', 'published')",
-            "ck_recipe_nutrition_source",
+        CheckConstraint("kind IN ('nutrition')", "ck_derivation_runs_kind"),
+    )
+
+
+class RecipeNutritionRun(Base):
+    """One recipe's derivation metadata in one run: the coverage
+    share, the lines no reference could convert, and which reference
+    sources the recipe's nutrients came from. Every recipe in the
+    database gets a row per run — coverage NULL when it has no
+    counted grams."""
+
+    __tablename__ = "recipe_nutrition_runs"
+
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("derivation_runs.id", ondelete="CASCADE"), primary_key=True
+    )
+    recipe_id: Mapped[int] = mapped_column(
+        ForeignKey("recipes.id", ondelete="CASCADE"), primary_key=True
+    )
+    coverage: Mapped[float | None]
+    """Share of the recipe's grams that came from mapped lines.
+    Low coverage is marked, not trusted."""
+    unconverted_lines: Mapped[int] = mapped_column(nullable=False)
+    """Lines with no quantity or no conversion."""
+    sources: Mapped[list[str]] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=False
+    )
+    """Reference sources used, sorted."""
+    definitions_mixed: Mapped[bool] = mapped_column(nullable=False)
+    """True when the summed values mix nutrient definitions."""
+
+
+class RecipeNutrient(Base):
+    """One derived nutrient of one recipe in one run, long format —
+    the same shape as ref_nutrient, so adding a nutrient is a
+    nutrient_map row, not a schema change. Only nutrients some line
+    contributed get a row: absent means not reported, never zero."""
+
+    __tablename__ = "recipe_nutrients"
+
+    run_id: Mapped[int] = mapped_column(primary_key=True)
+    recipe_id: Mapped[int] = mapped_column(primary_key=True)
+    nutrient: Mapped[str] = mapped_column(primary_key=True)
+    amount: Mapped[float] = mapped_column(nullable=False)
+    """Per recipe, not per serving."""
+    definitions: Mapped[list[str]] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=False
+    )
+    """Sorted distinct definitions summed into this nutrient."""
+    sources: Mapped[list[str]] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=False
+    )
+    """Sorted reference sources this nutrient came from."""
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["run_id", "recipe_id"],
+            ["recipe_nutrition_runs.run_id", "recipe_nutrition_runs.recipe_id"],
+            ondelete="CASCADE",
         ),
     )
+
+
+class RecipePublishedNutrient(Base):
+    """One published nutrient of one recipe, as the site's JSON-LD
+    states it. Raw capture — no run: it is replaced on every
+    derivation from the recipe's own data."""
+
+    __tablename__ = "recipe_published_nutrients"
+
+    recipe_id: Mapped[int] = mapped_column(
+        ForeignKey("recipes.id", ondelete="CASCADE"), primary_key=True
+    )
+    nutrient: Mapped[str] = mapped_column(primary_key=True)
+    amount: Mapped[float] = mapped_column(nullable=False)
+    raw_text: Mapped[str] = mapped_column(nullable=False)
+    """The JSON-LD string the amount was parsed from ("350 calories")."""
 
 
 class Ingredient(Base):
